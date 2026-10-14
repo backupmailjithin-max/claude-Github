@@ -3,8 +3,10 @@
 Data Center Infrastructure Management dashboard (Node.js/Express + MySQL/MariaDB).
 
 - Application source: [`dcim/webapp`](dcim/webapp)
-- Installable packages for Linux and Windows (Phase 1 of the packaging
-  roadmap): see [`packaging/`](packaging) and [`docs/PACKAGING.md`](docs/PACKAGING.md)
+- Installable packages for Linux and Windows, an offline appliance build,
+  and admin setup/dashboard pages: see [`packaging/`](packaging) and
+  [`docs/PACKAGING.md`](docs/PACKAGING.md) for the full breakdown of what's
+  implemented against the packaging roadmap.
 
 ## Quick start (from source, for development)
 

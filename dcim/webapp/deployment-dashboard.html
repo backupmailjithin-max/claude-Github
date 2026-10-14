@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DCIM Deployment Dashboard</title>
+<style>
+  :root { --bg:#0f172a; --panel:#1e293b; --border:#334155; --text:#e2e8f0; --muted:#94a3b8; --ok:#22c55e; --err:#ef4444; --warn:#eab308; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; }
+  header { padding:20px 24px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+  header h1 { font-size:18px; margin:0; }
+  header button { background:#334155; border:none; color:var(--text); padding:8px 14px; border-radius:6px; cursor:pointer; }
+  main { max-width:1000px; margin:0 auto; padding:24px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:16px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:16px; }
+  .card .label { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  .card .value { font-size:20px; margin-top:6px; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
+  .dot.ok { background:var(--ok); } .dot.err { background:var(--err); } .dot.warn { background:var(--warn); }
+  #loginGate { max-width:360px; margin:80px auto; background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:24px; }
+  #loginGate input { width:100%; padding:9px 10px; margin:6px 0 14px; background:#0f172a; border:1px solid var(--border); border-radius:6px; color:var(--text); }
+  #loginGate button { width:100%; padding:10px; background:#3b82f6; border:none; border-radius:6px; color:#fff; cursor:pointer; }
+  .hidden { display:none !important; }
+  table { width:100%; border-collapse:collapse; margin-top:10px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--border); font-size:13px; }
+  .section-title { margin:28px 0 10px; font-size:14px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+</style>
+</head>
+<body>
+
+<div id="loginGate">
+  <h2 style="margin-top:0">Admin sign-in required</h2>
+  <label>Username</label><input type="text" id="loginUser" value="admin">
+  <label>Password</label><input type="password" id="loginPass">
+  <button onclick="doLogin()">Sign in</button>
+  <div id="loginErr" style="color:var(--err);margin-top:10px;font-size:13px"></div>
+</div>
+
+<div id="app" class="hidden">
+  <header>
+    <h1>Deployment Dashboard</h1>
+    <button onclick="refresh()">Refresh</button>
+  </header>
+  <main>
+    <div class="grid" id="statusGrid"></div>
+    <div class="section-title">Deep Health Check</div>
+    <table id="healthTable"><thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead><tbody></tbody></table>
+  </main>
+</div>
+
+<script>
+function token() { return localStorage.getItem('dc_token') || ''; }
+async function api(path) {
+  const res = await fetch(path, { headers: token() ? { Authorization: 'Bearer ' + token() } : {} });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error((data && data.error) || ('Request failed (' + res.status + ')'));
+  return data;
+}
+async function doLogin() {
+  try {
+    const username = document.getElementById('loginUser').value.trim();
+    const password = document.getElementById('loginPass').value;
+    const res = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Login failed');
+    localStorage.setItem('dc_token', data.token);
+    await boot();
+  } catch (e) { document.getElementById('loginErr').textContent = e.message; }
+}
+
+function card(label, value, dotClass) {
+  return `<div class="card"><div class="label">${label}</div><div class="value">${dotClass ? `<span class="dot ${dotClass}"></span>` : ''}${value}</div></div>`;
+}
+function fmtUptime(s) {
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  return `${d}d ${h}h ${m}m`;
+}
+
+async function refresh() {
+  const [status, health] = await Promise.all([
+    api('/api/deployment/status'),
+    api('/api/health/full').catch((e) => ({ status: 'error', checks: {}, _error: e.message })),
+  ]);
+  const grid = document.getElementById('statusGrid');
+  grid.innerHTML = [
+    card('Version', status.version),
+    card('Uptime', fmtUptime(status.uptimeSeconds)),
+    card('Node.js', status.nodeVersion),
+    card('Database', status.database.name, status.database.ok ? 'ok' : 'err'),
+    card('OCR Engine', status.ocr.ok ? 'Loaded' : 'Not loaded', status.ocr.ok ? 'ok' : 'warn'),
+    card('Dell OME Zones', status.monitoring.omeZones),
+    card('HPE OneView Zones', status.monitoring.oneviewZones),
+    card('SMTP', status.smtp.configured ? 'Configured' : 'Not configured', status.smtp.configured ? 'ok' : 'warn'),
+    card('Backup', status.backup.enabled ? 'Enabled' : 'Disabled', status.backup.enabled ? 'ok' : 'warn'),
+    card('Application URL', status.appUrl),
+  ].join('');
+
+  const tbody = document.querySelector('#healthTable tbody');
+  tbody.innerHTML = '';
+  for (const [name, c] of Object.entries(health.checks || {})) {
+    const ok = c.ok !== false;
+    let detail = c.error || '';
+    if (name === 'monitoring' && Array.isArray(c.zones)) detail = c.zones.map((z) => `${z.product} ${z.site}/${z.zone}: ${z.ok ? 'ok' : z.error}`).join('; ');
+    if (name === 'backup' && c.dir) detail = c.dir;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${name}</td><td><span class="dot ${ok ? 'ok' : 'err'}"></span>${ok ? 'OK' : 'Failed'}</td><td>${detail}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+async function boot() {
+  try {
+    await refresh();
+    document.getElementById('loginGate').classList.add('hidden');
+    document.getElementById('app').classList.remove('hidden');
+  } catch (e) {
+    document.getElementById('app').classList.add('hidden');
+    document.getElementById('loginGate').classList.remove('hidden');
+    if (token()) document.getElementById('loginErr').textContent = 'Session expired or not an Admin - please sign in again.';
+  }
+}
+boot();
+</script>
+</body>
+</html>

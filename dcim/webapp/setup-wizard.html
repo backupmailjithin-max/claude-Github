@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DCIM Setup</title>
+<style>
+  :root { --bg:#0f172a; --panel:#1e293b; --border:#334155; --text:#e2e8f0; --muted:#94a3b8; --accent:#3b82f6; --ok:#22c55e; --err:#ef4444; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; }
+  header { padding:20px 24px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:12px; }
+  header img { height:32px; }
+  header h1 { font-size:18px; margin:0; }
+  .layout { display:flex; max-width:1100px; margin:0 auto; }
+  nav { width:220px; padding:24px 12px; flex-shrink:0; }
+  nav button { display:block; width:100%; text-align:left; padding:10px 12px; margin-bottom:4px; background:none; border:none; color:var(--muted); border-radius:6px; cursor:pointer; font-size:14px; }
+  nav button.active { background:var(--panel); color:var(--text); }
+  nav button:hover { background:var(--panel); }
+  main { flex:1; padding:24px; min-width:0; }
+  .panel { display:none; background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:24px; }
+  .panel.active { display:block; }
+  .panel h2 { margin-top:0; }
+  label { display:block; margin:14px 0 4px; color:var(--muted); font-size:13px; }
+  input[type=text], input[type=email], input[type=password], input[type=number], select, textarea {
+    width:100%; padding:9px 10px; background:#0f172a; border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:14px;
+  }
+  button.btn { padding:9px 16px; background:var(--accent); border:none; border-radius:6px; color:#fff; font-size:14px; cursor:pointer; margin-top:14px; margin-right:8px; }
+  button.btn.secondary { background:#334155; }
+  button.btn:disabled { opacity:.5; cursor:default; }
+  .row { display:flex; gap:16px; }
+  .row > div { flex:1; }
+  .msg { margin-top:12px; padding:10px 12px; border-radius:6px; font-size:13px; display:none; }
+  .msg.ok { display:block; background:rgba(34,197,94,.12); color:var(--ok); border:1px solid rgba(34,197,94,.3); }
+  .msg.err { display:block; background:rgba(239,68,68,.12); color:var(--err); border:1px solid rgba(239,68,68,.3); }
+  table { width:100%; border-collapse:collapse; margin-top:12px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--border); font-size:13px; }
+  .pill { padding:2px 8px; border-radius:99px; font-size:11px; }
+  .pill.ok { background:rgba(34,197,94,.15); color:var(--ok); }
+  .pill.err { background:rgba(239,68,68,.15); color:var(--err); }
+  .hint { color:var(--muted); font-size:12px; margin-top:4px; }
+  fieldset { border:1px solid var(--border); border-radius:8px; margin:16px 0; padding:14px; }
+  legend { padding:0 6px; color:var(--muted); font-size:13px; }
+  #loginGate { max-width:360px; margin:80px auto; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+
+<header>
+  <img id="brandLogo" src="" alt="" class="hidden">
+  <h1 id="brandTitle">DCIM Setup</h1>
+</header>
+
+<div id="loginGate" class="panel active">
+  <h2>Admin sign-in required</h2>
+  <label>Username</label>
+  <input type="text" id="loginUser" value="admin">
+  <label>Password</label>
+  <input type="password" id="loginPass">
+  <button class="btn" onclick="doLogin()">Sign in</button>
+  <div class="msg" id="loginMsg"></div>
+</div>
+
+<div class="layout hidden" id="app">
+  <nav>
+    <button class="active" data-tab="org">Organization &amp; Branding</button>
+    <button data-tab="catalog">Default Catalog</button>
+    <button data-tab="infra">Infrastructure</button>
+    <button data-tab="export">Export / Import</button>
+  </nav>
+  <main>
+
+    <section class="panel active" id="tab-org">
+      <h2>Organization &amp; Branding</h2>
+      <label>Company Name</label>
+      <input type="text" id="orgCompanyName">
+      <label>Application Name</label>
+      <input type="text" id="orgAppName">
+      <label>Footer Text</label>
+      <input type="text" id="orgFooterText">
+      <div class="row">
+        <div><label>Support Email</label><input type="email" id="orgSupportEmail"></div>
+        <div><label>Support Contact</label><input type="text" id="orgSupportContact"></div>
+      </div>
+      <button class="btn" onclick="saveOrg()">Save</button>
+      <div class="msg" id="orgMsg"></div>
+
+      <fieldset>
+        <legend>Company Logo</legend>
+        <input type="file" id="logoFile" accept="image/png,image/jpeg,image/svg+xml">
+        <button class="btn secondary" onclick="uploadLogo()">Upload</button>
+        <div class="hint">PNG, JPEG, or SVG, max 2MB.</div>
+        <div class="msg" id="logoMsg"></div>
+      </fieldset>
+    </section>
+
+    <section class="panel" id="tab-catalog">
+      <h2>Default Catalog</h2>
+      <p class="hint">Seeds the standard hardware types (Dell Server, HPE Server, Storage, Switch, Firewall, Load Balancer, HSM, PDU, ATS, Others) and rack types (Compute, Storage, Network, Backup, Management, Custom). Existing entries are never modified or duplicated — safe to run more than once.</p>
+      <button class="btn" onclick="seedDefaults()">Seed Defaults</button>
+      <div class="msg" id="seedMsg"></div>
+    </section>
+
+    <section class="panel" id="tab-infra">
+      <h2>Infrastructure Configuration</h2>
+
+      <fieldset>
+        <legend>Dell OME / HPE OneView</legend>
+        <table id="monTable"><thead><tr><th>Product</th><th>Site</th><th>Zone</th><th>Host</th><th>User</th><th>Status</th><th></th></tr></thead><tbody></tbody></table>
+        <div class="row" style="margin-top:16px">
+          <div><label>Product</label><select id="monProduct"><option value="OME">Dell OME</option><option value="ONEVIEW">HPE OneView</option></select></div>
+          <div><label>Site</label><input type="text" id="monSite" placeholder="Chennai"></div>
+          <div><label>Zone</label><input type="text" id="monZone" placeholder="AZ-1"></div>
+        </div>
+        <div class="row">
+          <div><label>Host (https://...)</label><input type="text" id="monHost"></div>
+          <div><label>Username</label><input type="text" id="monUser"></div>
+          <div><label>Password</label><input type="password" id="monPass"></div>
+        </div>
+        <button class="btn" onclick="addMonitoring()">Save Entry</button>
+        <button class="btn secondary" onclick="testMonitoringForm()">Test Connection</button>
+        <div class="msg" id="monMsg"></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>SMTP (Future Ready)</legend>
+        <div class="row">
+          <div><label>SMTP Host</label><input type="text" id="smtpHost"></div>
+          <div><label>Port</label><input type="number" id="smtpPort" value="587"></div>
+        </div>
+        <div class="row">
+          <div><label>Security</label><select id="smtpSecure"><option value="false">STARTTLS / none</option><option value="true">Implicit TLS (465)</option></select></div>
+          <div><label>From Address</label><input type="email" id="smtpFrom"></div>
+        </div>
+        <div class="row">
+          <div><label>Username</label><input type="text" id="smtpUser"></div>
+          <div><label>Password</label><input type="password" id="smtpPass"></div>
+        </div>
+        <button class="btn" onclick="saveSmtp()">Save</button>
+        <label>Send test email to</label>
+        <input type="email" id="smtpTestTo">
+        <button class="btn secondary" onclick="testSmtp()">Test Email</button>
+        <div class="msg" id="smtpMsg"></div>
+      </fieldset>
+    </section>
+
+    <section class="panel" id="tab-export">
+      <h2>Configuration Export / Import</h2>
+      <p class="hint">Exports organization settings, locations, zones, hardware types, rack types, and infra connection details (host/user only — never passwords) as a portable JSON bundle. Use this for disaster recovery, UAT-to-production promotion, or rolling the same configuration out to a new customer site.</p>
+      <button class="btn" onclick="exportConfig()">Export Configuration</button>
+      <fieldset style="margin-top:20px">
+        <legend>Import into this server</legend>
+        <input type="file" id="importFile" accept="application/json">
+        <button class="btn secondary" onclick="importConfig()">Import</button>
+        <div class="hint">Imported monitoring entries will need their password re-entered in the Infrastructure tab above.</div>
+      </fieldset>
+      <div class="msg" id="exportMsg"></div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+const API = '';
+function token() { return localStorage.getItem('dc_token') || ''; }
+function authHeaders(json) { const h = {}; if (token()) h['Authorization'] = 'Bearer ' + token(); if (json) h['Content-Type'] = 'application/json'; return h; }
+function show(id, ok, text) { const el = document.getElementById(id); el.className = 'msg ' + (ok ? 'ok' : 'err'); el.textContent = text; el.style.display = 'block'; }
+
+async function api(path, opts = {}) {
+  const res = await fetch(API + path, { ...opts, headers: { ...authHeaders(!!opts.body && !(opts.body instanceof FormData)), ...(opts.headers || {}) } });
+  let data = null;
+  try { data = await res.json(); } catch (e) { /* no body */ }
+  if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status})`);
+  return data;
+}
+
+async function doLogin() {
+  try {
+    const username = document.getElementById('loginUser').value.trim();
+    const password = document.getElementById('loginPass').value;
+    const data = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) });
+    localStorage.setItem('dc_token', data.token);
+    await boot();
+  } catch (e) { show('loginMsg', false, e.message); }
+}
+
+function switchTab(name) {
+  document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('main .panel').forEach((p) => p.classList.toggle('active', p.id === 'tab-' + name));
+}
+document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+
+async function loadOrg() {
+  const org = await api('/api/setup/organization');
+  document.getElementById('orgCompanyName').value = org.companyName || '';
+  document.getElementById('orgAppName').value = org.appName || '';
+  document.getElementById('orgFooterText').value = org.footerText || '';
+  document.getElementById('orgSupportEmail').value = org.supportEmail || '';
+  document.getElementById('orgSupportContact').value = org.supportContact || '';
+}
+async function saveOrg() {
+  try {
+    await api('/api/setup/organization', { method: 'PUT', body: JSON.stringify({
+      companyName: document.getElementById('orgCompanyName').value,
+      appName: document.getElementById('orgAppName').value,
+      footerText: document.getElementById('orgFooterText').value,
+      supportEmail: document.getElementById('orgSupportEmail').value,
+      supportContact: document.getElementById('orgSupportContact').value,
+    })});
+    show('orgMsg', true, 'Saved.');
+    loadBranding();
+  } catch (e) { show('orgMsg', false, e.message); }
+}
+async function uploadLogo() {
+  try {
+    const f = document.getElementById('logoFile').files[0];
+    if (!f) return show('logoMsg', false, 'Choose a file first.');
+    const fd = new FormData(); fd.append('logo', f);
+    await api('/api/setup/logo', { method: 'POST', body: fd });
+    show('logoMsg', true, 'Logo updated.');
+    loadBranding();
+  } catch (e) { show('logoMsg', false, e.message); }
+}
+async function loadBranding() {
+  const s = await api('/api/setup/status');
+  document.getElementById('brandTitle').textContent = s.appName + ' Setup';
+  const img = document.getElementById('brandLogo');
+  if (s.logoUrl) { img.src = s.logoUrl + '?v=' + Date.now(); img.classList.remove('hidden'); } else { img.classList.add('hidden'); }
+}
+
+async function seedDefaults() {
+  try {
+    const r = await api('/api/setup/seed-defaults', { method: 'POST' });
+    const n = r.hardwareTypes.length + r.rackTypes.length;
+    show('seedMsg', true, n ? `Created: ${[...r.hardwareTypes, ...r.rackTypes].join(', ')}` : 'Nothing to create - all default types already exist.');
+  } catch (e) { show('seedMsg', false, e.message); }
+}
+
+async function loadMonitoring() {
+  const data = await api('/api/settings/integrations');
+  const tbody = document.querySelector('#monTable tbody');
+  tbody.innerHTML = '';
+  for (const e of data.monitoring) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${e.product}</td><td>${e.site}</td><td>${e.zone}</td><td>${e.host}</td><td>${e.user}</td>
+      <td><span class="pill" id="pill-${e.product}-${e.site}-${e.zone}">${e.hasPassword ? 'configured' : 'no password'}</span></td>
+      <td><button class="btn secondary" style="margin:0;padding:4px 10px" onclick="testMonitoring('${e.product}','${e.site}','${e.zone}')">Test</button></td>`;
+    tbody.appendChild(tr);
+  }
+  if (data.smtp) {
+    document.getElementById('smtpHost').value = data.smtp.host || '';
+    document.getElementById('smtpPort').value = data.smtp.port || 587;
+    document.getElementById('smtpSecure').value = String(!!data.smtp.secure);
+    document.getElementById('smtpUser').value = data.smtp.user || '';
+    document.getElementById('smtpFrom').value = data.smtp.fromAddress || '';
+  }
+}
+async function addMonitoring() {
+  try {
+    const entry = {
+      product: document.getElementById('monProduct').value,
+      site: document.getElementById('monSite').value.trim(),
+      zone: document.getElementById('monZone').value.trim(),
+      host: document.getElementById('monHost').value.trim(),
+      user: document.getElementById('monUser').value.trim(),
+      password: document.getElementById('monPass').value,
+    };
+    if (!entry.site || !entry.zone || !entry.host || !entry.user) throw new Error('Site, zone, host, and user are required.');
+    const existing = (await api('/api/settings/integrations')).monitoring.map((e) => ({ product: e.product, site: e.site, zone: e.zone, host: e.host, user: e.user }));
+    const merged = existing.filter((e) => !(e.product === entry.product && e.site === entry.site && e.zone === entry.zone)).concat([entry]);
+    await api('/api/settings/integrations', { method: 'PUT', body: JSON.stringify({ monitoring: merged }) });
+    show('monMsg', true, 'Saved.');
+    document.getElementById('monPass').value = '';
+    loadMonitoring();
+  } catch (e) { show('monMsg', false, e.message); }
+}
+async function testMonitoring(product, site, zone) {
+  try {
+    await api('/api/settings/integrations/test', { method: 'POST', body: JSON.stringify({ product, site, zone }) });
+    show('monMsg', true, `${product} ${site}/${zone}: connection OK.`);
+  } catch (e) { show('monMsg', false, `${product} ${site}/${zone}: ${e.message}`); }
+}
+function testMonitoringForm() {
+  const site = document.getElementById('monSite').value.trim(), zone = document.getElementById('monZone').value.trim();
+  if (!site || !zone) return show('monMsg', false, 'Save the entry first (site and zone are required), then use the row\'s Test button.');
+  testMonitoring(document.getElementById('monProduct').value, site, zone);
+}
+
+async function saveSmtp() {
+  try {
+    const smtp = {
+      host: document.getElementById('smtpHost').value.trim(),
+      port: Number(document.getElementById('smtpPort').value),
+      secure: document.getElementById('smtpSecure').value === 'true',
+      user: document.getElementById('smtpUser').value.trim(),
+      password: document.getElementById('smtpPass').value,
+      fromAddress: document.getElementById('smtpFrom').value.trim(),
+    };
+    await api('/api/settings/integrations', { method: 'PUT', body: JSON.stringify({ smtp }) });
+    show('smtpMsg', true, 'Saved.');
+    document.getElementById('smtpPass').value = '';
+  } catch (e) { show('smtpMsg', false, e.message); }
+}
+async function testSmtp() {
+  try {
+    const to = document.getElementById('smtpTestTo').value.trim();
+    if (!to) throw new Error('Enter an address to send the test email to.');
+    const r = await api('/api/settings/integrations/test', { method: 'POST', body: JSON.stringify({ kind: 'smtp', to }) });
+    show('smtpMsg', true, 'Test email sent (' + r.steps.join(' -> ') + ').');
+  } catch (e) { show('smtpMsg', false, e.message); }
+}
+
+async function exportConfig() {
+  try {
+    const res = await fetch('/api/setup/export', { headers: authHeaders() });
+    if (!res.ok) throw new Error('Export failed (' + res.status + ')');
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'dcim-config-' + new Date().toISOString().slice(0, 10) + '.json';
+    a.click();
+    show('exportMsg', true, 'Downloaded.');
+  } catch (e) { show('exportMsg', false, e.message); }
+}
+async function importConfig() {
+  try {
+    const f = document.getElementById('importFile').files[0];
+    if (!f) throw new Error('Choose a configuration bundle file first.');
+    const fd = new FormData(); fd.append('bundle', f);
+    const r = await api('/api/setup/import', { method: 'POST', body: fd });
+    const counts = Object.entries(r.imported).map(([k, v]) => `${k}: ${v}`).join(', ');
+    show('exportMsg', true, `Imported — ${counts}.` + (r.note ? ' ' + r.note : ''));
+  } catch (e) { show('exportMsg', false, e.message); }
+}
+
+async function boot() {
+  try {
+    await api('/api/setup/organization'); // also verifies the token is valid + admin
+    document.getElementById('loginGate').classList.remove('active');
+    document.getElementById('app').classList.remove('hidden');
+    await Promise.all([loadOrg(), loadBranding(), loadMonitoring()]);
+  } catch (e) {
+    document.getElementById('app').classList.add('hidden');
+    document.getElementById('loginGate').classList.add('active');
+    if (token()) show('loginMsg', false, 'Session expired or not an Admin - please sign in again.');
+  }
+}
+loadBranding().catch(() => {});
+boot();
+</script>
+</body>
+</html>

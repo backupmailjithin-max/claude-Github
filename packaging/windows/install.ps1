@@ -205,7 +205,28 @@ function Backup-BeforeChange {
   New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
   $envPath = Join-Path $InstallDir "webapp\.env"
   if (Test-Path $envPath) { Copy-Item $envPath (Join-Path $backupDir ".env") }
-  Log "Pre-change config snapshot saved to $backupDir (use the app's Backup/Restore for full DB backups)."
+
+  $dump = Get-Command mysqldump.exe -ErrorAction SilentlyContinue
+  if ($dump -and (Test-Path $envPath)) {
+    $env = @{}
+    Get-Content $envPath | ForEach-Object { if ($_ -match '^([A-Z_]+)=(.*)$') { $env[$matches[1]] = $matches[2] } }
+    $dumpArgs = @("-h", $env.DB_HOST, "-u", $env.DB_USER)
+    if ($env.DB_PASSWORD) { $dumpArgs += "-p$($env.DB_PASSWORD)" }
+    $dumpArgs += @("--single-transaction", "--routines", "--triggers", $env.DB_NAME)
+    $sqlPath = Join-Path $backupDir "database.sql"
+    try {
+      & $dump.Source @dumpArgs 2> (Join-Path $backupDir "mysqldump.err") | Out-File -FilePath $sqlPath -Encoding utf8
+      Compress-Archive -Path $sqlPath -DestinationPath "$sqlPath.zip" -Force
+      Remove-Item $sqlPath
+      Log "Database snapshot saved to $sqlPath.zip"
+    } catch {
+      Log "WARNING: mysqldump failed; only config snapshot was taken. Consider running the app's own Backup/Restore before continuing."
+    }
+  } else {
+    Log "mysqldump.exe not found; only config snapshot was taken. Consider running the app's own Backup/Restore before continuing."
+  }
+  Set-Content -Path (Join-Path $InstallDir ".last-pre-change-backup") -Value $backupDir
+  Log "Pre-change snapshot saved to $backupDir"
 }
 
 function Wait-ForHealth {

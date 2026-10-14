@@ -27,6 +27,23 @@ jobs:
           name: dcim-deb
           path: dist/*.deb
 
+  build-appliance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage bundled Node.js runtime
+        run: bash packaging/linux/fetch-node-runtime.sh x64 packaging/linux/runtime
+
+      - name: Build offline appliance (.run)
+        run: bash packaging/appliance/build-appliance.sh
+
+      - name: Upload appliance
+        uses: actions/upload-artifact@v4
+        with:
+          name: dcim-offline-appliance
+          path: dist/*.run
+
   build-rpm:
     runs-on: ubuntu-latest
     container: fedora:latest

@@ -17,11 +17,13 @@ mkdir -p "$TOPDIR"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 PAYLOAD="$TOPDIR/SOURCES/dcim-payload"
 mkdir -p "$PAYLOAD"
 
+cp "$SCRIPT_DIR/dcim-service.sh" "$TOPDIR/SOURCES/dcim-service.sh"
 cp "$SCRIPT_DIR/install.sh" "$PAYLOAD/install.sh"
 cp "$SCRIPT_DIR/uninstall.sh" "$PAYLOAD/uninstall.sh"
+cp "$SCRIPT_DIR/rollback.sh" "$PAYLOAD/rollback.sh"
 cp "$SCRIPT_DIR/dcim.service.template" "$PAYLOAD/dcim.service.template"
 cp "$SCRIPT_DIR/nginx-dcim.conf" "$PAYLOAD/nginx-dcim.conf"
-chmod 755 "$PAYLOAD/install.sh" "$PAYLOAD/uninstall.sh"
+chmod 755 "$PAYLOAD/install.sh" "$PAYLOAD/uninstall.sh" "$PAYLOAD/rollback.sh"
 
 cp -a "$REPO_ROOT/dcim/webapp" "$PAYLOAD/webapp"
 rm -rf "$PAYLOAD/webapp/.env" "$PAYLOAD/webapp/uploads" "$PAYLOAD/webapp/backups" "$PAYLOAD/webapp/logs"

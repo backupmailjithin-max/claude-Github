@@ -276,7 +276,27 @@ backup_before_change() {
   install -d "$backup_dir"
   [ -f "$ENV_FILE" ] && cp -a "$ENV_FILE" "$backup_dir/.env"
   [ -d "$INSTALL_DIR/webapp" ] && tar -czf "$backup_dir/webapp-files.tar.gz" -C "$INSTALL_DIR" webapp --exclude=webapp/node_modules --exclude=webapp/ocr/vendor/node_modules 2>/dev/null || true
-  log "Pre-change snapshot saved to $backup_dir (config + file list; use the app's Backup/Restore for full DB backups)."
+  # Real database snapshot via mysqldump, read from the installed .env (same
+  # credentials the app itself uses) so Upgrade/Repair always has a restorable
+  # rollback point, not just the config/file list above.
+  local dump_bin
+  dump_bin="$(command -v mysqldump || true)"
+  if [ -n "$dump_bin" ] && [ -f "$ENV_FILE" ]; then
+    local host user pass name
+    host="$(sed -n 's/^DB_HOST=//p' "$ENV_FILE")"; user="$(sed -n 's/^DB_USER=//p' "$ENV_FILE")"
+    pass="$(sed -n 's/^DB_PASSWORD=//p' "$ENV_FILE")"; name="$(sed -n 's/^DB_NAME=//p' "$ENV_FILE")"
+    local pw_arg=(); [ -n "$pass" ] && pw_arg=(-p"$pass")
+    if "$dump_bin" -h "${host:-localhost}" -u "${user:-dcim}" "${pw_arg[@]}" --single-transaction --routines --triggers "${name:-dcim}" 2>"$backup_dir/mysqldump.err" | gzip > "$backup_dir/database.sql.gz"; then
+      log "Database snapshot saved to $backup_dir/database.sql.gz"
+    else
+      rm -f "$backup_dir/database.sql.gz"
+      log "WARNING: mysqldump failed (see $backup_dir/mysqldump.err); only config/file snapshot was taken. Consider running the app's own Backup/Restore before continuing."
+    fi
+  else
+    log "mysqldump not found; only config/file snapshot was taken. Consider running the app's own Backup/Restore before continuing."
+  fi
+  log "Pre-change snapshot saved to $backup_dir"
+  echo "$backup_dir" > "$INSTALL_DIR/.last-pre-change-backup" 2>/dev/null || true
 }
 
 wait_for_health() {

@@ -23,9 +23,13 @@ chmod 755 "$STAGE/DEBIAN/postinst" "$STAGE/DEBIAN/prerm" "$STAGE/DEBIAN/postrm"
 
 cp "$SCRIPT_DIR/install.sh" "$STAGE/usr/share/dcim/install.sh"
 cp "$SCRIPT_DIR/uninstall.sh" "$STAGE/usr/share/dcim/uninstall.sh"
+cp "$SCRIPT_DIR/rollback.sh" "$STAGE/usr/share/dcim/rollback.sh"
 cp "$SCRIPT_DIR/dcim.service.template" "$STAGE/usr/share/dcim/dcim.service.template"
 cp "$SCRIPT_DIR/nginx-dcim.conf" "$STAGE/usr/share/dcim/nginx-dcim.conf"
-chmod 755 "$STAGE/usr/share/dcim/install.sh" "$STAGE/usr/share/dcim/uninstall.sh"
+chmod 755 "$STAGE/usr/share/dcim/install.sh" "$STAGE/usr/share/dcim/uninstall.sh" "$STAGE/usr/share/dcim/rollback.sh"
+
+cp "$SCRIPT_DIR/dcim-service.sh" "$STAGE/usr/bin/dcim-service"
+chmod 755 "$STAGE/usr/bin/dcim-service"
 
 cp -a "$REPO_ROOT/dcim/webapp" "$STAGE/usr/share/dcim/webapp"
 rm -rf "$STAGE/usr/share/dcim/webapp/.env" \

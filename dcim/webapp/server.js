@@ -8506,6 +8506,24 @@ app.post('/api/backup/restore', authenticateToken, requireGlobalAdmin, restoreUp
   }
 });
 
+// Packaging-roadmap additions (org/branding settings, OME/OneView/SMTP wizard,
+// default catalog seeding, deep health check, deployment dashboard, config
+// export/import) — kept in its own module; nothing above this line changes.
+// `pool` is only assigned later, inside startServer() -> ensureDatabase(), which
+// runs after this module-load-time registration call. A plain `pool` reference
+// here would permanently capture `undefined`, so forward through a proxy that
+// reads the live variable at call time (routes only ever run after the server
+// has actually started and `pool` is set).
+const livePool = new Proxy({}, { get: (_, prop) => { const v = pool[prop]; return typeof v === 'function' ? v.bind(pool) : v; } });
+const setupRoutesModule = require('./lib/setup-routes')(app, {
+  pool: livePool, fs, path, multer, log, httpErr, sendErr,
+  authenticateToken, requireGlobalAdmin,
+  getSetting, setSetting, genId, normalizeHardwareType,
+  APP_VERSION, JWT_SECRET, DB_NAME, testConnection,
+  getOmeToken, getOneviewSession, monitorEnvKey,
+  validateBackupDir, backupConfig, ocrEngine, webappDir: __dirname,
+});
+
 // Serve frontend (SPA fallback) — compatible with Express 4 and Express 5.
 app.use((req, res, next) => {
   // Unmatched API/static requests must not be converted into index.html.
@@ -8579,6 +8597,7 @@ async function startServer() {
       return;
     }
     await initDB();
+    await setupRoutesModule.applyIntegrationEnv();
     // BIND_HOST (optional, e.g. 127.0.0.1 when nginx is the only entry point). Unset = all interfaces, exactly as before.
     httpServer = app.listen(...(process.env.BIND_HOST ? [PORT, process.env.BIND_HOST] : [PORT]), () => {
       log.info(`[startup] DCIM server v${APP_VERSION} listening on port ${PORT} (${IS_PRODUCTION ? 'production' : 'development'}, node ${process.version}, pid ${process.pid}, db ${DB_NAME})`);

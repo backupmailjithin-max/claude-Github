@@ -26,15 +26,18 @@ rm -rf %{buildroot}
 mkdir -p %{buildroot}/usr/share/dcim %{buildroot}/usr/bin
 cp -a "%{_sourcedir}/dcim-payload/." %{buildroot}/usr/share/dcim/
 ln -s /usr/share/dcim/install.sh %{buildroot}/usr/bin/dcim-setup
+install -m 755 "%{_sourcedir}/dcim-service.sh" %{buildroot}/usr/bin/dcim-service
 
 %files
 %attr(755,root,root) /usr/share/dcim/install.sh
 %attr(755,root,root) /usr/share/dcim/uninstall.sh
+%attr(755,root,root) /usr/share/dcim/rollback.sh
 /usr/share/dcim/dcim.service.template
 /usr/share/dcim/nginx-dcim.conf
 /usr/share/dcim/webapp
 %dir /usr/share/dcim
 /usr/bin/dcim-setup
+%attr(755,root,root) /usr/bin/dcim-service
 
 %post
 case "$1" in
