@@ -18,7 +18,11 @@ curl -fsSL "$URL" -o "/tmp/${DIST}.tar.xz"
 tar -xJf "/tmp/${DIST}.tar.xz" -C "$OUT_DIR"
 mv "$OUT_DIR/${DIST}" "$OUT_DIR/node"
 rm -f "/tmp/${DIST}.tar.xz"
-# Trim to what the app needs at runtime (keep npm out; it's not needed in production)
+# Trim to what the app needs at runtime: npm/corepack aren't needed in
+# production, and the C++ headers (include/) are only for compiling native
+# addons -- this app's dependencies (bcryptjs, mysql2, undici, multer, ...)
+# are all pure JS, so there's nothing to compile against.
 rm -rf "$OUT_DIR/node/lib/node_modules/npm" "$OUT_DIR/node/lib/node_modules/corepack"
+rm -rf "$OUT_DIR/node/include" "$OUT_DIR/node/share"
 "$OUT_DIR/node/bin/node" --version
 echo "[fetch-node-runtime] staged bundled runtime at $OUT_DIR/node"
