@@ -1,0 +1,1 @@
+{"name":"dcim-ocr-vendor","version":"1.0.0","private":true,"description":"Offline OCR engine files for the DCIM Material Movement assistant (no internet needed at run time)","dependencies":{"@tesseract.js-data/eng":"1.0.0","jpeg-js":"^0.4.4","pdfjs-dist":"4.10.38","pngjs":"^7.0.0","tesseract.js":"5.1.1","tesseract.js-core":"5.1.1"}}

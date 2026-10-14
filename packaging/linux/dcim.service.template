@@ -1,0 +1,33 @@
+[Unit]
+Description=DCIM web application
+After=network.target mysqld.service mariadb.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@INSTALL_DIR@/webapp
+ExecStart=@EXEC_NODE@ server.js
+EnvironmentFile=@INSTALL_DIR@/webapp/.env
+Environment=NODE_ENV=production
+User=@SERVICE_USER@
+Group=@SERVICE_USER@
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dcim
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=@INSTALL_DIR@/webapp/uploads @INSTALL_DIR@/webapp/backups @INSTALL_DIR@/webapp/logs
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

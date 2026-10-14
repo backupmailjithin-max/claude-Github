@@ -1,0 +1,6 @@
+# staged at package-build time, not committed
+packaging/linux/runtime/
+packaging/windows/runtime/
+packaging/windows/tools/
+packaging/windows/Output/
+dist/

@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+  purge)
+    rm -f /etc/systemd/system/dcim.service
+    command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload || true
+    echo "dcim: package purged. Application data in /opt/dcim was left in place;" >&2
+    echo "remove it manually with: sudo rm -rf /opt/dcim" >&2
+    echo "The MySQL/MariaDB database was NOT touched." >&2
+    ;;
+esac
+
+exit 0

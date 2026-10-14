@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+  remove|deconfigure)
+    if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files | grep -q '^dcim.service'; then
+      systemctl stop dcim 2>/dev/null || true
+      systemctl disable dcim 2>/dev/null || true
+    fi
+    ;;
+esac
+
+exit 0

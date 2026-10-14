@@ -1,0 +1,13 @@
+Package: dcim
+Version: 3.2.2
+Section: web
+Priority: optional
+Architecture: amd64
+Maintainer: DCIM Packaging <support@example.com>
+Depends: systemd
+Recommends: mysql-server | mariadb-server, nginx
+Description: DCIM Dashboard - Data Center Infrastructure Management
+ Offline-capable DCIM web application (Node.js/Express + MySQL/MariaDB).
+ Installs as a systemd service. After installing this package, run
+ `sudo dcim-setup` to complete first-time configuration (database
+ connection, port, admin account).

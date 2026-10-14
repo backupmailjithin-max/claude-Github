@@ -1,0 +1,24 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+  configure)
+    if [ -n "${2:-}" ] && [ -f /opt/dcim/webapp/.env ]; then
+      # Upgrading an existing installation: safe to run unattended.
+      /usr/share/dcim/install.sh --mode upgrade --yes || \
+        echo "dcim: automatic upgrade failed; run 'sudo dcim-setup --mode upgrade' to retry." >&2
+    else
+      cat <<'EOF'
+
+DCIM files have been installed to /usr/share/dcim.
+Run the following to finish setup (creates the systemd service, database,
+and admin account):
+
+    sudo dcim-setup
+
+EOF
+    fi
+    ;;
+esac
+
+exit 0

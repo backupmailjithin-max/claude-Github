@@ -1,0 +1,72 @@
+name: Build DCIM packages
+
+on:
+  workflow_dispatch: {}
+  push:
+    tags: ["v*"]
+    paths:
+      - "dcim/**"
+      - "packaging/**"
+      - ".github/workflows/build-packages.yml"
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage bundled Node.js runtime
+        run: bash packaging/linux/fetch-node-runtime.sh x64 packaging/linux/runtime
+
+      - name: Build .deb
+        run: bash packaging/linux/build-deb.sh
+
+      - name: Upload .deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: dcim-deb
+          path: dist/*.deb
+
+  build-rpm:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: Install build tools
+        run: dnf install -y rpm-build git tar which
+
+      - uses: actions/checkout@v4
+
+      - name: Build .rpm
+        run: bash packaging/linux/build-rpm.sh
+
+      - name: Upload .rpm
+        uses: actions/upload-artifact@v4
+        with:
+          name: dcim-rpm
+          path: dist/*.rpm
+
+  build-windows-exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage bundled Node.js runtime
+        shell: pwsh
+        run: packaging\windows\fetch-node-runtime.ps1
+
+      - name: Stage NSSM service wrapper
+        shell: pwsh
+        run: packaging\windows\fetch-nssm.ps1
+
+      - name: Compile installer with Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "Inno Setup (ISCC.exe) not found on this runner image." }
+          & $iscc packaging\windows\dcim-installer.iss
+
+      - name: Upload .exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: dcim-windows-installer
+          path: packaging/windows/Output/*.exe
