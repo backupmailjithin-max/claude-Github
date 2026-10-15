@@ -9,11 +9,20 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  # Windows Server (the actual windows-latest GitHub-hosted VM, with a real
-  # Service Control Manager - not a container) was previously never executed
-  # at all; this is the first real evidence for that path.
+  # Real GitHub-hosted Windows Server VMs (real Service Control Manager, not a
+  # container) - this path was previously never executed at all, only
+  # code-reviewed. windows-2022 maps to Windows Server 2022. windows-2019 is
+  # requested for Windows Server 2019 coverage specifically, but GitHub has
+  # been retiring that runner image; if the job below fails at "Set up job"
+  # with an image-not-found/queue error rather than at any of our own steps,
+  # that means windows-2019 is no longer offered as a hosted runner, not that
+  # DCIM failed on Server 2019 - report that distinction, don't conflate them.
   test-windows-lifecycle:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2019]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
