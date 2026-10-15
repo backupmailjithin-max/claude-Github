@@ -2,7 +2,11 @@
 # DCIM installer for Linux (systemd). Supports fresh install, upgrade, and repair.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# readlink -f (not plain dirname) because the .deb/.rpm ship /usr/bin/dcim-setup
+# as a real symlink to this file - dirname on the symlink itself would resolve
+# to /usr/bin instead of this script's actual directory, same class of bug
+# already fixed in dcim-upgrade.sh/dcim-repair.sh.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 APP_NAME="DCIM"
 SERVICE_NAME="dcim"
