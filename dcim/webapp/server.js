@@ -282,6 +282,11 @@ if (CORS_ORIGIN) {
 // Inline <script> blocks of index.html are allowed by SHA-256 hash (computed from the file that is actually served), so 'unsafe-inline' is not needed for scripts.
 // The browser talks only to this same origin (Dell OME / HPE OneView are called by the server, never by the browser). CSP_EXTRA_CONNECT / CSP_EXTRA_IMG add origins if ever needed.
 const CSP_MODE = (() => { const v = String(process.env.CSP_MODE || 'report-only').toLowerCase(); return ['enforce', 'report-only', 'off'].includes(v) ? v : 'report-only'; })();
+// Session Timeout: read once at startup, same "write to .env + restart" pattern as
+// CSP_MODE/JWT_SECRET above (see the Setup Wizard's Security tab) - defaults to the
+// previous hardcoded 8h if unset or invalid, so an upgrade with no .env change behaves
+// exactly as before.
+const JWT_EXPIRES_IN = (() => { const n = Number(process.env.SESSION_TIMEOUT_HOURS); return Number.isFinite(n) && n > 0 ? `${n}h` : '8h'; })();
 const cspExtra = (name) => String(process.env[name] || '').split(/[\s,]+/).filter((x) => /^(https?:\/\/[A-Za-z0-9.*:_-]+|wss?:\/\/[A-Za-z0-9.*:_-]+)$/.test(x)).join(' ');
 let _cspCache = { mtime: 0, value: '' };
 function buildCspValue() {
@@ -4726,7 +4731,7 @@ app.post('/api/auth/login', async (req, res) => {
     const token = jwt.sign(
       { id: user.id, username: user.username, name: user.name, role: user.role, location_access: user.location_access, sid },
       JWT_SECRET,
-      { expiresIn: '8h' }
+      { expiresIn: JWT_EXPIRES_IN }
     );
     // New login wins: store the new session id, and drop cached auth rows so the older browser is rejected on its very next request.
     await pool.query('UPDATE users SET session_id = ? WHERE id = ?', [sid, user.id]);
@@ -4828,7 +4833,7 @@ app.patch('/api/auth/change-password', authenticateToken, async (req, res) => {
     const freshToken = jwt.sign(
       { id: req.user.id, username: req.user.username, name: req.user.name, role: req.user.role, location_access: req.user.location_access, sid: newSid },
       JWT_SECRET,
-      { expiresIn: '8h' }
+      { expiresIn: JWT_EXPIRES_IN }
     );
     res.json({ success: true, token: freshToken });
   } catch (e) {

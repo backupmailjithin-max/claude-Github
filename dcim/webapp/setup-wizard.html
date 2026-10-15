@@ -93,7 +93,9 @@
 
       <fieldset>
         <legend>Company Logo</legend>
-        <input type="file" id="logoFile" accept="image/png,image/jpeg,image/svg+xml">
+        <input type="file" id="logoFile" accept="image/png,image/jpeg,image/svg+xml" onchange="previewImage('logoFile','logoPreview')">
+        <img id="logoPreview" class="hidden" style="display:block;max-height:60px;margin:8px 0;border:1px solid #ddd;border-radius:4px;padding:4px">
+        <div class="hint">Preview above is local only, before saving.</div>
         <button class="btn secondary" onclick="uploadLogo()">Upload</button>
         <div class="hint">PNG, JPEG, or SVG, max 2MB.</div>
         <div class="msg" id="logoMsg"></div>
@@ -101,7 +103,9 @@
 
       <fieldset>
         <legend>Favicon</legend>
-        <input type="file" id="faviconFile" accept="image/x-icon,image/png,.ico">
+        <input type="file" id="faviconFile" accept="image/x-icon,image/png,.ico" onchange="previewImage('faviconFile','faviconPreview')">
+        <img id="faviconPreview" class="hidden" style="display:block;max-height:32px;margin:8px 0;border:1px solid #ddd;border-radius:4px;padding:4px">
+        <div class="hint">Preview above is local only, before saving.</div>
         <button class="btn secondary" onclick="uploadFavicon()">Upload</button>
         <div class="hint">.ico or .png, max 512KB. Served at /favicon.ico — appears in the browser tab after a hard refresh.</div>
         <div class="msg" id="faviconMsg"></div>
@@ -226,6 +230,12 @@
         <input type="number" id="secAuditRetention" min="0" max="3650">
       </fieldset>
 
+      <fieldset>
+        <legend>Session Timeout</legend>
+        <label>Hours before a sign-in session expires</label>
+        <input type="number" id="secSessionTimeout" min="1" max="720">
+      </fieldset>
+
       <button class="btn" onclick="saveSecurity()">Save (writes .env — restart required)</button>
       <div class="msg" id="secMsg"></div>
 
@@ -235,6 +245,15 @@
         <input type="number" id="secBackupRetention" min="1" max="365">
         <button class="btn secondary" onclick="saveBackupRetention()">Save</button>
         <div class="msg" id="secBackupMsg"></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Password Policy</legend>
+        <label>Minimum password length required by the Admin Account tool above (applies immediately, no restart)</label>
+        <input type="number" id="secPasswordMinLength" min="8" max="128">
+        <div class="hint">Does not change the minimum for the regular sign-in password-change flow elsewhere in the app, which stays at its existing minimum of 8.</div>
+        <button class="btn secondary" onclick="savePasswordPolicy()">Save</button>
+        <div class="msg" id="secPasswordMsg"></div>
       </fieldset>
     </section>
 
@@ -320,6 +339,14 @@ async function saveOrg() {
     loadBranding();
   } catch (e) { show('orgMsg', false, e.message); }
 }
+function previewImage(inputId, imgId) {
+  const f = document.getElementById(inputId).files[0];
+  const img = document.getElementById(imgId);
+  if (!f) { img.classList.add('hidden'); return; }
+  const reader = new FileReader();
+  reader.onload = (e) => { img.src = e.target.result; img.classList.remove('hidden'); };
+  reader.readAsDataURL(f);
+}
 async function uploadLogo() {
   try {
     const f = document.getElementById('logoFile').files[0];
@@ -401,6 +428,8 @@ async function loadSecurity() {
     document.getElementById('secCspMode').value = s.cspMode;
     document.getElementById('secAuditRetention').value = s.auditRetentionDays;
     document.getElementById('secBackupRetention').value = s.backupRetentionDays;
+    document.getElementById('secSessionTimeout').value = s.sessionTimeoutHours;
+    document.getElementById('secPasswordMinLength').value = s.passwordMinLength;
   } catch (e) { /* non-fatal on this tab */ }
 }
 async function generateJwtSecret() {
@@ -409,7 +438,11 @@ async function generateJwtSecret() {
 }
 async function saveSecurity() {
   try {
-    const body = { cspMode: document.getElementById('secCspMode').value, auditRetentionDays: Number(document.getElementById('secAuditRetention').value) };
+    const body = {
+      cspMode: document.getElementById('secCspMode').value,
+      auditRetentionDays: Number(document.getElementById('secAuditRetention').value),
+      sessionTimeoutHours: Number(document.getElementById('secSessionTimeout').value),
+    };
     const jwt = document.getElementById('secJwtSecret').value.trim();
     if (jwt) body.jwtSecret = jwt;
     const r = await api('/api/setup/security', { method: 'PUT', body: JSON.stringify(body) });
@@ -417,6 +450,12 @@ async function saveSecurity() {
     document.getElementById('secJwtSecret').value = '';
     loadSecurity();
   } catch (e) { show('secMsg', false, e.message); }
+}
+async function savePasswordPolicy() {
+  try {
+    await api('/api/setup/security', { method: 'PUT', body: JSON.stringify({ passwordMinLength: Number(document.getElementById('secPasswordMinLength').value) }) });
+    show('secPasswordMsg', true, 'Saved — applies immediately.');
+  } catch (e) { show('secPasswordMsg', false, e.message); }
 }
 async function saveBackupRetention() {
   try {

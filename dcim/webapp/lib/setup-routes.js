@@ -123,7 +123,8 @@ module.exports = function registerSetupRoutes(app, deps) {
         }
       }
       if (newPassword !== undefined) {
-        if (String(newPassword).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+        const minLen = Number(await getSetting('security.passwordMinLength', '8')) || 8;
+        if (String(newPassword).length < minLen) return res.status(400).json({ error: `Password must be at least ${minLen} characters.` });
         const hash = await bcrypt.hash(String(newPassword), 10);
         await pool.query('UPDATE users SET password_hash = ?, must_change_password = 0, password_changed_at = NOW() WHERE id = ?', [hash, req.user.id]);
       }
@@ -189,6 +190,13 @@ module.exports = function registerSetupRoutes(app, deps) {
         auditRetentionDays: readEnvVar('AUDIT_RETENTION_DAYS') || '365',
         jwtSecretConfigured: !!readEnvVar('JWT_SECRET'),
         backupRetentionDays: cfg.retentionDays,
+        sessionTimeoutHours: readEnvVar('SESSION_TIMEOUT_HOURS') || '8',
+        // DB-backed (app_settings), not .env: this only governs the password-length
+        // check on the Admin Account tool below, which this module itself owns, so
+        // it applies immediately, no restart. The app's own sign-in/change-password
+        // flow has its own separate, unchanged minimum (also 8) - this does not
+        // override or weaken it.
+        passwordMinLength: await getSetting('security.passwordMinLength', '8'),
       });
     } catch (e) { sendErr(res, e); }
   });
@@ -199,7 +207,7 @@ module.exports = function registerSetupRoutes(app, deps) {
 
   app.put('/api/setup/security', authenticateToken, requireGlobalAdmin, async (req, res) => {
     try {
-      const { cspMode, auditRetentionDays, jwtSecret } = req.body || {};
+      const { cspMode, auditRetentionDays, jwtSecret, sessionTimeoutHours, passwordMinLength } = req.body || {};
       const changed = [];
       if (cspMode !== undefined) {
         if (!['enforce', 'report-only', 'off'].includes(cspMode)) throw httpErr(400, 'cspMode must be enforce, report-only, or off.');
@@ -216,7 +224,19 @@ module.exports = function registerSetupRoutes(app, deps) {
         if (/[\r\n]/.test(s)) throw httpErr(400, 'jwtSecret cannot contain newlines.');
         writeEnvVar('JWT_SECRET', s); changed.push('JWT_SECRET');
       }
-      res.json({ success: true, changed, requiresRestart: changed.length > 0 });
+      if (sessionTimeoutHours !== undefined) {
+        const n = Number(sessionTimeoutHours);
+        if (!Number.isFinite(n) || n <= 0 || n > 720) throw httpErr(400, 'sessionTimeoutHours must be a number of hours from 1 to 720 (30 days).');
+        writeEnvVar('SESSION_TIMEOUT_HOURS', String(n)); changed.push('SESSION_TIMEOUT_HOURS');
+      }
+      let passwordPolicyChanged = false;
+      if (passwordMinLength !== undefined) {
+        const n = Number(passwordMinLength);
+        if (!Number.isFinite(n) || n < 8 || n > 128 || Math.round(n) !== n) throw httpErr(400, 'passwordMinLength must be a whole number from 8 to 128.');
+        await setSetting('security.passwordMinLength', String(n));
+        passwordPolicyChanged = true;
+      }
+      res.json({ success: true, changed, requiresRestart: changed.length > 0, passwordPolicyChanged });
     } catch (e) { sendErr(res, e); }
   });
 
