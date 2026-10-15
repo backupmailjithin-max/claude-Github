@@ -16,7 +16,7 @@ Installs as a systemd service. After installing this package, run
 connection, port, admin account).
 
 %prep
-# no-op: sources are staged directly by build-rpm.sh via %install
+# no-op: sources are staged directly by build-rpm.sh via the install section below
 
 %build
 # no-op: the application ships pre-built (node_modules/libs/ocr already vendored)

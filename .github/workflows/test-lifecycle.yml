@@ -54,6 +54,23 @@ jobs:
             -DbUser dcim -DbPassword 'TestPass123!' -DbName dcim_test `
             -AdminUser ciadmin -AdminPassword 'CiAdminPass123!'
 
+      - name: Diagnostics (always, even on failure)
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "--- Get-Service DCIM ---"
+          Get-Service -Name DCIM -ErrorAction SilentlyContinue | Format-List *
+          Write-Host "--- NSSM status ---"
+          if (Test-Path C:\DCIM\tools\nssm.exe) { & C:\DCIM\tools\nssm.exe status DCIM }
+          Write-Host "--- stdout log ---"
+          Get-Content C:\DCIM\webapp\logs\service-stdout.log -ErrorAction SilentlyContinue -Tail 100
+          Write-Host "--- stderr log ---"
+          Get-Content C:\DCIM\webapp\logs\service-stderr.log -ErrorAction SilentlyContinue -Tail 100
+          Write-Host "--- app log files ---"
+          Get-ChildItem C:\DCIM\webapp\logs -ErrorAction SilentlyContinue
+          Write-Host "--- .env (redacted) ---"
+          if (Test-Path C:\DCIM\webapp\.env) { (Get-Content C:\DCIM\webapp\.env) -replace '(PASSWORD|SECRET)=.*','$1=[redacted]' }
+
       - name: Verify service is really running (NSSM)
         shell: pwsh
         run: |
@@ -122,6 +139,9 @@ jobs:
 
       - name: Install MariaDB
         run: |
+          # ubuntu-latest ships MySQL 8 pre-installed; stop it first so it can't
+          # fight MariaDB for port 3306 (discovered via a failed run of this job).
+          sudo systemctl stop mysql.service 2>/dev/null || true
           sudo apt-get update -y
           sudo apt-get install -y mariadb-server
           sudo systemctl start mariadb
@@ -133,6 +153,20 @@ jobs:
             --db-user dcim --db-password 'TestPass123!' --db-name dcim_test \
             --admin-user ciadmin --admin-password 'CiAdminPass123!' \
             --csp-mode enforce --audit-retention-days 90
+
+      - name: Diagnostics (always, even on failure)
+        if: always()
+        run: |
+          echo "--- systemctl status dcim ---"
+          sudo systemctl status dcim --no-pager || true
+          echo "--- journalctl -u dcim ---"
+          sudo journalctl -u dcim --no-pager -n 200 || true
+          echo "--- ss -ltnp ---"
+          sudo ss -ltnp || true
+          echo "--- .env (redacted) ---"
+          sudo sed -E 's/(PASSWORD|SECRET)=.*/\1=[redacted]/' /opt/dcim/webapp/.env || true
+          echo "--- mysql connectivity as dcim ---"
+          mysql -h localhost -u dcim -p'TestPass123!' -e "SELECT 1;" dcim_test || true
 
       - name: Verify systemd service is really running
         run: |
