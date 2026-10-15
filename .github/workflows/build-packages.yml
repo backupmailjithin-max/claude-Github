@@ -90,18 +90,46 @@ jobs:
         shell: pwsh
         run: packaging\windows\fetch-mariadb-runtime.ps1
 
-      - name: Compile installer + upgrade/repair utilities with Inno Setup
+      # All three share the same payload (webapp/runtime/nssm staged above) and
+      # the same AppId, differing only in which install.ps1 -Mode they force -
+      # not three separate install engines, just three entry points into the
+      # one already-tested install.ps1. Compiled as separate steps (not one
+      # combined step) so a failure in any single one fails the job loudly
+      # with its own isolated log, instead of silently falling through to
+      # "success" while missing its output file.
+      - name: Compile main installer (dcim-installer.iss) with Inno Setup
         shell: pwsh
         run: |
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { throw "Inno Setup (ISCC.exe) not found on this runner image." }
-          # All three share the same payload (webapp/runtime/nssm staged above) and
-          # the same AppId, differing only in which install.ps1 -Mode they force -
-          # not three separate install engines, just three entry points into the
-          # one already-tested install.ps1.
           & $iscc packaging\windows\dcim-installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed compiling dcim-installer.iss (exit $LASTEXITCODE)" }
+
+      - name: Compile upgrade utility (dcim-upgrade-utility.iss) with Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           & $iscc packaging\windows\dcim-upgrade-utility.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed compiling dcim-upgrade-utility.iss (exit $LASTEXITCODE)" }
+
+      - name: Compile repair utility (dcim-repair-utility.iss) with Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           & $iscc packaging\windows\dcim-repair-utility.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed compiling dcim-repair-utility.iss (exit $LASTEXITCODE)" }
+
+      - name: Verify all three installers were produced
+        shell: pwsh
+        run: |
+          $expected = @(
+            "packaging\windows\Output\dcim-setup-3.2.2.exe",
+            "packaging\windows\Output\DCIM-Upgrade-3.2.2.exe",
+            "packaging\windows\Output\DCIM-Repair-3.2.2.exe"
+          )
+          $missing = $expected | Where-Object { -not (Test-Path $_) }
+          if ($missing) { throw "Missing expected installer output(s): $($missing -join ', ')" }
+          Get-ChildItem packaging\windows\Output\*.exe | Format-Table Name, Length
 
       - name: Upload .exe
         uses: actions/upload-artifact@v4
