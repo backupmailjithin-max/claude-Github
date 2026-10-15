@@ -1,0 +1,60 @@
+name: Deliver artifact as release asset
+
+# One-off utility: re-publishes an already-built GitHub Actions artifact as a
+# GitHub Release asset. Actions artifacts are only ever served from rotating
+# Azure Blob Storage subdomains (*.blob.core.windows.net), which some
+# sandboxed/restricted network environments cannot reach; release assets are
+# served from objects.githubusercontent.com instead, which is reachable far
+# more often. This workflow runs entirely on GitHub's own infrastructure (no
+# restricted network involved here), downloads the named artifact from the
+# given run, and attaches it to a release tag so it can be fetched from
+# wherever that second host is allowed.
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_name:
+        description: "Name of the artifact to re-publish (as shown in the Actions run's Artifacts list)"
+        required: true
+        type: string
+      source_run_id:
+        description: "Run ID that produced the artifact"
+        required: true
+        type: string
+      release_tag:
+        description: "Tag to publish/update the release under"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the artifact from its source run
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: dist-artifact
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: List what will be uploaded
+        run: ls -la dist-artifact/
+
+      - name: Create or update the release with this artifact attached
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          if gh release view "${{ inputs.release_tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "${{ inputs.release_tag }}" dist-artifact/* --clobber --repo "${{ github.repository }}"
+          else
+            gh release create "${{ inputs.release_tag }}" dist-artifact/* \
+              --title "${{ inputs.release_tag }}" \
+              --notes "Temporary delivery release: re-publishes the '${{ inputs.artifact_name }}' Actions artifact from run ${{ inputs.source_run_id }} as a downloadable release asset." \
+              --repo "${{ github.repository }}"
+          fi
