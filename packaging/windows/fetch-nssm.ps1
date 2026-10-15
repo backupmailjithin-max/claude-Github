@@ -19,9 +19,17 @@ function Get-NssmViaChoco {
   if (-not $choco) { return $false }
   Write-Host "[fetch-nssm] installing via Chocolatey"
   & $choco.Source install nssm --version=$NssmVersion --no-progress -y 2>&1 | Out-Null
-  $installed = Get-Command nssm.exe -ErrorAction SilentlyContinue
-  if (-not $installed) { return $false }
-  Copy-Item $installed.Source (Join-Path $OutDir "nssm.exe") -Force
+
+  # Get-Command's .Source for a freshly-shimmed Chocolatey exe can be a
+  # relative path (confirmed in CI: "..\lib\NSSM\tools\nssm.exe"), which
+  # Copy-Item then resolves against the wrong working directory. Search the
+  # actual Chocolatey lib folder directly instead of trusting .Source.
+  $chocoRoot = $env:ChocolateyInstall
+  if (-not $chocoRoot) { $chocoRoot = Join-Path ${env:ProgramData} "chocolatey" }
+  $found = Get-ChildItem -Path (Join-Path $chocoRoot "lib") -Filter "nssm.exe" -Recurse -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+  if (-not $found) { return $false }
+  Copy-Item $found.FullName (Join-Path $OutDir "nssm.exe") -Force
   return $true
 }
 
