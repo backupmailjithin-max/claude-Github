@@ -12,6 +12,30 @@ internet access is required or used during install):
 | **One-step dispatcher** (`./install` on Linux, `install.ps1` on Windows) | Recommended for most customers. Auto-detects your OS and runs the matching native installer below. |
 | **Native installer directly** (`.deb`/`.rpm`/`.run` on Linux, `DCIM-Setup.exe` on Windows) | Use when your change-management process requires a specific, auditable package format. |
 
+### A formal, guided install, not just flags
+
+Both platforms also offer a guided setup experience for someone installing
+by hand, instead of requiring command-line flags:
+
+- **Windows (`DCIM-Setup.exe`)**: the installer wizard includes real pages
+  for the choices that matter - **Database Configuration** (embedded vs.
+  your own server, with connection fields only shown when needed),
+  **Application Settings** (HTTP port, optional custom administrator
+  account) - validated before you can continue (e.g. matching passwords, a
+  valid port number). A "Open DCIM in your browser now" checkbox is offered
+  on the Finish page.
+- **Linux** (`sudo dcim-setup` with no flags, or option **1) Install** from
+  the interactive menu): the same choices are asked as a series of prompts
+  - rendered as proper boxes via `whiptail` when it's available (the usual
+    case; works over SSH, no desktop environment needed), or as plain
+    text prompts otherwise. Press Enter at any prompt to accept the shown
+    default.
+
+Either path is equivalent to passing the matching `--db-*`/`--admin-*`
+flags directly - use whichever fits how you work. Unattended/scripted
+installs (`--yes`, or any CI pipeline) are completely unaffected: the
+guided prompts only ever appear for a fresh install run interactively.
+
 ## 2. System requirements
 
 | | Minimum |

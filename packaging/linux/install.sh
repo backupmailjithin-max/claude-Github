@@ -214,6 +214,75 @@ choose_mode() {
   esac
 }
 
+# ---------- Interactive configuration wizard (install only, no --yes) ----------
+# A formal, prompt-driven setup for someone running this by hand at a
+# terminal - uses whiptail's boxes when available (works over SSH, no X11
+# needed) and falls back to plain read prompts otherwise. CI/automation is
+# never affected: this only runs when choose_mode's own interactive branch
+# ran, i.e. no --mode and no --yes were passed.
+
+have_whiptail() { command -v whiptail >/dev/null 2>&1; }
+
+ask_text() {
+  local prompt="$1" default="$2" answer
+  if have_whiptail; then
+    answer="$(whiptail --backtitle "$APP_NAME Setup" --inputbox "$prompt" 10 70 "$default" 3>&1 1>&2 2>&3)" || die "Setup cancelled."
+  else
+    read -r -p "$prompt [$default]: " answer
+  fi
+  echo "${answer:-$default}"
+}
+
+ask_password() {
+  local prompt="$1" answer
+  if have_whiptail; then
+    answer="$(whiptail --backtitle "$APP_NAME Setup" --passwordbox "$prompt" 10 70 3>&1 1>&2 2>&3)" || die "Setup cancelled."
+  else
+    read -r -s -p "$prompt: " answer
+    echo >&2
+  fi
+  echo "$answer"
+}
+
+ask_yesno() {
+  local prompt="$1" default="$2" answer
+  if have_whiptail; then
+    if whiptail --backtitle "$APP_NAME Setup" --yesno "$prompt" 12 70; then echo 1; else echo 0; fi
+  else
+    read -r -p "$prompt [${3:-y/N}]: " answer
+    case "$answer" in
+      [Yy]*) echo 1 ;;
+      "") echo "$default" ;;
+      *) echo 0 ;;
+    esac
+  fi
+}
+
+interactive_configure_install() {
+  log "Let's configure your installation. Press Enter to accept the bracketed default."
+  PORT="$(ask_text "HTTP port $APP_NAME should listen on" "$PORT")"
+
+  if [ "$(ask_yesno "Use a bundled, private database?\n\nRecommended - no setup required. Choose No to connect to your own MySQL/MariaDB server instead." 1 "Y/n")" = "1" ]; then
+    EMBEDDED_DB=1
+  else
+    EMBEDDED_DB=0
+    DB_HOST="$(ask_text "Database host" "$DB_HOST")"
+    DB_PORT="$(ask_text "Database port" "$DB_PORT")"
+    DB_USER="$(ask_text "Database username" "$DB_USER")"
+    DB_PASSWORD="$(ask_password "Database password")"
+    DB_NAME="$(ask_text "Database name" "$DB_NAME")"
+  fi
+
+  if [ "$(ask_yesno "Set a custom administrator account now?\n\nChoose No to sign in as admin/admin and change the password on first use." 0 "y/N")" = "1" ]; then
+    ADMIN_USER="$(ask_text "Administrator username" "admin")"
+    local pw1 pw2
+    pw1="$(ask_password "Administrator password")"
+    pw2="$(ask_password "Confirm administrator password")"
+    [ -n "$pw1" ] && [ "$pw1" = "$pw2" ] || die "Passwords did not match (or were empty) - re-run and try again."
+    ADMIN_PASSWORD="$pw1"
+  fi
+}
+
 # ---------- Actions ----------
 
 ensure_service_user() {
@@ -684,6 +753,9 @@ do_repair() {
 main() {
   require_root
   choose_mode
+  if [ "$MODE" = "install" ] && [ "$ASSUME_YES" -eq 0 ] && ! existing_install_present; then
+    interactive_configure_install
+  fi
   case "$MODE" in
     install) do_install ;;
     upgrade) do_upgrade ;;
