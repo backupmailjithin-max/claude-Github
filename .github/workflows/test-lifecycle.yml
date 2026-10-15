@@ -132,6 +132,10 @@ jobs:
           & $mysql -u root dcim_test -e "DELETE FROM locations WHERE name='CiTestDC';"
           $snapshotMarker = Get-Content "C:\DCIM\.last-pre-change-backup" -Raw
           Write-Host "Rolling back to: $snapshotMarker"
+          Write-Host "--- mysqldump.err (if any, from every snapshot taken this run) ---"
+          Get-ChildItem C:\ProgramData\dcim-backups -Recurse -Filter "mysqldump.err" -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "=== $($_.FullName) ==="; Get-Content $_.FullName
+          }
           packaging\windows\rollback.ps1 -InstallDir C:\DCIM -Yes
           Start-Sleep -Seconds 3
           $login = Invoke-RestMethod -Uri "http://127.0.0.1:18974/api/auth/login" -Method Post -ContentType "application/json" -Body (@{username="ciadmin";password="CiAdminPass123!"} | ConvertTo-Json)

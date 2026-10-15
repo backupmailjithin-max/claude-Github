@@ -300,7 +300,6 @@ install_systemd_unit() {
 }
 
 setup_embedded_db() {
-  [ -x "$PAYLOAD_MARIADB/bin/mariadbd" ] || die "--embedded-db requires a bundled MariaDB runtime (run fetch-mariadb-runtime.sh at package-build time)."
   local engine_dir="$EMBEDDED_DB_DIR/engine"
   local data_dir="$EMBEDDED_DB_DIR/data"
   local socket_path="$EMBEDDED_DB_DIR/mariadb.sock"
@@ -309,9 +308,20 @@ setup_embedded_db() {
   local unit_path="/etc/systemd/system/${EMBEDDED_DB_SERVICE}.service"
 
   install -d -m 755 "$EMBEDDED_DB_DIR"
-  rm -rf "$engine_dir"
-  install -d -m 755 "$engine_dir"
-  cp -a "$PAYLOAD_MARIADB/." "$engine_dir/"
+  if [ -x "$PAYLOAD_MARIADB/bin/mariadbd" ]; then
+    rm -rf "$engine_dir"
+    install -d -m 755 "$engine_dir"
+    cp -a "$PAYLOAD_MARIADB/." "$engine_dir/"
+  elif [ -x "$engine_dir/bin/mariadbd" ]; then
+    # Found via real execution: a repair run via the cached /opt/dcim/cli copy
+    # (see install_cli_utilities) has no bundled runtime payload next to it -
+    # only the scripts are cached there, not the multi-hundred-MB MariaDB
+    # engine. Reuse the already-staged engine from the original install
+    # instead of requiring a payload that was never going to be there.
+    log "No bundled MariaDB payload found next to this invocation (expected for a cached repair run) - reusing the already-staged engine at $engine_dir."
+  else
+    die "--embedded-db requires a bundled MariaDB runtime (run fetch-mariadb-runtime.sh at package-build time)."
+  fi
 
   local first_init=0
   if [ ! -d "$data_dir" ]; then
