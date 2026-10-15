@@ -22,6 +22,11 @@ PAYLOAD_WEBAPP="$SCRIPT_DIR/webapp"
 PAYLOAD_RUNTIME="$SCRIPT_DIR/runtime/node"
 PAYLOAD_MARIADB="$SCRIPT_DIR/runtime/mariadb"
 [ -d "$PAYLOAD_WEBAPP" ] || PAYLOAD_WEBAPP="$SCRIPT_DIR/../../dcim/webapp"
+# Repair's own last-resort source of truth for a standalone/appliance install
+# (see sync_payload/install_cli_utilities below) - populated from a genuine
+# source whenever one is available, never from itself.
+CLI_CACHE_DIR="$INSTALL_DIR/cli"
+CACHED_WEBAPP_DIR="$CLI_CACHE_DIR/webapp-src"
 
 MODE=""
 PORT="$REQUIRED_PORT_DEFAULT"
@@ -105,6 +110,18 @@ require_root() {
 
 existing_install_present() {
   [ -d "$INSTALL_DIR/webapp" ] && [ -f "$ENV_FILE" ]
+}
+
+# Found via real execution of the "Lost Configuration" repair scenario:
+# do_repair's own entry guard used existing_install_present (which requires
+# .env), so when .env is exactly the thing that's missing, repair refused to
+# even start ("No existing installation found") before ever reaching its own
+# .env self-heal logic in sync_payload. Repair needs a looser signal that an
+# install exists at all - the webapp directory or the systemd unit file -
+# since recovering a missing/corrupted .env is a scenario repair must
+# support, not reject.
+repair_target_present() {
+  [ -d "$INSTALL_DIR/webapp" ] || [ -f "$UNIT_PATH" ]
 }
 
 # ---------- Validation ----------
@@ -252,15 +269,35 @@ EOF
 }
 
 sync_payload() {
+  # Found via real execution of the "Missing Files" repair scenario on a
+  # standalone (non-.deb/.rpm) install: on a repair run invoked through the
+  # install_cli_utilities script cache (SCRIPT_DIR == $INSTALL_DIR/cli),
+  # PAYLOAD_WEBAPP's "../../dcim/webapp" fallback resolves to
+  # $INSTALL_DIR/webapp itself (walking ".." from .../cli lands back under
+  # $INSTALL_DIR), so rsync silently synced the installed webapp onto itself
+  # - a missing file stayed missing with no error at all. A .deb/.rpm install
+  # never hits this (PAYLOAD_WEBAPP finds the package's own permanent copy
+  # at /usr/share/dcim/webapp on the first check). Fall back to the cached
+  # copy install_cli_utilities keeps for exactly this case instead of
+  # resyncing a directory onto itself.
+  local source_webapp="$PAYLOAD_WEBAPP"
+  if [ ! -f "$source_webapp/server.js" ] || [ "$(cd "$source_webapp" 2>/dev/null && pwd)" = "$(cd "$INSTALL_DIR/webapp" 2>/dev/null && pwd)" ]; then
+    if [ -f "$CACHED_WEBAPP_DIR/server.js" ]; then
+      log "No distinct webapp payload found next to this invocation (expected for a cached repair run) - restoring from the last known-good copy cached at $CACHED_WEBAPP_DIR."
+      source_webapp="$CACHED_WEBAPP_DIR"
+    else
+      die "Could not find a real webapp payload to repair from (looked in $PAYLOAD_WEBAPP, and no cached copy exists at $CACHED_WEBAPP_DIR). Re-run the original install.sh/appliance from its source, or reinstall via the .deb/.rpm package (which always keeps its own permanent copy under /usr/share/dcim/webapp)."
+    fi
+  fi
   log "Syncing application files to $INSTALL_DIR/webapp ..."
   install -d -m 755 "$INSTALL_DIR"
   if command -v rsync >/dev/null 2>&1; then
     rsync -a --delete \
       --exclude '.env' --exclude 'uploads' --exclude 'backups' --exclude 'logs' \
-      "$PAYLOAD_WEBAPP/" "$INSTALL_DIR/webapp/"
+      "$source_webapp/" "$INSTALL_DIR/webapp/"
   else
     mkdir -p "$INSTALL_DIR/webapp"
-    for item in "$PAYLOAD_WEBAPP"/*; do
+    for item in "$source_webapp"/*; do
       base="$(basename "$item")"
       case "$base" in .env|uploads|backups|logs) continue ;; esac
       rm -rf "${INSTALL_DIR:?}/webapp/${base}"
@@ -434,6 +471,24 @@ install_cli_utilities() {
   for name in dcim-service dcim-upgrade dcim-repair; do
     [ -e "/usr/bin/$name" ] || ln -s "$cli_dir/${name}.sh" "/usr/bin/$name"
   done
+  # Cache a real copy of the webapp payload too (small - ~50MB including
+  # node_modules and the OCR vendor tree), so a later repair run invoked via
+  # this very cache (see sync_payload's fallback) has a genuine, known-good
+  # source to restore missing/corrupted webapp files from, instead of
+  # silently syncing the installed directory onto itself. Only refresh it
+  # when $PAYLOAD_WEBAPP is a real, distinct source (true during install/
+  # upgrade, which always run from the original checkout/appliance/package -
+  # false during a repair invoked through this same cache, where it must
+  # never overwrite a known-good cache with an already-damaged one).
+  if [ -f "$PAYLOAD_WEBAPP/server.js" ] && [ "$(cd "$PAYLOAD_WEBAPP" 2>/dev/null && pwd)" != "$(cd "$INSTALL_DIR/webapp" 2>/dev/null && pwd)" ]; then
+    install -d -m 755 "$CACHED_WEBAPP_DIR"
+    if command -v rsync >/dev/null 2>&1; then
+      rsync -a --delete --exclude '.env' --exclude 'uploads' --exclude 'backups' --exclude 'logs' \
+        "$PAYLOAD_WEBAPP/" "$CACHED_WEBAPP_DIR/"
+    else
+      cp -a "$PAYLOAD_WEBAPP/." "$CACHED_WEBAPP_DIR/"
+    fi
+  fi
   [ -e /usr/bin/dcim-setup ] || ln -s "$cli_dir/install.sh" /usr/bin/dcim-setup
 }
 
@@ -588,7 +643,7 @@ do_upgrade() {
 }
 
 do_repair() {
-  existing_install_present || die "No existing installation found at $INSTALL_DIR; use --mode install instead."
+  repair_target_present || die "No existing installation found at $INSTALL_DIR; use --mode install instead."
   run_validations
   ensure_service_user
   backup_before_change

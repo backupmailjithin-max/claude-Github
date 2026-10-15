@@ -44,6 +44,17 @@ function Test-ExistingInstall {
   (Test-Path (Join-Path $InstallDir "webapp\.env"))
 }
 
+# Found via real execution of the "Lost Configuration" repair scenario:
+# Invoke-Repair's own entry guard used Test-ExistingInstall (which requires
+# .env), so when .env is exactly the thing that's missing, repair refused to
+# even start before ever reaching its own .env self-heal logic. Repair needs
+# a looser signal that an install exists at all - the webapp directory or
+# the registered Windows service - since recovering a missing/corrupted
+# .env is a scenario repair must support, not reject.
+function Test-RepairTargetPresent {
+  (Test-Path (Join-Path $InstallDir "webapp")) -or (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)
+}
+
 # ---------- Validation ----------
 
 function Resolve-NodeBinary {
@@ -448,7 +459,7 @@ function Invoke-Upgrade {
 }
 
 function Invoke-Repair {
-  if (-not (Test-ExistingInstall)) { Die "No existing installation found at $InstallDir; use -Mode install instead." }
+  if (-not (Test-RepairTargetPresent)) { Die "No existing installation found at $InstallDir; use -Mode install instead." }
   Invoke-Validations
   Backup-BeforeChange
   # Found via real execution of the "Lost Configuration" repair scenario:

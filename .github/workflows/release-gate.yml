@@ -150,9 +150,6 @@ jobs:
           MARIADB_USER: dcim
           MARIADB_PASSWORD: FreshClonePass123!
         ports: ["3306:3306"]
-        options: >-
-          --health-cmd "mysqladmin ping -uroot -prootpass"
-          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -160,6 +157,23 @@ jobs:
         run: |
           test -d dcim/webapp/node_modules || { echo "::error::node_modules missing - repo is not offline-ready"; exit 1; }
           test -d dcim/webapp/ocr/vendor/node_modules || { echo "::error::OCR vendor node_modules missing"; exit 1; }
+
+      - name: Wait for the MariaDB service container
+        run: |
+          set -e
+          # Found via real execution: a --health-cmd on this service container
+          # (mysqladmin ping -uroot -prootpass) reported the container
+          # "unhealthy" even after its own log showed "ready for connections" -
+          # likely a unix-socket-vs-TCP auth mismatch inside docker's healthcheck
+          # exec context, not an actual readiness problem. Polling from the
+          # runner itself over the real TCP port this job will actually use
+          # sidesteps that entirely and is what every other job in this repo
+          # already does for its own MariaDB instance.
+          for i in $(seq 1 30); do
+            mysqladmin ping -h127.0.0.1 -uroot -prootpass --silent && break
+            sleep 1
+          done
+          mysqladmin ping -h127.0.0.1 -uroot -prootpass
 
       - name: Load schema
         run: mysql -h127.0.0.1 -uroot -prootpass dcim_fresh < dcim/webapp/schema.sql
