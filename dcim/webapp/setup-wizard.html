@@ -261,6 +261,8 @@
       <h2>Configuration Export / Import</h2>
       <p class="hint">Exports organization settings, locations, zones, hardware types, rack types, and infra connection details (host/user only — never passwords) as a portable JSON bundle. Use this for disaster recovery, UAT-to-production promotion, or rolling the same configuration out to a new customer site.</p>
       <button class="btn" onclick="exportConfig()">Export Configuration</button>
+      <button class="btn secondary" onclick="exportFilesArchive()">Export Uploaded Files</button>
+      <div class="hint">The configuration export above contains settings and references (e.g. the logo's path) but not the files themselves. For a complete disaster-recovery copy, download both this and the regular Backup/Restore export, and keep them together.</div>
 
       <fieldset>
         <legend>Include Security Settings (optional)</legend>
@@ -549,6 +551,18 @@ async function downloadExport(body) {
 }
 async function exportConfig() {
   try { await downloadExport({}); show('exportMsg', true, 'Downloaded.'); } catch (e) { show('exportMsg', false, e.message); }
+}
+async function exportFilesArchive() {
+  try {
+    const res = await fetch('/api/backup/files-archive', { headers: authHeaders(false) });
+    if (!res.ok) { const d = await res.json().catch(() => null); throw new Error((d && d.error) || ('Export failed (' + res.status + ')')); }
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'dcim-uploaded-files-' + new Date().toISOString().slice(0, 10) + '.zip';
+    a.click();
+    show('exportMsg', true, 'Downloaded.');
+  } catch (e) { show('exportMsg', false, e.message); }
 }
 async function exportConfigWithSecurity() {
   try {

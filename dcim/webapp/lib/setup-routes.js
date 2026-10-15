@@ -611,6 +611,43 @@ module.exports = function registerSetupRoutes(app, deps) {
     } catch (e) { sendErr(res, e); }
   });
 
+  // ---------- disaster-recovery file export (uploaded binaries) ----------
+  // The existing Backup/Restore (BACKUP_TABLES) and Config Export/Import above
+  // already cover every DB-backed table and setting, including the DB *paths*
+  // to uploaded files (org.logoPath/org.faviconPath in app_settings, and
+  // material_movement_documents' filenames) - but not the files themselves,
+  // which live only on local disk under webapp/uploads. Losing the server
+  // loses those bytes even though a restored DB backup still references
+  // their filenames. This closes that gap as a standalone zip export,
+  // additive and read-only against the existing upload directories - it
+  // doesn't touch how movementUpload/logoUpload/faviconUpload write files,
+  // only reads what's already there.
+  function walkFiles(dir, baseDir) {
+    const out = [];
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return out; }
+    for (const ent of entries) {
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) out.push(...walkFiles(full, baseDir));
+      else if (ent.isFile()) out.push({ full, rel: path.relative(baseDir, full).split(path.sep).join('/') });
+    }
+    return out;
+  }
+
+  app.get('/api/backup/files-archive', authenticateToken, requireGlobalAdmin, async (req, res) => {
+    try {
+      const uploadsDir = path.join(webappDir, 'uploads');
+      const files = walkFiles(uploadsDir, uploadsDir);
+      const entries = files.map((f) => ({ name: f.rel, data: fs.readFileSync(f.full) }));
+      if (!entries.length) throw httpErr(404, 'No uploaded files found (nothing to export).');
+      const zip = buildZip(entries);
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', `attachment; filename="dcim-uploaded-files-${stamp}.zip"`);
+      res.send(zip);
+    } catch (e) { sendErr(res, e); }
+  });
+
   // ---------- deployment dashboard ----------
 
   app.get('/api/deployment/status', authenticateToken, requireGlobalAdmin, async (req, res) => {
