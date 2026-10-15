@@ -146,3 +146,29 @@ jobs:
           path: |
             dist/DCIM-Enterprise-Offline-Kit-*.tar.gz
             dist/DCIM-Enterprise-Offline-Kit-*.zip
+
+      # Real execution of the OS-detecting dispatcher itself (packaging/kit/install)
+      # - not the .deb/.rpm/.run mechanics it hands off to, which are already
+      # covered by test-lifecycle.yml. This is the one piece of the kit that has
+      # no other test coverage: does it correctly identify this as a
+      # Debian/Ubuntu host and invoke the bundled .deb via dpkg.
+      - name: Smoke-test the kit's OS-detecting dispatcher on Ubuntu
+        if: always()
+        run: |
+          set -e
+          sudo systemctl stop mysql.service 2>/dev/null || true
+          sudo apt-get update -y
+          sudo apt-get install -y mariadb-server
+          sudo systemctl start mariadb
+          sudo mysql -u root -e "CREATE DATABASE dcim_kit_test CHARACTER SET utf8mb4; CREATE USER 'dcim'@'localhost' IDENTIFIED BY 'KitTestPass123!'; GRANT ALL ON dcim_kit_test.* TO 'dcim'@'localhost'; FLUSH PRIVILEGES;"
+          mkdir -p /tmp/kit-extract
+          tar -xzf dist/DCIM-Enterprise-Offline-Kit-*.tar.gz -C /tmp/kit-extract
+          KIT_DIR=$(find /tmp/kit-extract -maxdepth 1 -type d -name "DCIM-Enterprise-Offline-Kit-*")
+          echo "Using kit at: $KIT_DIR"
+          cd "$KIT_DIR"
+          sudo ./install
+          sudo dcim-setup --mode install --yes --port 18977 \
+            --db-user dcim --db-password 'KitTestPass123!' --db-name dcim_kit_test
+          sleep 3
+          curl -fsS http://127.0.0.1:18977/api/health | grep -q '"status":"ok"'
+          echo "Kit dispatcher correctly detected this host and installed via the native .deb."

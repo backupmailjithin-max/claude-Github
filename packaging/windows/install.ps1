@@ -194,7 +194,13 @@ function Setup-EmbeddedDb {
     $installDbExe = Join-Path $engineDir "bin\mariadb-install-db.exe"
     if (-not (Test-Path $installDbExe)) { $installDbExe = Join-Path $engineDir "bin\mysql_install_db.exe" }
     if (-not (Test-Path $installDbExe)) { Die "Could not find mariadb-install-db.exe in the bundled MariaDB runtime." }
-    & $installDbExe "--datadir=$dataDir" --auth-root-authentication-method=normal | Out-Null
+    # Found via real execution: the Windows mariadb-install-db.exe (11.4.4)
+    # rejects --auth-root-authentication-method outright ("unknown variable")
+    # - unlike the Linux build, it doesn't support this option at all. Its
+    # Windows default already creates root with no password, which is exactly
+    # what the Linux --auth-root-authentication-method=normal flag was used to
+    # guarantee, so simply omitting it reaches the same end state here.
+    & $installDbExe "--datadir=$dataDir" | Out-Null
     if ($LASTEXITCODE -ne 0) { Die "mariadb-install-db.exe failed (exit $LASTEXITCODE)." }
   }
 
@@ -289,7 +295,16 @@ function Backup-BeforeChange {
     Get-Content $envPath | ForEach-Object { if ($_ -match '^([A-Z_]+)=(.*)$') { $env[$matches[1]] = $matches[2] } }
     $dumpArgs = @("-h", $env.DB_HOST, "-u", $env.DB_USER)
     if ($env.DB_PASSWORD) { $dumpArgs += "-p$($env.DB_PASSWORD)" }
-    $dumpArgs += @("--single-transaction", "--routines", "--triggers", $env.DB_NAME)
+    # --set-gtid-purged=OFF: found via real execution against MySQL 8 (choco's
+    # mysql package) - mysqldump failed outright with "Couldn't execute
+    # 'FLUSH TABLES': Access denied; you need (at least one of) the RELOAD or
+    # FLUSH_TABLES privilege(s)". MySQL 8 attempts to record GTID state (which
+    # needs that FLUSH TABLES call) even with --single-transaction, unless
+    # told not to - and a least-privilege DB user scoped to just this app's
+    # database (exactly what this installer itself asks customers to grant)
+    # will never have that global privilege. This avoids the GTID lookup
+    # entirely instead of requiring a broader grant just to take a backup.
+    $dumpArgs += @("--single-transaction", "--set-gtid-purged=OFF", "--routines", "--triggers", $env.DB_NAME)
     $sqlPath = Join-Path $backupDir "database.sql"
     try {
       # Native `>` redirection (not `| Out-File`): Out-File would capture

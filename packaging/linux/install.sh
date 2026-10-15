@@ -450,7 +450,17 @@ backup_before_change() {
     host="$(sed -n 's/^DB_HOST=//p' "$ENV_FILE")"; user="$(sed -n 's/^DB_USER=//p' "$ENV_FILE")"
     pass="$(sed -n 's/^DB_PASSWORD=//p' "$ENV_FILE")"; name="$(sed -n 's/^DB_NAME=//p' "$ENV_FILE")"
     local pw_arg=(); [ -n "$pass" ] && pw_arg=(-p"$pass")
-    if "$dump_bin" -h "${host:-localhost}" -u "${user:-dcim}" "${pw_arg[@]}" --single-transaction --routines --triggers "${name:-dcim}" 2>"$backup_dir/mysqldump.err" | gzip > "$backup_dir/database.sql.gz"; then
+    # --set-gtid-purged=OFF: found via real execution on Windows against MySQL 8
+    # (choco's mysql package) - mysqldump failed outright with "Couldn't
+    # execute 'FLUSH TABLES': Access denied; you need (at least one of) the
+    # RELOAD or FLUSH_TABLES privilege(s)". MySQL 8 attempts to record GTID
+    # state (which needs that FLUSH TABLES call) even with --single-transaction,
+    # unless told not to - and a least-privilege DB user scoped to just this
+    # app's database (exactly what this installer asks customers to grant)
+    # will never have that global privilege. Applied here too even though this
+    # Linux path is normally used against MariaDB (which didn't hit this) -
+    # DB_HOST can legitimately point at a real external MySQL 8 server.
+    if "$dump_bin" -h "${host:-localhost}" -u "${user:-dcim}" "${pw_arg[@]}" --single-transaction --set-gtid-purged=OFF --routines --triggers "${name:-dcim}" 2>"$backup_dir/mysqldump.err" | gzip > "$backup_dir/database.sql.gz"; then
       log "Database snapshot saved to $backup_dir/database.sql.gz"
     else
       rm -f "$backup_dir/database.sql.gz"
