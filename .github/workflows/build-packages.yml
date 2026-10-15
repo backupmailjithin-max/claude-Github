@@ -81,6 +81,10 @@ jobs:
         shell: pwsh
         run: packaging\windows\fetch-nssm.ps1
 
+      - name: Stage bundled MariaDB runtime (for -EmbeddedDb)
+        shell: pwsh
+        run: packaging\windows\fetch-mariadb-runtime.ps1
+
       - name: Compile installer + upgrade/repair utilities with Inno Setup
         shell: pwsh
         run: |

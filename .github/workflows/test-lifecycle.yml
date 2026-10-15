@@ -327,3 +327,80 @@ jobs:
           TOKEN=$(curl -fsS -X POST http://127.0.0.1:18975/api/auth/login -H 'Content-Type: application/json' -d '{"username":"ciadmin","password":"CiAdminPass123!"}' | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>console.log(JSON.parse(d).token))")
           curl -fsS http://127.0.0.1:18975/api/locations -H "Authorization: Bearer $TOKEN" | grep -q CiEmbeddedDC
           echo "Embedded MariaDB verified across install, upgrade, and repair."
+
+  # Windows equivalent of test-embedded-db above: -EmbeddedDb, no external
+  # MySQL/MariaDB install step needed at all (that's the point).
+  test-windows-embedded-db:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage bundled Node.js runtime
+        shell: pwsh
+        run: packaging\windows\fetch-node-runtime.ps1
+
+      - name: Stage NSSM service wrapper
+        shell: pwsh
+        run: packaging\windows\fetch-nssm.ps1
+
+      - name: Stage bundled MariaDB runtime
+        shell: pwsh
+        run: packaging\windows\fetch-mariadb-runtime.ps1
+
+      - name: Install (fresh, -EmbeddedDb, no external MySQL/MariaDB present)
+        shell: pwsh
+        run: packaging\windows\install.ps1 -Mode install -Yes -EmbeddedDb -InstallDir C:\DCIM -Port 18976 -AdminUser ciadmin -AdminPassword 'CiAdminPass123!'
+
+      - name: Diagnostics (always, even on failure)
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "--- Get-Service DCIMMariaDB ---"
+          Get-Service DCIMMariaDB -ErrorAction SilentlyContinue | Format-List *
+          Write-Host "--- Get-Service DCIM ---"
+          Get-Service DCIM -ErrorAction SilentlyContinue | Format-List *
+          Write-Host "--- .env (redacted) ---"
+          if (Test-Path C:\DCIM\webapp\.env) { (Get-Content C:\DCIM\webapp\.env) -replace '(PASSWORD|SECRET)=.*', '$1=[redacted]' }
+
+      - name: Verify both services are really running
+        shell: pwsh
+        run: |
+          if ((Get-Service DCIMMariaDB).Status -ne "Running") { throw "DCIMMariaDB is not running" }
+          if ((Get-Service DCIM).Status -ne "Running") { throw "DCIM is not running" }
+          $h = Invoke-RestMethod -Uri "http://127.0.0.1:18976/api/health"
+          if ($h.status -ne "ok") { throw "Health check failed" }
+
+      - name: Populate test data
+        shell: pwsh
+        run: |
+          $login = Invoke-RestMethod -Uri "http://127.0.0.1:18976/api/auth/login" -Method Post -ContentType "application/json" -Body (@{username="ciadmin";password="CiAdminPass123!"} | ConvertTo-Json)
+          Invoke-RestMethod -Uri "http://127.0.0.1:18976/api/locations" -Method Post -ContentType "application/json" -Headers @{ Authorization = "Bearer $($login.token)" } -Body (@{name="CiEmbeddedDC";zoneName="AZ-1"} | ConvertTo-Json) | Out-Null
+
+      - name: Upgrade (embedded DB must survive and stay usable)
+        shell: pwsh
+        run: packaging\windows\install.ps1 -Mode upgrade -Yes -InstallDir C:\DCIM -Port 18976
+
+      - name: Verify data survived Upgrade
+        shell: pwsh
+        run: |
+          Start-Sleep -Seconds 3
+          $h = Invoke-RestMethod -Uri "http://127.0.0.1:18976/api/health"
+          if ($h.status -ne "ok") { throw "Health check failed after upgrade" }
+          $login = Invoke-RestMethod -Uri "http://127.0.0.1:18976/api/auth/login" -Method Post -ContentType "application/json" -Body (@{username="ciadmin";password="CiAdminPass123!"} | ConvertTo-Json)
+          $locs = Invoke-RestMethod -Uri "http://127.0.0.1:18976/api/locations" -Headers @{ Authorization = "Bearer $($login.token)" }
+          if (-not ($locs.name -contains "CiEmbeddedDC")) { throw "Test location did not survive Upgrade" }
+
+      - name: Repair (must re-detect embedded mode without -EmbeddedDb being re-passed)
+        shell: pwsh
+        run: packaging\windows\install.ps1 -Mode repair -Yes -InstallDir C:\DCIM -Port 18976
+
+      - name: Verify embedded DB and data survived Repair
+        shell: pwsh
+        run: |
+          Start-Sleep -Seconds 3
+          if ((Get-Service DCIMMariaDB).Status -ne "Running") { throw "DCIMMariaDB is not running after repair" }
+          if ((Get-Service DCIM).Status -ne "Running") { throw "DCIM is not running after repair" }
+          $login = Invoke-RestMethod -Uri "http://127.0.0.1:18976/api/auth/login" -Method Post -ContentType "application/json" -Body (@{username="ciadmin";password="CiAdminPass123!"} | ConvertTo-Json)
+          $locs = Invoke-RestMethod -Uri "http://127.0.0.1:18976/api/locations" -Headers @{ Authorization = "Bearer $($login.token)" }
+          if (-not ($locs.name -contains "CiEmbeddedDC")) { throw "Test location did not survive Repair" }
+          Write-Host "Embedded MariaDB verified across install, upgrade, and repair on Windows."

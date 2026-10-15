@@ -13,6 +13,8 @@ param(
   [string]$DbUser = "dcim",
   [string]$DbPassword = "",
   [string]$DbName = "dcim",
+  [switch]$EmbeddedDb,
+  [int]$EmbeddedDbPort = 3307,
   [string]$CorsOrigin = "",
   [string]$AdminUser = "",
   [string]$AdminPassword = "",
@@ -32,6 +34,8 @@ $PayloadWebapp = Join-Path $ScriptDir "webapp"
 if (-not (Test-Path $PayloadWebapp)) { $PayloadWebapp = Join-Path $ScriptDir "..\..\dcim\webapp" }
 $PayloadRuntime = Join-Path $ScriptDir "runtime\node"
 $PayloadNssm = Join-Path $ScriptDir "tools\nssm.exe"
+$PayloadMariadb = Join-Path $ScriptDir "runtime\mariadb"
+$EmbeddedDbServiceName = "DCIMMariaDB"
 
 function Log($msg)  { Write-Host "[dcim-install] $msg" }
 function Die($msg)  { Write-Error "[dcim-install] ERROR: $msg"; exit 1 }
@@ -170,6 +174,80 @@ function Sync-Payload {
   }
 }
 
+function Setup-EmbeddedDb {
+  $mariadbdExe = Join-Path $PayloadMariadb "bin\mariadbd.exe"
+  if (-not (Test-Path $mariadbdExe)) { Die "-EmbeddedDb requires a bundled MariaDB runtime (run fetch-mariadb-runtime.ps1 at package-build time)." }
+  $dbDir = Join-Path $InstallDir "mariadb"
+  $engineDir = Join-Path $dbDir "engine"
+  $dataDir = Join-Path $dbDir "data"
+  $marker = Join-Path $dbDir ".initialized"
+
+  if (Test-Path $engineDir) { Remove-Item -Recurse -Force $engineDir }
+  New-Item -ItemType Directory -Force -Path $engineDir | Out-Null
+  Copy-Item (Join-Path $PayloadMariadb "*") $engineDir -Recurse -Force
+
+  $firstInit = $false
+  if (-not (Test-Path $dataDir)) {
+    $firstInit = $true
+    New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+    Log "Initializing embedded MariaDB data directory..."
+    $installDbExe = Join-Path $engineDir "bin\mariadb-install-db.exe"
+    if (-not (Test-Path $installDbExe)) { $installDbExe = Join-Path $engineDir "bin\mysql_install_db.exe" }
+    if (-not (Test-Path $installDbExe)) { Die "Could not find mariadb-install-db.exe in the bundled MariaDB runtime." }
+    & $installDbExe "--datadir=$dataDir" --auth-root-authentication-method=normal | Out-Null
+    if ($LASTEXITCODE -ne 0) { Die "mariadb-install-db.exe failed (exit $LASTEXITCODE)." }
+  }
+
+  $nssm = Join-Path $InstallDir "tools\nssm.exe"
+  New-Item -ItemType Directory -Force -Path (Split-Path $nssm) | Out-Null
+  Copy-Item $PayloadNssm $nssm -Force
+  if (Get-Service -Name $EmbeddedDbServiceName -ErrorAction SilentlyContinue) {
+    & $nssm stop $EmbeddedDbServiceName | Out-Null
+    & $nssm remove $EmbeddedDbServiceName confirm | Out-Null
+  }
+  & $nssm install $EmbeddedDbServiceName $mariadbdExe "--datadir=""$dataDir"" --port=$EmbeddedDbPort --bind-address=127.0.0.1" | Out-Null
+  & $nssm set $EmbeddedDbServiceName Start SERVICE_AUTO_START | Out-Null
+  & $nssm set $EmbeddedDbServiceName AppExit Default Restart | Out-Null
+  Start-Service -Name $EmbeddedDbServiceName
+
+  Log "Waiting for embedded MariaDB to become available..."
+  $mysqladminExe = Join-Path $engineDir "bin\mysqladmin.exe"
+  $mysqlExe = Join-Path $engineDir "bin\mysql.exe"
+  $up = $false
+  for ($i = 0; $i -lt 30; $i++) {
+    & $mysqladminExe -h 127.0.0.1 -P $EmbeddedDbPort -u root ping 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) { $up = $true; break }
+    Start-Sleep -Seconds 1
+  }
+  if (-not $up) { Die "Embedded MariaDB did not start within 30s. Check: Get-Service $EmbeddedDbServiceName" }
+
+  if ($firstInit) {
+    $chars = (48..57) + (65..90) + (97..122)
+    $script:DbPassword = -join ((1..32) | ForEach-Object { [char](Get-Random -InputObject $chars) })
+    $rootPw = -join ((1..32) | ForEach-Object { [char](Get-Random -InputObject $chars) })
+    $sql = "ALTER USER 'root'@'localhost' IDENTIFIED BY '$rootPw';`nCREATE DATABASE IF NOT EXISTS ``$DbName`` CHARACTER SET utf8mb4;`nCREATE USER IF NOT EXISTS '$DbUser'@'127.0.0.1' IDENTIFIED BY '$($script:DbPassword)';`nGRANT ALL PRIVILEGES ON ``$DbName``.* TO '$DbUser'@'127.0.0.1';`nFLUSH PRIVILEGES;`n"
+    $sql | & $mysqlExe -h 127.0.0.1 -P $EmbeddedDbPort -u root
+    if ($LASTEXITCODE -ne 0) { Die "Could not create the embedded database/user (mysql exited $LASTEXITCODE)." }
+    Set-Content -Path (Join-Path $dbDir ".root-password") -Value $rootPw
+    New-Item -ItemType File -Force -Path $marker | Out-Null
+    Log "Embedded MariaDB initialized: database '$DbName', user '$DbUser'. Root password saved to $dbDir\.root-password (needed only for advanced maintenance)."
+  } else {
+    # Repair / re-run: reuse the existing DB_PASSWORD from .env rather than
+    # generating a new one - generating one here without also updating
+    # MariaDB's own stored password for the user would just lock the app out.
+    $envPath = Join-Path $InstallDir "webapp\.env"
+    if (Test-Path $envPath) {
+      $line = Get-Content $envPath | Where-Object { $_ -match '^DB_PASSWORD=(.*)$' } | Select-Object -First 1
+      if ($line -match '^DB_PASSWORD=(.*)$') { $script:DbPassword = $matches[1] }
+    }
+    if (-not $script:DbPassword) { Die "Embedded MariaDB data already exists but no existing DB_PASSWORD was found in .env to reuse. Restore it from backup, or remove $dbDir to reinitialize (data loss)." }
+    Log "Embedded MariaDB already initialized; reusing the existing database and credentials."
+  }
+
+  $script:DbHost = "127.0.0.1"
+  $script:DbPort = $EmbeddedDbPort
+}
+
 function Install-WindowsService {
   $nodeBin = if (Test-Path (Join-Path $InstallDir "runtime\node\node.exe")) { Join-Path $InstallDir "runtime\node\node.exe" } else { $script:NodeBin }
   $appDir = Join-Path $InstallDir "webapp"
@@ -188,6 +266,12 @@ function Install-WindowsService {
   & $nssm set $ServiceName AppRotateFiles 1 | Out-Null
   & $nssm set $ServiceName Start SERVICE_AUTO_START | Out-Null
   & $nssm set $ServiceName AppExit Default Restart | Out-Null
+  # If an embedded MariaDB instance is in use (auto-detected, same as the
+  # Linux systemd Requires= wiring), tell the Windows Service Control Manager
+  # to start it before DCIM, via NSSM's DependOnService.
+  if (Test-Path (Join-Path $InstallDir "mariadb\data")) {
+    & $nssm set $ServiceName DependOnService $EmbeddedDbServiceName | Out-Null
+  }
   Start-Service -Name $ServiceName
   Log "Installed Windows service '$ServiceName' (auto-start on boot)."
 }
@@ -291,6 +375,7 @@ function Show-HealthValidation {
 function Invoke-Install {
   Invoke-Validations
   Sync-Payload
+  if ($EmbeddedDb) { Setup-EmbeddedDb }
   Write-EnvFile
   Test-DbConnection
   Install-WindowsService
@@ -327,6 +412,9 @@ function Invoke-Repair {
   # Invoke-Upgrade already does this; Repair needs the same guard.
   Stop-Service -Name $ServiceName -ErrorAction SilentlyContinue
   Sync-Payload
+  # Auto-detect: a repair run doesn't need -EmbeddedDb re-passed to know an
+  # embedded instance is in use, since its data directory is the evidence.
+  if ((Test-Path (Join-Path $InstallDir "mariadb\data")) -or $EmbeddedDb) { Setup-EmbeddedDb }
   Install-WindowsService
   Wait-ForHealth
   Show-HealthValidation
