@@ -308,6 +308,120 @@ admin can already do with any standard unzip tool.
   genuinely different `nssm.exe` (e.g. a version bump shipped by an
   upgrade) still fails loudly instead of silently leaving the old binary
   running.
+- The .deb/.rpm both ship `/usr/bin/dcim-setup` as a real symlink to
+  `/usr/share/dcim/install.sh`, but `install.sh` computed `SCRIPT_DIR` with
+  plain `dirname` on `$BASH_SOURCE[0]` — invoked through that symlink,
+  `dirname` resolves to `/usr/bin` (the symlink's own directory), not
+  `/usr/share/dcim` (the real script's directory), breaking the webapp
+  rsync. No existing test caught this because every earlier test either
+  invoked `install.sh` directly or only checked the symlink *existed* —
+  the Distribution Kit's own smoke test (`sudo ./install` → `sudo
+  dcim-setup`) was the first real execution of that exact entry point.
+  Fixed with the same `readlink -f` pattern already used by
+  `dcim-upgrade.sh`/`dcim-repair.sh` for the same class of bug.
+- `do_repair`/`Invoke-Repair` always preserved `.env` *if it existed*, but
+  had no recovery path when `.env` itself was the thing missing (`Lost
+  Configuration` in the Release Gate's Gate 5 matrix) — `sync_payload`/
+  `Sync-Payload` only ever touch webapp files, never recreate `.env`, so a
+  repair run would restart the service with no DB password or JWT secret
+  and fail. Both platforms now self-heal `.env` from the most recent prior
+  backup that still has one (every `backup_before_change`/
+  `Backup-BeforeChange` call has always captured it when it existed at
+  backup time); if no such backup exists, repair now fails loudly with a
+  clear message instead of silently leaving the service unable to connect.
+
+## Release Gate framework
+
+A mandatory, automated CI/CD governance pipeline sits on top of everything
+above: nothing may be promoted to UAT or certified for Production unless a
+defined set of real, execution-based checks pass. It adds no application
+logic — every job either builds already-existing packaging scripts or
+drives the already-shipped HTTP API of a real running instance.
+
+### Workflow files
+
+| File | Role |
+|---|---|
+| `release-gate.yml` | Orchestrator: Gate 0/1 inline, calls the other workflows below as reusable jobs, runs the Gate 5/8 matrices directly, and aggregates everything into a job summary + UAT/Production promotion decision. |
+| `test-lifecycle.yml` | Gate 3 (Installation Validation) and (as a reporting alias) Gate 7 (Rollback) — unchanged from the existing real install/upgrade/repair/rollback suite, now also callable via `workflow_call`. |
+| `package-validation.yml` | Gate 2 (Package Build): calls `build-packages.yml` (now also `workflow_call`-able), then verifies every expected artifact exists, generates a release-wide SHA256 manifest, and verifies the Distribution Kit's own internal checksums. |
+| `security-gate.yml` | Gate 9 (Security Validation): static checks (JWT sourced from env, must-change-password gate, session timeout, audit logging, upload validation, CSP) plus a real install that proves the default admin/admin account is forced to change its password, unauthenticated requests get 401, and the DB password never leaks into install output or service logs. |
+| `backup-restore-gate.yml` | Gate 6 (Backup & Restore): real install → populate Users/Assets/Firmware Targets/Branding/Security Settings via the API → `GET /api/backup/download` → delete every category from the DB → `POST /api/backup/restore` (with the required `confirm: RESTORE`) → verify every category came back. The whole sequence was hand-verified against a locally-run instance before being committed to CI. |
+| `upgrade-gate.yml` | Gate 4 (Upgrade Validation): its own dedicated before/after snapshot (not just pass/fail logging) across Users/Locations/Assets/Firmware Targets/Branding, uploaded as artifacts. |
+
+### Gate map
+
+| Gate | Name | Severity | Where |
+|---|---|---|---|
+| 0 | Source Integrity (YAML/JSON/JS/PowerShell/shell syntax, package manifests, required offline runtime files) | BLOCK RELEASE | `release-gate.yml` → `source-integrity` |
+| 1 | Fresh Clone Validation (no `npm install`, no missing files, app starts) | BLOCK RELEASE | `release-gate.yml` → `fresh-clone` |
+| 2 | Package Build (artifacts exist, checksums, manifest) | BLOCK RELEASE | `package-validation.yml` |
+| 3 | Installation Validation (Windows 2022, Ubuntu 22.04/24.04, Rocky 9, Alma 9) | BLOCK RELEASE | `test-lifecycle.yml` |
+| 4 | Upgrade Validation | BLOCK RELEASE | `upgrade-gate.yml` |
+| 5 | Repair Validation (missing files / broken service / corrupted runtime / lost config) | HIGH SEVERITY — waivable | `release-gate.yml` → `repair-validation` matrix |
+| 6 | Backup & Restore | BLOCK RELEASE | `backup-restore-gate.yml` |
+| 7 | Rollback Validation | BLOCK RELEASE | `release-gate.yml` → `rollback-validation` (reports Gate 3's own rollback check — see note below) |
+| 8 | Runtime Validation (OCR/PDF/Excel/Health/Version/Firmware route/OME/OneView) | HIGH SEVERITY — waivable | `release-gate.yml` → `runtime-validation` |
+| 9 | Security Validation | BLOCK RELEASE | `security-gate.yml` |
+| 10 | Offline Appliance (real network isolation via `iptables`, not a code-review claim) | BLOCK RELEASE | `release-gate.yml` → `offline-validation` |
+
+**Gate 7 note:** `test-lifecycle.yml`'s own jobs already delete test data,
+run `rollback.sh`/`rollback.ps1`, and verify the record came back, as part
+of their single combined install/upgrade/repair/rollback run — that is the
+real rollback test. `rollback-validation` is a thin reporting alias (`needs:
+install-validation`) so the aggregator and the promotion rules below have a
+dedicated named signal for it, without re-running the same rollback a
+second time.
+
+**Gate 5/8 waiver mechanism:** these two jobs run without
+`continue-on-error` (so a real failure is still visible as a failed job),
+but the `release-gate` aggregator job treats their result as informational,
+not blocking — it only affects whether the run gets **PRODUCTION
+CERTIFIED**, never **READY FOR UAT**. Re-running `release-gate.yml` via
+`workflow_dispatch` with a `waiver_reason` input records a human's reviewed
+justification in the job summary and allows Production Promotion to
+proceed despite a Gate 5/8 failure.
+
+### UAT and Production Promotion rules
+
+- **READY FOR UAT**: every BLOCK RELEASE gate (0, 1, 2, 3, 4, 6, 7, 9, 10)
+  passes. Gate 5 (Repair) and Gate 8 (Runtime) are not required for UAT.
+- **PRODUCTION CERTIFIED**: every gate passes, including Gate 5/8, OR a
+  `waiver_reason` was supplied for a Gate 5/8 failure (shown as "PRODUCTION
+  CERTIFIED (with recorded waiver)" in the summary, so it's never confused
+  with an unconditional pass).
+
+Both outcomes are written to the job's `$GITHUB_STEP_SUMMARY` (visible on
+the workflow run page) as the **Release-Gate Dashboard** — a Markdown table
+of every gate's result, the waiver status, and the final verdict. The
+`release-manifest.json` + `RELEASE-CHECKSUMS.sha256` (Gate 2), the
+upgrade/backup-restore before/after snapshots (Gates 4/6), and the runtime
+health-validate report (Gate 8) are all uploaded as separate downloadable
+artifacts on the same run — together these are the Release Readiness
+Report / Platform Validation Report / Security Validation Report /
+Backup-Restore Validation Report / Rollback Validation Report the roadmap
+asked for, rather than a separate hand-written document that would drift
+out of sync with what actually ran.
+
+### Known limitations
+
+- **No package signing.** There is no code-signing certificate (Windows
+  Authenticode) or GPG key configured in this environment, so Gate 2
+  explicitly reports this as a tracked gap via a workflow annotation rather
+  than fabricating a signing step. Production Promotion does not yet
+  require it, since no prior release shipped signed packages either — this
+  should change once signing infrastructure exists.
+- **windows-2019 has no CI coverage** (see `test-lifecycle.yml`'s own
+  comment) — GitHub-hosted runners no longer assign that image at all.
+  Gate 3's Windows coverage is windows-2022 only.
+- **The secrets-in-source scan in Gate 9 is a grep-based floor**, not a
+  dedicated scanning service (SAST/secret-scanning product) — it catches
+  the common high-confidence patterns (AWS keys, private key headers, Slack
+  tokens, Google API keys) but is not a substitute for one.
+- **Gate 5's waiver and Gate 8's waiver share one `waiver_reason` input** —
+  there's no way to waive one but not the other in a single run. Given both
+  are "no real hardware/credentials in CI" categories in practice, this
+  was judged acceptable rather than building a two-field waiver form.
 
 ## What's real vs. what already existed
 

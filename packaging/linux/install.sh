@@ -592,6 +592,26 @@ do_repair() {
   run_validations
   ensure_service_user
   backup_before_change
+  # Found via real execution of the "Lost Configuration" repair scenario:
+  # sync_payload only ever touches webapp files, never recreates .env, so a
+  # repair run had no recovery path when .env itself was the thing missing -
+  # it would restart the service with no DB password/JWT secret and fail.
+  # Self-heal from the most recent backup that still has one (every prior
+  # backup_before_change call captured .env whenever it existed at the time);
+  # if none exists, fail loudly rather than leave the service silently unable
+  # to connect to its database.
+  if [ ! -f "$ENV_FILE" ]; then
+    local latest_env
+    latest_env="$(ls -1t /var/backups/dcim/*/.env 2>/dev/null | head -1 || true)"
+    if [ -n "$latest_env" ]; then
+      log "No .env found at $ENV_FILE; restoring the most recent one from backup: $latest_env"
+      install -d -m 750 "$(dirname "$ENV_FILE")"
+      cp -a "$latest_env" "$ENV_FILE"
+      chmod 640 "$ENV_FILE"
+    else
+      die "No .env found at $ENV_FILE and no prior backup contains one; repair cannot recover the configuration. Restore it manually (e.g. from an external backup) or reinstall with --mode install."
+    fi
+  fi
   sync_payload
   install_cli_utilities
   # Auto-detect: a repair run doesn't need --embedded-db re-passed to know an

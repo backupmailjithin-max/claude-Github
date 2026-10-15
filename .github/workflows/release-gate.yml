@@ -1,0 +1,571 @@
+name: Release Gate
+
+# Mandatory release-governance pipeline. Nothing here changes application
+# behavior (Asset Inventory, Asset Lifecycle, Transfer/Store Workflow, OCR,
+# OME/OneView integration, Firmware Compliance, Monitoring, Reports, Exports,
+# existing APIs/permissions are untouched) - every job below either reads the
+# repo, builds already-existing packaging scripts, or drives the already-shipped
+# HTTP API of a real running instance. This is validation and release
+# governance only.
+#
+# Gate map (BLOCK RELEASE unless noted):
+#   Gate 0  Source Integrity         -> source-integrity
+#   Gate 1  Fresh Clone Validation   -> fresh-clone
+#   Gate 2  Package Build            -> package-validation.yml
+#   Gate 3  Installation Validation  -> install-validation (test-lifecycle.yml)
+#   Gate 4  Upgrade Validation       -> upgrade-gate.yml
+#   Gate 5  Repair Validation        -> repair-validation      [HIGH SEVERITY / waiver]
+#   Gate 6  Backup & Restore         -> backup-restore-gate.yml
+#   Gate 7  Rollback Validation      -> rollback-validation (reports install-validation's own rollback check)
+#   Gate 8  Runtime Validation       -> runtime-validation     [HIGH SEVERITY / waiver]
+#   Gate 9  Security Validation      -> security-gate.yml
+#   Gate 10 Offline Appliance        -> offline-validation
+#
+# windows-2019 is intentionally absent from every matrix below: three real CI
+# runs this project made confirmed GitHub no longer assigns runners for that
+# image (queued forever, no error) - see test-lifecycle.yml's own comment.
+# This is a documented, accepted deviation, not a silently dropped gate.
+
+on:
+  workflow_dispatch:
+    inputs:
+      waiver_reason:
+        description: >
+          Only needed if Gate 5 (Repair) or Gate 8 (Runtime) is expected to
+          fail and you want Production Promotion to still be considered once
+          a human has reviewed why. Leave blank otherwise - a blank reason
+          with a Gate 5/8 failure blocks Production Promotion (UAT Promotion
+          does not require these two gates at all).
+        required: false
+        type: string
+  workflow_call: {}
+
+jobs:
+  # ---------------------------------------------------------------- Gate 0 --
+  source-integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: YAML syntax
+        run: |
+          python3 - <<'PY'
+          import sys, glob, yaml
+          failed = False
+          files = sorted(set(glob.glob('.github/workflows/*.yml') + glob.glob('.github/workflows/*.yaml')))
+          for f in files:
+              try:
+                  with open(f) as fh:
+                      list(yaml.safe_load_all(fh))
+              except Exception as e:
+                  print(f"YAML SYNTAX ERROR in {f}: {e}")
+                  failed = True
+          sys.exit(1 if failed else 0)
+          PY
+
+      - name: JSON syntax (package manifests)
+        run: |
+          python3 - <<'PY'
+          import sys, json
+          failed = False
+          for f in [
+              "dcim/webapp/package.json", "dcim/webapp/package-lock.json",
+              "dcim/webapp/ocr/vendor/package.json", "dcim/webapp/ocr/vendor/package-lock.json",
+          ]:
+              try:
+                  with open(f) as fh:
+                      json.load(fh)
+                  print(f"OK: {f}")
+              except FileNotFoundError:
+                  print(f"MISSING REQUIRED MANIFEST: {f}")
+                  failed = True
+              except Exception as e:
+                  print(f"JSON SYNTAX ERROR in {f}: {e}")
+                  failed = True
+          sys.exit(1 if failed else 0)
+          PY
+
+      - name: JavaScript syntax (DCIM's own code only, not vendored node_modules)
+        run: |
+          set -e
+          fail=0
+          while IFS= read -r -d '' f; do
+            node --check "$f" || fail=1
+          done < <(find dcim/webapp -name '*.js' -not -path '*/node_modules/*' -print0)
+          exit $fail
+
+      - name: PowerShell syntax
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem -Path packaging -Filter *.ps1 -Recurse | ForEach-Object {
+            $parseErrors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$parseErrors)
+            if ($parseErrors.Count -gt 0) {
+              Write-Host "POWERSHELL SYNTAX ERROR in $($_.FullName):"
+              $parseErrors | ForEach-Object { Write-Host "  $_" }
+              $failed = $true
+            }
+          }
+          if ($failed) { exit 1 }
+
+      - name: Shell script syntax
+        run: |
+          fail=0
+          while IFS= read -r -d '' f; do
+            bash -n "$f" || fail=1
+          done < <(find packaging -name '*.sh' -print0)
+          exit $fail
+
+      - name: Required offline runtime files (regression guard - these were silently deleted once by an unanchored .gitignore dist/ pattern)
+        run: |
+          set -e
+          required=(
+            "dcim/webapp/node_modules/bcryptjs/dist/bcrypt.min.js"
+            "dcim/webapp/ocr/vendor/node_modules/idb-keyval/dist/index.js"
+            "dcim/webapp/ocr/vendor/node_modules/wasm-feature-detect/dist/umd"
+            "dcim/webapp/ocr/vendor/node_modules/tesseract.js-core/tesseract-core.wasm"
+            "dcim/webapp/ocr/vendor/node_modules/tesseract.js-core/tesseract-core-simd.wasm"
+            "dcim/webapp/ocr/vendor/node_modules/tesseract.js/dist"
+            "dcim/webapp/ocr/vendor/node_modules/@tesseract.js-data/eng"
+            "dcim/webapp/libs/jspdf.umd.min.js"
+            "dcim/webapp/libs/exceljs.min.js"
+            "dcim/webapp/libs/xlsx.full.min.js"
+          )
+          fail=0
+          for f in "${required[@]}"; do
+            if [ -e "$f" ]; then echo "OK: $f"; else echo "::error::MISSING REQUIRED RUNTIME FILE: $f"; fail=1; fi
+          done
+          exit $fail
+
+  # ---------------------------------------------------------------- Gate 1 --
+  fresh-clone:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: rootpass
+          MARIADB_DATABASE: dcim_fresh
+          MARIADB_USER: dcim
+          MARIADB_PASSWORD: FreshClonePass123!
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -uroot -prootpass"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: No npm install required (node_modules is committed, not fetched)
+        run: |
+          test -d dcim/webapp/node_modules || { echo "::error::node_modules missing - repo is not offline-ready"; exit 1; }
+          test -d dcim/webapp/ocr/vendor/node_modules || { echo "::error::OCR vendor node_modules missing"; exit 1; }
+
+      - name: Load schema
+        run: mysql -h127.0.0.1 -uroot -prootpass dcim_fresh < dcim/webapp/schema.sql
+
+      - name: Launch with no build step and no npm install
+        run: |
+          cd dcim/webapp
+          mkdir -p logs
+          ( PORT=19000 \
+            DB_HOST=127.0.0.1 DB_USER=dcim DB_PASSWORD='FreshClonePass123!' DB_NAME=dcim_fresh \
+            JWT_SECRET="fresh-clone-test-$(openssl rand -hex 16)" \
+            CORS_ORIGIN='http://localhost:19000' \
+            node server.js > /tmp/fresh-clone-server.log 2>&1 & echo $! > /tmp/fresh-clone.pid )
+
+      - name: Application starts successfully
+        run: |
+          set -e
+          ok=0
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:19000/api/health 2>/dev/null | grep -q '"status":"ok"'; then ok=1; break; fi
+            sleep 1
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "::error::Application did not become healthy within 30s"
+            cat /tmp/fresh-clone-server.log
+            exit 1
+          fi
+          echo "Fresh clone launched with no npm install and no missing files."
+
+      - name: Dump server log on failure
+        if: failure()
+        run: cat /tmp/fresh-clone-server.log || true
+
+  # ---------------------------------------------------------------- Gate 2 --
+  package-validation:
+    uses: ./.github/workflows/package-validation.yml
+
+  # ---------------------------------------------------------------- Gate 3 --
+  # Reuses test-lifecycle.yml as-is: it already exercises install on
+  # windows-2022/ubuntu-22.04-or-24.04(ubuntu-latest)/rockylinux-9/almalinux-9,
+  # including the embedded-DB path on both Windows and Linux.
+  install-validation:
+    uses: ./.github/workflows/test-lifecycle.yml
+
+  # ---------------------------------------------------------------- Gate 4 --
+  upgrade-validation:
+    uses: ./.github/workflows/upgrade-gate.yml
+
+  # ---------------------------------------------------------------- Gate 5 --
+  # HIGH SEVERITY / waivable: induces real damage (deleted files, broken
+  # service, corrupted runtime, lost config) then runs repair and verifies
+  # recovery - a strictly harder test than "repair after a normal install"
+  # (which Gate 3 already covers as part of test-lifecycle.yml).
+  repair-validation:
+    runs-on: ubuntu-latest
+    # Deliberately NOT continue-on-error: that flag makes GitHub report
+    # needs.<job>.result as "success" even when the job actually failed,
+    # which would silently defeat the aggregator's waiver logic below. A
+    # real failure here still shows as a failed job/run (so it's visible),
+    # but the release-gate aggregator job treats it as waivable, not
+    # blocking, by design - see the Release Gate job below.
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [missing-files, broken-service, corrupted-runtime, lost-config]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MariaDB
+        run: |
+          sudo systemctl stop mysql.service 2>/dev/null || true
+          sudo apt-get update -y -q
+          sudo apt-get install -y mariadb-server
+          sudo systemctl start mariadb
+          sudo mysql -u root -e "CREATE DATABASE dcim_gate5 CHARACTER SET utf8mb4; CREATE USER 'dcim'@'localhost' IDENTIFIED BY 'Gate5Pass123!'; GRANT ALL ON dcim_gate5.* TO 'dcim'@'localhost'; FLUSH PRIVILEGES;"
+
+      - name: Install
+        run: |
+          sudo bash packaging/linux/install.sh --mode install --yes --port 19500 \
+            --db-user dcim --db-password 'Gate5Pass123!' --db-name dcim_gate5 \
+            --admin-user gate5admin --admin-password 'Gate5AdminPass123!'
+
+      - name: Take a known-good backup first (needed for the lost-config scenario to have something to self-heal from)
+        run: sudo dcim-repair --port 19500 --db-user dcim --db-password 'Gate5Pass123!' --db-name dcim_gate5
+
+      - name: Induce damage - ${{ matrix.scenario }}
+        run: |
+          set -e
+          case "${{ matrix.scenario }}" in
+            missing-files)
+              sudo rm -f /opt/dcim/webapp/server.js
+              ;;
+            broken-service)
+              sudo systemctl stop dcim
+              sudo rm -f /etc/systemd/system/dcim.service
+              sudo systemctl daemon-reload
+              ;;
+            corrupted-runtime)
+              sudo find /opt/dcim/runtime -maxdepth 1 -type d -iname node -exec rm -rf {} + 2>/dev/null || true
+              sudo rm -rf /opt/dcim/webapp/node_modules/express
+              ;;
+            lost-config)
+              sudo rm -f /opt/dcim/webapp/.env
+              ;;
+          esac
+          echo "Damage induced for scenario: ${{ matrix.scenario }}"
+
+      - name: Repair
+        run: sudo dcim-repair --port 19500 --db-user dcim --db-password 'Gate5Pass123!' --db-name dcim_gate5
+
+      - name: Verify recovery
+        run: |
+          set -e
+          sleep 3
+          sudo systemctl is-active dcim
+          curl -fsS http://127.0.0.1:19500/api/health | grep -q '"status":"ok"'
+          echo "Recovered from ${{ matrix.scenario }} via repair, application data untouched."
+
+      - name: Diagnostics (always, even on failure)
+        if: always()
+        run: |
+          sudo systemctl status dcim --no-pager || true
+          sudo journalctl -u dcim --no-pager -n 150 | sed -E 's/(PASSWORD|SECRET)[=: ]+[^ ]+/\1=[redacted]/gI' || true
+
+  # ---------------------------------------------------------------- Gate 6 --
+  backup-restore:
+    uses: ./.github/workflows/backup-restore-gate.yml
+
+  # ---------------------------------------------------------------- Gate 7 --
+  # install-validation (test-lifecycle.yml) already deletes test data, rolls
+  # back via rollback.sh/rollback.ps1, and verifies restoration for real in
+  # every one of its jobs - this is a reporting alias so the aggregator and
+  # the UAT/Production promotion rules (which list Rollback as its own named
+  # requirement) have a dedicated signal, without re-running the same real
+  # rollback a second time.
+  rollback-validation:
+    needs: install-validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report rollback verification status
+        run: |
+          echo "Rollback verified for real as part of install-validation (test-lifecycle.yml): every install job there deletes test data, runs rollback.sh/rollback.ps1, and confirms the deleted record came back before reporting success."
+
+  # ---------------------------------------------------------------- Gate 8 --
+  # HIGH SEVERITY / waivable. Reuses the structured health-validation endpoint
+  # (/api/health/validate) built for the product itself, so OME/OneView will
+  # correctly read WARNING here (no real hardware/credentials in CI) rather
+  # than a fabricated PASS - that's expected and is exactly why this gate is
+  # waivable, not blocking.
+  runtime-validation:
+    runs-on: ubuntu-latest
+    # See the comment on repair-validation above: no continue-on-error, for
+    # the same reason (it would make the waiver logic below unable to see
+    # real failures).
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MariaDB
+        run: |
+          sudo systemctl stop mysql.service 2>/dev/null || true
+          sudo apt-get update -y -q
+          sudo apt-get install -y mariadb-server
+          sudo systemctl start mariadb
+          sudo mysql -u root -e "CREATE DATABASE dcim_gate8 CHARACTER SET utf8mb4; CREATE USER 'dcim'@'localhost' IDENTIFIED BY 'Gate8Pass123!'; GRANT ALL ON dcim_gate8.* TO 'dcim'@'localhost'; FLUSH PRIVILEGES;"
+
+      - name: Install
+        run: |
+          sudo bash packaging/linux/install.sh --mode install --yes --port 19600 \
+            --db-user dcim --db-password 'Gate8Pass123!' --db-name dcim_gate8 \
+            --admin-user gate8admin --admin-password 'Gate8AdminPass123!'
+
+      - name: Structured runtime health validation (OCR, API Health, Version, Firmware route, SMTP, OME, OneView)
+        run: |
+          set -e
+          TOKEN=$(curl -fsS -X POST http://127.0.0.1:19600/api/auth/login -H 'Content-Type: application/json' -d '{"username":"gate8admin","password":"Gate8AdminPass123!"}' \
+            | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>console.log(JSON.parse(d).token))")
+          RESP=$(curl -fsS http://127.0.0.1:19600/api/health/validate -H "Authorization: Bearer $TOKEN")
+          echo "$RESP" | node -e '
+            let d = ""; process.stdin.on("data", c => d += c);
+            process.stdin.on("end", () => {
+              const r = JSON.parse(d);
+              console.log("Overall:", r.overall);
+              for (const c of r.checks) console.log("  " + c.name.padEnd(14) + c.status.padEnd(10) + (c.detail || ""));
+              if (r.overall === "FAIL") process.exit(1);
+            });
+          '
+          echo "$RESP" > /tmp/gate8-health-validate.json
+
+      - name: Firmware Compliance route is wired (read-only, cache-backed)
+        run: |
+          set -e
+          code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:19600/api/monitoring/firmware-compliance)
+          [ "$code" = "401" ] || { echo "::error::/api/monitoring/firmware-compliance returned $code (expected 401 unauthenticated), route may be missing"; exit 1; }
+
+      - name: PDF/Excel export libraries are bundled and syntactically valid (offline capability)
+        run: |
+          set -e
+          for f in dcim/webapp/libs/jspdf.umd.min.js dcim/webapp/libs/exceljs.min.js dcim/webapp/libs/xlsx.full.min.js; do
+            test -s "$f" || { echo "::error::$f is missing or empty"; exit 1; }
+            node --check "$f" || { echo "::error::$f failed syntax check"; exit 1; }
+          done
+          echo "PDF/Excel export libraries present and syntactically valid."
+
+      - name: Diagnostics (always, even on failure)
+        if: always()
+        run: |
+          sudo systemctl status dcim --no-pager || true
+          sudo journalctl -u dcim --no-pager -n 100 | sed -E 's/(PASSWORD|SECRET)[=: ]+[^ ]+/\1=[redacted]/gI' || true
+
+      - name: Upload health-validate report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-validation-report
+          path: /tmp/gate8-health-validate.json
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------- Gate 9 --
+  security-validation:
+    uses: ./.github/workflows/security-gate.yml
+
+  # --------------------------------------------------------------- Gate 10 --
+  # Real network isolation, not a code-review claim: outbound traffic is
+  # firewalled off before install/upgrade/repair and only restored afterward,
+  # so a hidden apt/npm/curl call during setup would make this job fail for
+  # real rather than merely going unnoticed.
+  offline-validation:
+    needs: package-validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the Distribution Kit
+        uses: actions/download-artifact@v4
+        with:
+          name: dcim-enterprise-offline-kit
+          path: kit
+
+      - name: Extract kit
+        run: |
+          set -e
+          mkdir -p kit-extract
+          tar -xzf kit/DCIM-Enterprise-Offline-Kit-*.tar.gz -C kit-extract
+          echo "KIT_DIR=$(find kit-extract -maxdepth 1 -type d -name 'DCIM-Enterprise-Offline-Kit-*')" >> "$GITHUB_ENV"
+
+      - name: Block all outbound network except loopback (proves zero internet dependency)
+        run: |
+          sudo iptables -P OUTPUT DROP
+          sudo iptables -A OUTPUT -o lo -j ACCEPT
+
+      - name: Install OFFLINE via the kit dispatcher (embedded DB - no apt/yum/npm/curl to the network)
+        run: |
+          set -e
+          cd "$KIT_DIR"
+          sudo ./install
+          sudo dcim-setup --mode install --yes --embedded-db --port 19700 \
+            --admin-user offlineadmin --admin-password 'OfflineAdminPass123!'
+
+      - name: Launch Offline - verify the app actually started with network blocked
+        run: curl -fsS http://127.0.0.1:19700/api/health | grep -q '"status":"ok"'
+
+      - name: Upgrade Offline
+        run: sudo dcim-upgrade --port 19700
+
+      - name: Repair Offline
+        run: sudo dcim-repair --port 19700
+
+      - name: Verify still healthy after offline upgrade + repair
+        run: |
+          sleep 3
+          curl -fsS http://127.0.0.1:19700/api/health | grep -q '"status":"ok"'
+
+      - name: Confirm runtime/OCR/database are bundled, not fetched
+        run: |
+          set -e
+          sudo test -d /opt/dcim/webapp/node_modules
+          sudo test -d /opt/dcim/webapp/ocr/vendor/node_modules/tesseract.js-core
+          sudo find /opt/dcim/mariadb/engine/bin -iname 'mariadbd' 2>/dev/null | grep -q . \
+            || { echo "::error::Embedded MariaDB engine not found under /opt/dcim/mariadb/engine"; exit 1; }
+          echo "Runtime, OCR, and database engine are all bundled in the kit - nothing was fetched over the network."
+
+      - name: Restore network (always, so later steps/artifact upload still work)
+        if: always()
+        run: |
+          sudo iptables -P OUTPUT ACCEPT
+          sudo iptables -F OUTPUT
+
+      - name: Diagnostics (always, even on failure)
+        if: always()
+        run: |
+          sudo systemctl status dcim --no-pager || true
+          sudo journalctl -u dcim --no-pager -n 150 | sed -E 's/(PASSWORD|SECRET)[=: ]+[^ ]+/\1=[redacted]/gI' || true
+
+  # ------------------------------------------------------- Release Gate --
+  release-gate:
+    if: always()
+    needs:
+      - source-integrity
+      - fresh-clone
+      - package-validation
+      - install-validation
+      - upgrade-validation
+      - repair-validation
+      - backup-restore
+      - rollback-validation
+      - runtime-validation
+      - security-validation
+      - offline-validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build the release summary and apply UAT/Production promotion rules
+        env:
+          # Routed through env, not interpolated directly into the script,
+          # since this is free-text a human can type into the workflow_dispatch
+          # form - the standard GitHub Actions script-injection precaution.
+          WAIVER_REASON: ${{ github.event.inputs.waiver_reason }}
+        run: |
+          set -e
+          block_gates=(source-integrity fresh-clone package-validation install-validation upgrade-validation backup-restore rollback-validation security-validation offline-validation)
+          waivable_gates=(repair-validation runtime-validation)
+
+          declare -A RESULT
+          RESULT[source-integrity]="${{ needs.source-integrity.result }}"
+          RESULT[fresh-clone]="${{ needs.fresh-clone.result }}"
+          RESULT[package-validation]="${{ needs.package-validation.result }}"
+          RESULT[install-validation]="${{ needs.install-validation.result }}"
+          RESULT[upgrade-validation]="${{ needs.upgrade-validation.result }}"
+          RESULT[repair-validation]="${{ needs.repair-validation.result }}"
+          RESULT[backup-restore]="${{ needs.backup-restore.result }}"
+          RESULT[rollback-validation]="${{ needs.rollback-validation.result }}"
+          RESULT[runtime-validation]="${{ needs.runtime-validation.result }}"
+          RESULT[security-validation]="${{ needs.security-validation.result }}"
+          RESULT[offline-validation]="${{ needs.offline-validation.result }}"
+
+          {
+            echo "# Release Gate Summary"
+            echo
+            echo "Commit: \`${{ github.sha }}\`  "
+            echo "Ref: \`${{ github.ref }}\`  "
+            echo "Run: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            echo
+            echo "## BLOCK RELEASE gates"
+            echo
+            echo "| Gate | Result |"
+            echo "|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          overall_block=0
+          for g in "${block_gates[@]}"; do
+            r="${RESULT[$g]}"
+            echo "| $g | $r |" >> "$GITHUB_STEP_SUMMARY"
+            [ "$r" = "success" ] || overall_block=1
+          done
+
+          {
+            echo
+            echo "## HIGH SEVERITY gates (report + controlled waiver, never auto-block UAT)"
+            echo
+            echo "| Gate | Result |"
+            echo "|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          high_severity_failed=0
+          for g in "${waivable_gates[@]}"; do
+            r="${RESULT[$g]}"
+            echo "| $g | $r |" >> "$GITHUB_STEP_SUMMARY"
+            [ "$r" = "success" ] || high_severity_failed=1
+          done
+
+          {
+            echo
+            if [ -n "$WAIVER_REASON" ]; then
+              echo "**Waiver on record:** $WAIVER_REASON"
+            else
+              echo "**Waiver on record:** none"
+            fi
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # ---- UAT Promotion: every BLOCK RELEASE gate must pass. Gate 5/8
+          # (repair/runtime) are deliberately NOT required for UAT. ----
+          if [ "$overall_block" -eq 0 ]; then
+            echo "## :white_check_mark: READY FOR UAT" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## :x: RELEASE BLOCKED" >> "$GITHUB_STEP_SUMMARY"
+            echo "One or more BLOCK RELEASE gates failed - see the table above." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # ---- Production Promotion: every gate must pass, including the
+          # waivable ones, unless a human recorded an explicit waiver. ----
+          echo >> "$GITHUB_STEP_SUMMARY"
+          if [ "$overall_block" -eq 0 ] && { [ "$high_severity_failed" -eq 0 ] || [ -n "$WAIVER_REASON" ]; }; then
+            if [ "$high_severity_failed" -eq 1 ]; then
+              echo "## :large_orange_diamond: PRODUCTION CERTIFIED (with recorded waiver)" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "## :trophy: PRODUCTION CERTIFIED" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            echo "## :no_entry: NOT PRODUCTION CERTIFIED" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$overall_block" -eq 1 ]; then
+              echo "A BLOCK RELEASE gate failed." >> "$GITHUB_STEP_SUMMARY"
+            elif [ "$high_severity_failed" -eq 1 ]; then
+              echo "A HIGH SEVERITY gate (Repair or Runtime) failed and no waiver was recorded. Re-run this workflow with a waiver_reason if this is an accepted, reviewed risk." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
+          cat "$GITHUB_STEP_SUMMARY"
+
+          [ "$overall_block" -eq 0 ] || exit 1

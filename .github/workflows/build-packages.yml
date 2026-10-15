@@ -8,6 +8,11 @@ on:
       - "dcim/**"
       - "packaging/**"
       - ".github/workflows/build-packages.yml"
+  # Lets release-gate.yml (Gate 2 - Package Build, Gate 10 - Offline
+  # Appliance) call this same, already-proven build+kit-smoke-test suite as
+  # a reusable workflow instead of duplicating it. Purely additive - every
+  # existing trigger/behavior above is unchanged.
+  workflow_call: {}
 
 jobs:
   build-deb:

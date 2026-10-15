@@ -1,0 +1,125 @@
+name: Gate 6 - Backup & restore validation
+
+# Create Backup -> Delete Data -> Restore Backup -> Verify, against the real
+# app-level backup API (/api/backup/download + /api/backup/restore), not the
+# install-level upgrade/repair snapshot (that's exercised separately by
+# test-lifecycle.yml's rollback step). Every API call and payload shape below
+# was verified against a real running instance before being committed.
+# BLOCK RELEASE on any data loss.
+
+on:
+  workflow_call: {}
+  workflow_dispatch: {}
+
+jobs:
+  backup-restore-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MariaDB
+        run: |
+          sudo systemctl stop mysql.service 2>/dev/null || true
+          sudo apt-get update -y -q
+          sudo apt-get install -y mariadb-server
+          sudo systemctl start mariadb
+          sudo mysql -u root -e "CREATE DATABASE dcim_gate6 CHARACTER SET utf8mb4; CREATE USER 'dcim'@'localhost' IDENTIFIED BY 'Gate6Pass123!'; GRANT ALL ON dcim_gate6.* TO 'dcim'@'localhost'; FLUSH PRIVILEGES;"
+
+      - name: Install
+        run: |
+          sudo bash packaging/linux/install.sh --mode install --yes --port 19200 \
+            --db-user dcim --db-password 'Gate6Pass123!' --db-name dcim_gate6 \
+            --admin-user gate6admin --admin-password 'Gate6AdminPass123!'
+
+      - name: Create test data across every backed-up category
+        run: |
+          set -e
+          B="http://127.0.0.1:19200"
+          TOKEN=$(curl -fsS -X POST "$B/api/auth/login" -H 'Content-Type: application/json' -d '{"username":"gate6admin","password":"Gate6AdminPass123!"}' \
+            | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>console.log(JSON.parse(d).token))")
+          echo "$TOKEN" > /tmp/gate6-token.txt
+          # Locations/Zones
+          curl -fsS -X POST "$B/api/locations" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"name":"Gate6DC","zoneName":"AZ-1"}'
+          # Users
+          curl -fsS -X POST "$B/api/users" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            -d '{"username":"gate6user","password":"Gate6UserPass123!","name":"Gate6 Test User","role":"Viewer","location_access":"All"}'
+          # Assets (store-received, so it needs no rack/zone placement)
+          curl -fsS -X POST "$B/api/assets" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            -d '{"site":"Gate6DC","manufacturer":"Dell","model":"PowerEdge R740","hardwareType":"Server","serialNumber":"CI-GATE6-SN-001","initialLifecycleStatus":"In Store"}'
+          # Firmware Targets (Monitoring)
+          curl -fsS -X PUT "$B/api/monitoring/firmware-targets" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"vendor":"ome","targetVersion":"Gate6-FW-9.9.9"}'
+          # Branding / app_settings
+          curl -fsS -X PUT "$B/api/setup/organization" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"department":"Gate6-QA"}'
+          # Security Settings (password policy, app_settings-backed)
+          curl -fsS -X PUT "$B/api/setup/security" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"passwordMinLength":"10"}'
+          echo "Test data created across locations, users, assets, firmware targets, branding, and security settings."
+
+      - name: Create a backup (real API, not a file-system copy)
+        run: |
+          set -e
+          TOKEN=$(cat /tmp/gate6-token.txt)
+          curl -fsS http://127.0.0.1:19200/api/backup/download -H "Authorization: Bearer $TOKEN" -o /tmp/gate6-backup.json.gz
+          test -s /tmp/gate6-backup.json.gz
+          file /tmp/gate6-backup.json.gz | grep -q gzip
+          echo "Backup downloaded: $(stat -c%s /tmp/gate6-backup.json.gz) bytes"
+
+      - name: Delete every category of test data (simulate data loss)
+        run: |
+          sudo mysql -u root dcim_gate6 -e "
+            DELETE FROM users WHERE username='gate6user';
+            DELETE FROM locations WHERE name='Gate6DC';
+            DELETE FROM assets WHERE serial_number='CI-GATE6-SN-001';
+            DELETE FROM firmware_targets WHERE vendor='ome';
+            DELETE FROM app_settings WHERE k='org.department';
+            DELETE FROM app_settings WHERE k='security.passwordMinLength';
+          "
+          echo "--- confirming deletion ---"
+          sudo mysql -u root dcim_gate6 -N -e "
+            SELECT 'users', COUNT(*) FROM users WHERE username='gate6user'
+            UNION ALL SELECT 'locations', COUNT(*) FROM locations WHERE name='Gate6DC'
+            UNION ALL SELECT 'assets', COUNT(*) FROM assets WHERE serial_number='CI-GATE6-SN-001'
+            UNION ALL SELECT 'firmware_targets', COUNT(*) FROM firmware_targets WHERE vendor='ome'
+            UNION ALL SELECT 'app_settings', COUNT(*) FROM app_settings WHERE k IN ('org.department','security.passwordMinLength');
+          " | tee /tmp/gate6-before-restore.txt
+          awk '{ if ($2 != 0) { print "::error::" $1 " was not actually deleted before the restore test"; exit 1 } }' /tmp/gate6-before-restore.txt
+
+      - name: Restore the backup (real API, with the required RESTORE confirmation)
+        run: |
+          set -e
+          TOKEN=$(cat /tmp/gate6-token.txt)
+          curl -fsS -X POST http://127.0.0.1:19200/api/backup/restore \
+            -H "Authorization: Bearer $TOKEN" \
+            -F "file=@/tmp/gate6-backup.json.gz;type=application/gzip" \
+            -F "confirm=RESTORE" | tee /tmp/gate6-restore-response.json
+          grep -q '"ok":true' /tmp/gate6-restore-response.json || { echo "::error::Restore did not report ok:true"; exit 1; }
+
+      - name: Verify every deleted category was actually restored
+        run: |
+          set -e
+          sudo mysql -u root dcim_gate6 -N -e "
+            SELECT 'users', COUNT(*) FROM users WHERE username='gate6user'
+            UNION ALL SELECT 'locations', COUNT(*) FROM locations WHERE name='Gate6DC'
+            UNION ALL SELECT 'assets', COUNT(*) FROM assets WHERE serial_number='CI-GATE6-SN-001'
+            UNION ALL SELECT 'firmware_targets', COUNT(*) FROM firmware_targets WHERE vendor='ome'
+            UNION ALL SELECT 'app_settings_branding', COUNT(*) FROM app_settings WHERE k='org.department'
+            UNION ALL SELECT 'app_settings_security', COUNT(*) FROM app_settings WHERE k='security.passwordMinLength';
+          " | tee /tmp/gate6-after-restore.txt
+          awk '{ if ($2 == 0) { print "::error::" $1 " was NOT restored - backup/restore does not cover this category"; exit 1 } }' /tmp/gate6-after-restore.txt
+          echo "All categories (users, locations, assets, firmware targets, branding, security settings) survived backup + restore."
+
+      - name: Diagnostics (always, even on failure)
+        if: always()
+        run: |
+          sudo systemctl status dcim --no-pager || true
+          sudo journalctl -u dcim --no-pager -n 100 | sed -E 's/(PASSWORD|SECRET)[=: ]+[^ ]+/\1=[redacted]/gI' || true
+
+      - name: Upload before/after snapshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-restore-snapshots
+          path: |
+            /tmp/gate6-before-restore.txt
+            /tmp/gate6-after-restore.txt
+            /tmp/gate6-restore-response.json
+          if-no-files-found: ignore

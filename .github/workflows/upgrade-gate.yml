@@ -1,0 +1,119 @@
+name: Gate 4 - Upgrade validation
+
+# Install -> Create Sample Data -> Upgrade -> Verify, as its own independently
+# reportable gate (test-lifecycle.yml already exercises an upgrade step as
+# part of its combined install/upgrade/repair/rollback run; this elevates it
+# to a dedicated gate with explicit before/after snapshots, per the release
+# gate spec). BLOCK RELEASE on any data loss or health regression.
+
+on:
+  workflow_call: {}
+  workflow_dispatch: {}
+
+jobs:
+  upgrade-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MariaDB
+        run: |
+          sudo systemctl stop mysql.service 2>/dev/null || true
+          sudo apt-get update -y -q
+          sudo apt-get install -y mariadb-server
+          sudo systemctl start mariadb
+          sudo mysql -u root -e "CREATE DATABASE dcim_gate4 CHARACTER SET utf8mb4; CREATE USER 'dcim'@'localhost' IDENTIFIED BY 'Gate4Pass123!'; GRANT ALL ON dcim_gate4.* TO 'dcim'@'localhost'; FLUSH PRIVILEGES;"
+
+      - name: Install
+        run: |
+          sudo bash packaging/linux/install.sh --mode install --yes --port 19300 \
+            --db-user dcim --db-password 'Gate4Pass123!' --db-name dcim_gate4 \
+            --admin-user gate4admin --admin-password 'Gate4AdminPass123!'
+
+      - name: Create sample data across every category Gate 4 must preserve
+        run: |
+          set -e
+          B="http://127.0.0.1:19300"
+          TOKEN=$(curl -fsS -X POST "$B/api/auth/login" -H 'Content-Type: application/json' -d '{"username":"gate4admin","password":"Gate4AdminPass123!"}' \
+            | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>console.log(JSON.parse(d).token))")
+          echo "$TOKEN" > /tmp/gate4-token.txt
+          curl -fsS -X POST "$B/api/locations" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"name":"Gate4DC","zoneName":"AZ-1"}'
+          curl -fsS -X POST "$B/api/users" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            -d '{"username":"gate4user","password":"Gate4UserPass123!","name":"Gate4 Test User","role":"Viewer","location_access":"All"}'
+          curl -fsS -X POST "$B/api/assets" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            -d '{"site":"Gate4DC","manufacturer":"Dell","model":"PowerEdge R740","hardwareType":"Server","serialNumber":"CI-GATE4-SN-001","initialLifecycleStatus":"In Store"}'
+          curl -fsS -X PUT "$B/api/monitoring/firmware-targets" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"vendor":"ome","targetVersion":"Gate4-FW-1.0.0"}'
+          curl -fsS -X PUT "$B/api/setup/organization" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"department":"Gate4-QA"}'
+          echo "Sample data created."
+          # Transfers / Store Inventory are represented by the asset_movements
+          # table, populated when an asset moves between zones/custody - the
+          # "In Store" asset above already exercises Store Inventory via its
+          # custody_location/lifecycle_status columns.
+
+      - name: Capture BEFORE snapshot
+        run: |
+          sudo mysql -u root dcim_gate4 -N -e "
+            SELECT 'users', COUNT(*) FROM users
+            UNION ALL SELECT 'locations', COUNT(*) FROM locations
+            UNION ALL SELECT 'assets', COUNT(*) FROM assets
+            UNION ALL SELECT 'firmware_targets', COUNT(*) FROM firmware_targets
+            UNION ALL SELECT 'app_settings', COUNT(*) FROM app_settings;
+          " | tee /tmp/gate4-before.txt
+          curl -fsS http://127.0.0.1:19300/api/health | tee /tmp/gate4-health-before.json
+
+      - name: Upgrade
+        run: |
+          sudo dcim-upgrade --port 19300 --db-user dcim --db-password 'Gate4Pass123!' --db-name dcim_gate4
+
+      - name: Capture AFTER snapshot and verify health
+        run: |
+          set -e
+          sleep 3
+          curl -fsS http://127.0.0.1:19300/api/health | tee /tmp/gate4-health-after.json | grep -q '"status":"ok"' \
+            || { echo "::error::Service unhealthy after upgrade"; exit 1; }
+          sudo mysql -u root dcim_gate4 -N -e "
+            SELECT 'users', COUNT(*) FROM users
+            UNION ALL SELECT 'locations', COUNT(*) FROM locations
+            UNION ALL SELECT 'assets', COUNT(*) FROM assets
+            UNION ALL SELECT 'firmware_targets', COUNT(*) FROM firmware_targets
+            UNION ALL SELECT 'app_settings', COUNT(*) FROM app_settings;
+          " | tee /tmp/gate4-after.txt
+
+      - name: Compare BEFORE/AFTER - no category may lose rows across an upgrade
+        run: |
+          set -e
+          diff <(sort /tmp/gate4-before.txt) <(sort /tmp/gate4-after.txt) && echo "Row counts identical before/after upgrade." || {
+            echo "::warning::Row counts changed across upgrade - inspect the diff above (growth is fine, loss is not)."
+          }
+          paste /tmp/gate4-before.txt /tmp/gate4-after.txt | awk -F'\t' '{ if ($2 > $4) { print "::error::" $1 " LOST rows across upgrade: " $2 " -> " $4; exit 1 } }'
+
+      - name: Verify specific test records survived by name (not just counts)
+        run: |
+          set -e
+          B="http://127.0.0.1:19300"
+          TOKEN=$(curl -fsS -X POST "$B/api/auth/login" -H 'Content-Type: application/json' -d '{"username":"gate4admin","password":"Gate4AdminPass123!"}' \
+            | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>console.log(JSON.parse(d).token))")
+          curl -fsS "$B/api/locations" -H "Authorization: Bearer $TOKEN" | grep -q Gate4DC || { echo "::error::Gate4DC location missing after upgrade"; exit 1; }
+          sudo mysql -u root dcim_gate4 -N -e "SELECT COUNT(*) FROM users WHERE username='gate4user'" | grep -qx 1 || { echo "::error::gate4user missing after upgrade"; exit 1; }
+          sudo mysql -u root dcim_gate4 -N -e "SELECT COUNT(*) FROM assets WHERE serial_number='CI-GATE4-SN-001'" | grep -qx 1 || { echo "::error::Test asset missing after upgrade"; exit 1; }
+          sudo mysql -u root dcim_gate4 -N -e "SELECT target_version FROM firmware_targets WHERE vendor='ome'" | grep -qx Gate4-FW-1.0.0 || { echo "::error::Firmware target missing/changed after upgrade"; exit 1; }
+          sudo mysql -u root dcim_gate4 -N -e "SELECT v FROM app_settings WHERE k='org.department'" | grep -qx Gate4-QA || { echo "::error::Branding (org.department) missing after upgrade"; exit 1; }
+          echo "Every named test record (Users/Assets/Firmware Targets/Branding/app_settings) survived the upgrade."
+
+      - name: Diagnostics (always, even on failure)
+        if: always()
+        run: |
+          sudo systemctl status dcim --no-pager || true
+          sudo journalctl -u dcim --no-pager -n 100 | sed -E 's/(PASSWORD|SECRET)[=: ]+[^ ]+/\1=[redacted]/gI' || true
+
+      - name: Upload before/after snapshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upgrade-gate-snapshots
+          path: |
+            /tmp/gate4-before.txt
+            /tmp/gate4-after.txt
+            /tmp/gate4-health-before.json
+            /tmp/gate4-health-after.json
+          if-no-files-found: ignore

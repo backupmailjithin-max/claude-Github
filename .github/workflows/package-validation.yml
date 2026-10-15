@@ -1,0 +1,99 @@
+name: Gate 2 - Package build & checksum validation
+
+# Builds every release artifact (reusing build-packages.yml as-is, not
+# duplicating it) and then validates the things a release gate actually
+# cares about: every expected artifact exists, checksums are generated and
+# internally consistent, and a single manifest describes the whole release.
+# BLOCK RELEASE on any failure.
+
+on:
+  workflow_call: {}
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-packages.yml
+
+  validate:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download every package artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Verify every expected release artifact exists
+        run: |
+          set -e
+          fail=0
+          check() {
+            local desc="$1" pattern="$2"
+            if [ -z "$(find artifacts -iname "$pattern" 2>/dev/null)" ]; then
+              echo "::error::Missing expected artifact: $desc ($pattern)"
+              fail=1
+            else
+              echo "OK: $desc"
+            fi
+          }
+          check "Debian package"            "dcim_*.deb"
+          check "RPM package"               "dcim-*.rpm"
+          check "Offline appliance (.run)"  "*.run"
+          check "Windows installer"         "DCIM-Setup*.exe"
+          check "Windows upgrade utility"   "DCIM-Upgrade*.exe"
+          check "Windows repair utility"    "DCIM-Repair*.exe"
+          check "Distribution Kit tarball"  "DCIM-Enterprise-Offline-Kit-*.tar.gz"
+          check "Distribution Kit zip"      "DCIM-Enterprise-Offline-Kit-*.zip"
+          exit $fail
+
+      - name: Generate the release-wide checksum manifest
+        run: |
+          set -e
+          mkdir -p dist-manifest
+          ( cd artifacts && find . -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.run' -o -name '*.exe' -o -name '*.tar.gz' -o -name '*.zip' \) | sort | xargs sha256sum ) \
+            > dist-manifest/RELEASE-CHECKSUMS.sha256
+          cat dist-manifest/RELEASE-CHECKSUMS.sha256
+          node -e '
+            const fs = require("fs");
+            const lines = fs.readFileSync("dist-manifest/RELEASE-CHECKSUMS.sha256", "utf8").trim().split("\n").filter(Boolean);
+            const artifacts = lines.map((l) => {
+              const m = l.match(/^([0-9a-f]{64})\s+\.\/(.+)$/);
+              const hash = m[1], relPath = m[2];
+              const size = fs.statSync("artifacts/" + relPath).size;
+              return { file: relPath, sha256: hash, sizeBytes: size };
+            });
+            fs.writeFileSync("dist-manifest/release-manifest.json", JSON.stringify({
+              generatedAt: new Date().toISOString(),
+              commit: process.env.GITHUB_SHA,
+              ref: process.env.GITHUB_REF,
+              artifacts,
+            }, null, 2));
+          '
+          cat dist-manifest/release-manifest.json
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF: ${{ github.ref }}
+
+      - name: Verify the Distribution Kit's own internal checksums
+        run: |
+          set -e
+          KIT_TGZ=$(find artifacts -name 'DCIM-Enterprise-Offline-Kit-*.tar.gz' | head -1)
+          mkdir -p /tmp/kit-verify
+          tar -xzf "$KIT_TGZ" -C /tmp/kit-verify
+          KIT_DIR=$(find /tmp/kit-verify -maxdepth 1 -type d -name 'DCIM-Enterprise-Offline-Kit-*')
+          test -f "$KIT_DIR/CHECKSUMS.sha256" || { echo "::error::Kit is missing CHECKSUMS.sha256"; exit 1; }
+          ( cd "$KIT_DIR" && sha256sum -c CHECKSUMS.sha256 --quiet ) \
+            || { echo "::error::Kit CHECKSUMS.sha256 verification FAILED - a packaged file doesn't match its recorded hash"; exit 1; }
+          echo "Kit internal checksums verified: every file matches its recorded SHA256."
+
+      - name: Package signatures (known gap - documented, not silently skipped)
+        run: |
+          echo "::warning::No code-signing certificate (Windows Authenticode) or GPG key is configured in this environment, so the .exe/.deb/.rpm artifacts above are built UNSIGNED. This is a tracked release-readiness gap (see docs/PACKAGING.md 'Known limitations') - acquire a code-signing cert / GPG key and wire it into build-windows-exe/build-deb/build-rpm before shipping signed production builds. Not a release blocker today because no prior release shipped signed packages either, but Production Promotion should require this once signing infrastructure exists."
+
+      - name: Upload release manifest + checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-manifest
+          path: dist-manifest/

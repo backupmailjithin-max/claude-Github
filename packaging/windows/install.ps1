@@ -451,6 +451,26 @@ function Invoke-Repair {
   if (-not (Test-ExistingInstall)) { Die "No existing installation found at $InstallDir; use -Mode install instead." }
   Invoke-Validations
   Backup-BeforeChange
+  # Found via real execution of the "Lost Configuration" repair scenario:
+  # Sync-Payload only ever touches webapp files, never recreates .env, so a
+  # repair run had no recovery path when .env itself was the thing missing -
+  # it would restart the service with no DB password/JWT secret and fail.
+  # Self-heal from the most recent backup that still has one (every prior
+  # Backup-BeforeChange call captured .env whenever it existed at the time);
+  # if none exists, fail loudly rather than leave the service silently
+  # unable to connect to its database.
+  $envPath = Join-Path $InstallDir "webapp\.env"
+  if (-not (Test-Path $envPath)) {
+    $latestEnv = Get-ChildItem -Path "C:\ProgramData\dcim-backups\*\.env" -ErrorAction SilentlyContinue |
+      Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($latestEnv) {
+      Log "No .env found at $envPath; restoring the most recent one from backup: $($latestEnv.FullName)"
+      New-Item -ItemType Directory -Force -Path (Split-Path $envPath) | Out-Null
+      Copy-Item $latestEnv.FullName $envPath -Force
+    } else {
+      Die "No .env found at $envPath and no prior backup contains one; repair cannot recover the configuration. Restore it manually (e.g. from an external backup) or reinstall with -Mode install."
+    }
+  }
   # Found via real execution (test-lifecycle.yml): without stopping the
   # service first, Sync-Payload's Copy-Item of tools\nssm.exe fails with
   # "The process cannot access the file ... because it is being used by

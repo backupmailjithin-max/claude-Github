@@ -7,6 +7,12 @@ name: Test DCIM install/upgrade/repair/rollback (real execution)
 # deliberately (pre-UAT, pre-release) rather than on every push.
 on:
   workflow_dispatch: {}
+  # Lets release-gate.yml (Gate 3 - Installation Validation, Gate 5/7 repair/
+  # rollback) call this same, already-proven suite as a reusable workflow
+  # instead of duplicating its ~400 lines of real install/upgrade/repair/
+  # rollback logic. Purely additive - every existing trigger/behavior above
+  # is unchanged.
+  workflow_call: {}
 
 jobs:
   # Real GitHub-hosted Windows Server VMs (real Service Control Manager, not a

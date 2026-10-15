@@ -1,0 +1,140 @@
+name: Gate 9 - Security validation
+
+# Validates security properties of the shipped product and its installers -
+# this is a CI/governance check, it does not add or change any security
+# logic in dcim/webapp (that logic already exists and is only read/exercised
+# here). BLOCK RELEASE on any failure.
+
+on:
+  workflow_call: {}
+  workflow_dispatch: {}
+
+jobs:
+  security-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: No secrets committed to the tree (pattern scan across tracked files)
+        run: |
+          set -e
+          # Grep-based, dependency-free scan (no external scanner action
+          # pinned here, to avoid a third-party supply-chain dependency for a
+          # check this small) for the common high-confidence secret shapes.
+          # This is a floor, not a replacement for a dedicated secret-scanning
+          # service - documented as such in docs/PACKAGING.md.
+          PATTERN='(AKIA[0-9A-Z]{16}|-----BEGIN (RSA|EC|OPENSSH|PGP) PRIVATE KEY-----|xox[baprs]-[0-9A-Za-z-]{10,48}|AIza[0-9A-Za-z_-]{35})'
+          if git grep -nIE "$PATTERN" -- . ':!*.md' ':!docs/**'; then
+            echo "::error::Potential committed secret(s) found above."
+            exit 1
+          fi
+          echo "No committed secret patterns found."
+
+      - name: JWT secret is read from environment, never hardcoded
+        run: |
+          set -e
+          grep -q "process.env.JWT_SECRET" dcim/webapp/server.js \
+            || { echo "::error::server.js no longer reads JWT_SECRET from the environment"; exit 1; }
+          if grep -nE "JWT_SECRET\s*=\s*['\"][^'\"]{4,}['\"]" dcim/webapp/server.js | grep -v "process.env"; then
+            echo "::error::A hardcoded JWT secret literal was found in server.js"
+            exit 1
+          fi
+          echo "JWT secret is environment-sourced; no hardcoded literal found."
+
+      - name: Default-password must-change gate exists and is wired up
+        run: |
+          set -e
+          grep -q "MUST_CHANGE_ALLOWED" dcim/webapp/server.js || { echo "::error::MUST_CHANGE_ALLOWED allowlist is missing"; exit 1; }
+          grep -q "DEFAULT_ACCOUNT_PASSWORDS" dcim/webapp/server.js || { echo "::error::Default-account-password detection is missing"; exit 1; }
+          grep -q "mustChangePassword" dcim/webapp/server.js || { echo "::error::mustChangePassword is no longer surfaced to the client"; exit 1; }
+          echo "Default-password must-change gate present."
+
+      - name: Session handling is configurable (not hardcoded)
+        run: |
+          grep -q "SESSION_TIMEOUT_HOURS" dcim/webapp/server.js || { echo "::error::Session timeout is no longer configurable"; exit 1; }
+
+      - name: Audit logging exists
+        run: |
+          grep -qi "audit" dcim/webapp/server.js || { echo "::error::No audit logging found in server.js"; exit 1; }
+
+      - name: Upload validation (MIME/type) exists
+        run: |
+          grep -qiE "mimetype|fileFilter|multer" dcim/webapp/server.js \
+            || { echo "::error::No upload MIME/type validation found in server.js"; exit 1; }
+
+      - name: CSP configuration present
+        run: |
+          grep -q "CSP_MODE" dcim/webapp/server.js || { echo "::error::CSP_MODE configuration is missing"; exit 1; }
+
+      - name: Install for real and verify secure defaults end to end
+        run: |
+          set -e
+          sudo systemctl stop mysql.service 2>/dev/null || true
+          sudo apt-get update -y -q
+          sudo apt-get install -y mariadb-server
+          sudo systemctl start mariadb
+          sudo mysql -u root -e "CREATE DATABASE dcim_sec_test CHARACTER SET utf8mb4; CREATE USER 'dcim'@'localhost' IDENTIFIED BY 'SecTestPass123!'; GRANT ALL ON dcim_sec_test.* TO 'dcim'@'localhost'; FLUSH PRIVILEGES;"
+          # Deliberately do NOT pass --admin-user/--admin-password: this
+          # exercises the real "seeded admin/admin, must change on first
+          # login" path, not a pre-customized account.
+          sudo bash packaging/linux/install.sh --mode install --yes --port 19100 \
+            --db-user dcim --db-password 'SecTestPass123!' --db-name dcim_sec_test \
+            --csp-mode enforce --audit-retention-days 90 2>&1 | tee /tmp/install-output.log
+
+      - name: No secrets leaked into install output or logs
+        run: |
+          set -e
+          # The installer intentionally prints the generated JWT secret / admin
+          # credentials once at install time, by design, so the operator can
+          # record them. The DATABASE password is a different story - it has
+          # no legitimate reason to be echoed, since it's supplied on the
+          # command line (not generated) and only ever belongs in .env.
+          if grep -q "SecTestPass123" /tmp/install-output.log; then
+            echo "::error::Database password leaked into install log output"
+            exit 1
+          fi
+          sudo journalctl -u dcim --no-pager -n 500 | grep -q "SecTestPass123" \
+            && { echo "::error::Database password leaked into the application's own logs"; exit 1; }
+          echo "Database password did not appear in install output or service logs."
+
+      - name: Unauthenticated API access is rejected
+        run: |
+          set -e
+          code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:19100/api/locations)
+          [ "$code" = "401" ] || { echo "::error::Unauthenticated request to /api/locations returned $code, expected 401"; exit 1; }
+          echo "Unauthenticated API access correctly rejected (401)."
+
+      - name: Default admin/admin is forced to change password on first login
+        run: |
+          set -e
+          RESP=$(curl -fsS -X POST http://127.0.0.1:19100/api/auth/login -H 'Content-Type: application/json' -d '{"username":"admin","password":"admin"}')
+          echo "$RESP" | grep -q '"mustChangePassword":true' \
+            || { echo "::error::Logging in as the seeded admin/admin account did not set mustChangePassword"; echo "$RESP"; exit 1; }
+          TOKEN=$(echo "$RESP" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>console.log(JSON.parse(d).token))")
+          # Confirm the gate actually blocks other endpoints while must-change is pending.
+          code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $TOKEN" http://127.0.0.1:19100/api/locations)
+          [ "$code" = "403" ] || { echo "::error::Expected 403 on a non-allowlisted endpoint while mustChangePassword is pending, got $code"; exit 1; }
+          curl -fsS -X PATCH http://127.0.0.1:19100/api/auth/change-password -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            -d '{"currentPassword":"admin","newPassword":"NoLongerDefault123!"}' > /dev/null
+          RESP2=$(curl -fsS -X POST http://127.0.0.1:19100/api/auth/login -H 'Content-Type: application/json' -d '{"username":"admin","password":"NoLongerDefault123!"}')
+          echo "$RESP2" | grep -q '"mustChangePassword":true' && { echo "::error::mustChangePassword still set after a real password change"; exit 1; }
+          echo "Default-password forced-change flow verified end to end."
+
+      - name: JWT secret was generated and stored, not left blank/default
+        run: |
+          set -e
+          sudo test -f /opt/dcim/webapp/.env
+          JWT_LEN=$(sudo grep '^JWT_SECRET=' /opt/dcim/webapp/.env | cut -d= -f2- | wc -c)
+          [ "$JWT_LEN" -ge 20 ] || { echo "::error::JWT_SECRET in .env is missing or too short ($JWT_LEN chars)"; exit 1; }
+          sudo grep -q '^JWT_SECRET=CHANGE_ME' /opt/dcim/webapp/.env && { echo "::error::JWT_SECRET was left at its template default"; exit 1; } || true
+          echo "JWT secret generated and stored (length $JWT_LEN)."
+
+      - name: Diagnostics (always, even on failure)
+        if: always()
+        run: |
+          echo "--- systemctl status dcim ---"
+          sudo systemctl status dcim --no-pager || true
+          echo "--- journalctl -u dcim (redacted) ---"
+          sudo journalctl -u dcim --no-pager -n 100 | sed -E 's/(PASSWORD|SECRET)[=: ]+[^ ]+/\1=[redacted]/gI' || true
