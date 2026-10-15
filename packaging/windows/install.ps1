@@ -304,7 +304,12 @@ function Backup-BeforeChange {
     # database (exactly what this installer itself asks customers to grant)
     # will never have that global privilege. This avoids the GTID lookup
     # entirely instead of requiring a broader grant just to take a backup.
-    $dumpArgs += @("--single-transaction", "--set-gtid-purged=OFF", "--routines", "--triggers", $env.DB_NAME)
+    # Feature-detected, not assumed present: also found via real execution
+    # that MariaDB's mysqldump does NOT recognize this MySQL-specific flag at
+    # all ("unknown option") - DB_HOST can legitimately point at either engine.
+    $gtidFlag = @()
+    if ((& $dump.Source --help 2>$null | Select-String -Quiet -SimpleMatch '--set-gtid-purged')) { $gtidFlag = @("--set-gtid-purged=OFF") }
+    $dumpArgs += @("--single-transaction") + $gtidFlag + @("--routines", "--triggers", $env.DB_NAME)
     $sqlPath = Join-Path $backupDir "database.sql"
     try {
       # Native `>` redirection (not `| Out-File`): Out-File would capture
