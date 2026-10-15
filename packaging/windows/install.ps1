@@ -285,6 +285,12 @@ function Invoke-Repair {
   if (-not (Test-ExistingInstall)) { Die "No existing installation found at $InstallDir; use -Mode install instead." }
   Invoke-Validations
   Backup-BeforeChange
+  # Found via real execution (test-lifecycle.yml): without stopping the
+  # service first, Sync-Payload's Copy-Item of tools\nssm.exe fails with
+  # "The process cannot access the file ... because it is being used by
+  # another process" - nssm.exe IS the running service's process image.
+  # Invoke-Upgrade already does this; Repair needs the same guard.
+  Stop-Service -Name $ServiceName -ErrorAction SilentlyContinue
   Sync-Payload
   Install-WindowsService
   Wait-ForHealth

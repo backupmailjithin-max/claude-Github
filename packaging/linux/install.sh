@@ -278,6 +278,27 @@ install_systemd_unit() {
   log "Installed and enabled systemd service '$SERVICE_NAME' (auto-start on boot)."
 }
 
+install_cli_utilities() {
+  # Found via real execution (test-lifecycle.yml): when install.sh is run
+  # directly (not via the .deb/.rpm, e.g. a standalone extract or the
+  # offline appliance), dcim-service/dcim-upgrade/dcim-repair/dcim-setup
+  # never land on PATH - those symlinks are normally created by the
+  # package's own postinst. Copy the scripts to a stable location under
+  # $INSTALL_DIR (so they survive even if $SCRIPT_DIR, e.g. a temp extract
+  # dir, is later removed) and link them on PATH, but only if nothing is
+  # already there - a .deb/.rpm install already placed real files at these
+  # paths before calling into install.sh, and this must not clobber those.
+  local cli_dir="$INSTALL_DIR/cli"
+  install -d -m 755 "$cli_dir"
+  for f in dcim-service.sh dcim-upgrade.sh dcim-repair.sh install.sh uninstall.sh rollback.sh; do
+    [ -f "$SCRIPT_DIR/$f" ] && install -m 755 "$SCRIPT_DIR/$f" "$cli_dir/$f"
+  done
+  for name in dcim-service dcim-upgrade dcim-repair; do
+    [ -e "/usr/bin/$name" ] || ln -s "$cli_dir/${name}.sh" "/usr/bin/$name"
+  done
+  [ -e /usr/bin/dcim-setup ] || ln -s "$cli_dir/install.sh" /usr/bin/dcim-setup
+}
+
 backup_before_change() {
   local ts backup_dir
   ts="$(date +%Y%m%d-%H%M%S)"
@@ -353,6 +374,7 @@ do_install() {
   run_validations
   ensure_service_user
   sync_payload
+  install_cli_utilities
   write_env_file
   test_db_connection
   install_systemd_unit
@@ -372,6 +394,7 @@ do_upgrade() {
   backup_before_change
   systemctl stop "$SERVICE_NAME" 2>/dev/null || true
   sync_payload
+  install_cli_utilities
   install_systemd_unit
   systemctl restart "$SERVICE_NAME"
   wait_for_health
@@ -384,6 +407,7 @@ do_repair() {
   ensure_service_user
   backup_before_change
   sync_payload
+  install_cli_utilities
   install_systemd_unit
   chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
   systemctl restart "$SERVICE_NAME"

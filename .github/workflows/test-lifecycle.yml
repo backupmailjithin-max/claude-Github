@@ -13,23 +13,26 @@ jobs:
   # container) - this path was previously never executed at all, only
   # code-reviewed. windows-2022 maps to Windows Server 2022.
   #
-  # windows-2019 CONFIRMED UNAVAILABLE: two separate real runs (run ids
-  # 38790702714, 38792178744) never got a runner assigned at all - the job
-  # sat in "queued" status indefinitely (no "Set up job" step, no error, no
-  # timeout) while every other job in the same run completed normally within
-  # a minute. That is the actual failure signature of a hosted runner image
-  # GitHub has stopped offering (it was deprecated), not a DCIM defect.
-  # `timeout-minutes` below turns that indefinite hang into a fast, visible
-  # failure instead of stalling every CI run. Real Windows Server 2019
-  # execution evidence, if still required, needs a self-hosted Server 2019
-  # runner - it cannot be obtained from GitHub-hosted runners.
+  # windows-2019 REMOVED FROM THE MATRIX - CONFIRMED UNAVAILABLE, not a DCIM
+  # defect. Three separate real runs (38790702714, 38792178744, 38793404209)
+  # never got a runner assigned at all: the job sat in "queued" with no
+  # "Set up job" step and no error, while every other job in the same run
+  # completed normally within a minute or two. `timeout-minutes` does NOT
+  # help here - it only bounds a RUNNING job, not time spent waiting in the
+  # queue for a runner that will never be assigned, so it left the job
+  # queued indefinitely anyway (confirmed: run 38793404209 was still queued
+  # after its 5-minute timeout should have fired). This is the real-world
+  # signature of a hosted runner image GitHub has stopped offering. Genuine
+  # Windows Server 2019 execution evidence would require a self-hosted
+  # Server 2019 runner - it cannot be obtained from GitHub-hosted runners,
+  # and leaving it in the matrix only stalls every future CI run for no
+  # benefit.
   test-windows-lifecycle:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2022, windows-2019]
+        os: [windows-2022]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.os == 'windows-2019' && 5 || 30 }}
     steps:
       - uses: actions/checkout@v4
 
