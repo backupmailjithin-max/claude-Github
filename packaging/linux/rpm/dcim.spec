@@ -27,6 +27,8 @@ mkdir -p %{buildroot}/usr/share/dcim %{buildroot}/usr/bin
 cp -a "%{_sourcedir}/dcim-payload/." %{buildroot}/usr/share/dcim/
 ln -s /usr/share/dcim/install.sh %{buildroot}/usr/bin/dcim-setup
 install -m 755 "%{_sourcedir}/dcim-service.sh" %{buildroot}/usr/bin/dcim-service
+install -m 755 "%{_sourcedir}/dcim-upgrade.sh" %{buildroot}/usr/bin/dcim-upgrade
+install -m 755 "%{_sourcedir}/dcim-repair.sh" %{buildroot}/usr/bin/dcim-repair
 
 %files
 %attr(755,root,root) /usr/share/dcim/install.sh
@@ -38,6 +40,8 @@ install -m 755 "%{_sourcedir}/dcim-service.sh" %{buildroot}/usr/bin/dcim-service
 %dir /usr/share/dcim
 /usr/bin/dcim-setup
 %attr(755,root,root) /usr/bin/dcim-service
+%attr(755,root,root) /usr/bin/dcim-upgrade
+%attr(755,root,root) /usr/bin/dcim-repair
 
 %post
 case "$1" in

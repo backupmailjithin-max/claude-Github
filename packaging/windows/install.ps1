@@ -14,6 +14,11 @@ param(
   [string]$DbPassword = "",
   [string]$DbName = "dcim",
   [string]$CorsOrigin = "",
+  [string]$AdminUser = "",
+  [string]$AdminPassword = "",
+  [ValidateSet("enforce", "report-only", "off")]
+  [string]$CspMode = "report-only",
+  [int]$AuditRetentionDays = 365,
   [switch]$Yes
 )
 
@@ -131,6 +136,7 @@ function Test-DbConnection {
 }
 
 function Write-EnvFile {
+  if ($AuditRetentionDays -lt 0) { Die "-AuditRetentionDays must be a non-negative whole number." }
   $secret = New-RandomSecret
   $envPath = Join-Path $InstallDir "webapp\.env"
   @"
@@ -142,6 +148,8 @@ DB_PASSWORD=$DbPassword
 DB_NAME=$DbName
 JWT_SECRET=$secret
 CORS_ORIGIN=$CorsOrigin
+CSP_MODE=$CspMode
+AUDIT_RETENTION_DAYS=$AuditRetentionDays
 NODE_ENV=production
 "@ | Set-Content -Path $envPath -Encoding ascii
   Log "Wrote $envPath with a freshly generated JWT secret."
@@ -182,21 +190,6 @@ function Install-WindowsService {
   & $nssm set $ServiceName AppExit Default Restart | Out-Null
   Start-Service -Name $ServiceName
   Log "Installed Windows service '$ServiceName' (auto-start on boot)."
-}
-
-function Import-SchemaIfFresh {
-  $mysql = Get-Command mysql.exe -ErrorAction SilentlyContinue
-  if (-not $mysql) { Log "mysql client not found; the application will create/verify the schema on first start."; return }
-  $mysqlArgs = @("-h", $DbHost, "-P", $DbPort, "-u", $DbUser)
-  if ($DbPassword) { $mysqlArgs += "-p$DbPassword" }
-  $check = & $mysql.Source @mysqlArgs @("-e", "USE ``$DbName``; SHOW TABLES;") 2>$null
-  if (-not $check) {
-    Log "Importing schema.sql into database '$DbName' ..."
-    $schemaPath = Join-Path $InstallDir "webapp\schema.sql"
-    cmd /c "`"$($mysql.Source)`" $($mysqlArgs -join ' ') $DbName < `"$schemaPath`""
-  } else {
-    Log "Database '$DbName' already has tables; skipping schema import."
-  }
 }
 
 function Backup-BeforeChange {
@@ -241,15 +234,40 @@ function Wait-ForHealth {
   Write-Warning "Service did not report healthy within 30s. Check Windows Event Viewer / $InstallDir\webapp\logs\service-stderr.log"
 }
 
+function Set-AdminAccount {
+  if (-not $AdminUser -and -not $AdminPassword) { return }
+  try {
+    $login = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/auth/login" -Method Post -ContentType "application/json" `
+      -Body (@{ username = "admin"; password = "admin" } | ConvertTo-Json) -TimeoutSec 10 -ErrorAction Stop
+  } catch {
+    Log "Skipping -AdminUser/-AdminPassword: the default admin/admin login no longer works (already customized on a previous run, or this is an Upgrade/Repair, not a fresh install)."
+    return
+  }
+  $body = @{}
+  if ($AdminUser) { $body.newUsername = $AdminUser }
+  if ($AdminPassword) { $body.newPassword = $AdminPassword }
+  try {
+    Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/setup/admin-account" -Method Post -ContentType "application/json" `
+      -Headers @{ Authorization = "Bearer $($login.token)" } -Body ($body | ConvertTo-Json) -TimeoutSec 10 -ErrorAction Stop | Out-Null
+    Log "Admin account customized (username/password applied as requested)."
+  } catch {
+    Write-Warning "Could not apply -AdminUser/-AdminPassword; the seeded admin/admin account is still in place. Re-run with -Mode repair or sign in and change it via the Setup Wizard."
+  }
+}
+
 function Invoke-Install {
   Invoke-Validations
   Sync-Payload
   Write-EnvFile
   Test-DbConnection
-  Import-SchemaIfFresh
   Install-WindowsService
   Wait-ForHealth
-  Log "DCIM installed. Sign in as admin / admin and change the password immediately."
+  Set-AdminAccount
+  if ($AdminUser -or $AdminPassword) {
+    Log "DCIM installed. Sign in with the admin credentials you provided."
+  } else {
+    Log "DCIM installed. Sign in as admin / admin and change the password immediately."
+  }
 }
 
 function Invoke-Upgrade {

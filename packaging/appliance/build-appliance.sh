@@ -26,6 +26,7 @@ trap 'rm -rf "$STAGE"' EXIT
 PAYLOAD="$STAGE/dcim-appliance"
 mkdir -p "$PAYLOAD"
 cp "$LINUX_DIR/install.sh" "$LINUX_DIR/uninstall.sh" "$LINUX_DIR/rollback.sh" "$LINUX_DIR/dcim-service.sh" \
+   "$LINUX_DIR/dcim-upgrade.sh" "$LINUX_DIR/dcim-repair.sh" \
    "$LINUX_DIR/dcim.service.template" "$LINUX_DIR/nginx-dcim.conf" "$PAYLOAD/"
 chmod 755 "$PAYLOAD"/*.sh
 

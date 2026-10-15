@@ -1,0 +1,210 @@
+name: Test DCIM install/upgrade/repair/rollback (real execution)
+
+# Actually RUNS the installers end-to-end against a real database and a real
+# service manager, on real GitHub-hosted VMs/containers - not just a compile
+# check. Separate from build-packages.yml (which only builds artifacts) since
+# this exercises behavior, takes longer, and is meant to be triggered
+# deliberately (pre-UAT, pre-release) rather than on every push.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  # Windows Server (the actual windows-latest GitHub-hosted VM, with a real
+  # Service Control Manager - not a container) was previously never executed
+  # at all; this is the first real evidence for that path.
+  test-windows-lifecycle:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage bundled Node.js runtime
+        shell: pwsh
+        run: packaging\windows\fetch-node-runtime.ps1
+
+      - name: Stage NSSM service wrapper
+        shell: pwsh
+        run: packaging\windows\fetch-nssm.ps1
+
+      - name: Install MySQL
+        shell: pwsh
+        run: |
+          choco install mysql --no-progress -y
+          Start-Service MySQL
+
+      - name: Create test database and user
+        shell: pwsh
+        run: |
+          $mysql = "C:\tools\mysql\current\bin\mysql.exe"
+          if (-not (Test-Path $mysql)) { $mysql = (Get-Command mysql.exe).Source }
+          & $mysql -u root -e "CREATE DATABASE dcim_test CHARACTER SET utf8mb4; CREATE USER 'dcim'@'localhost' IDENTIFIED BY 'TestPass123!'; GRANT ALL ON dcim_test.* TO 'dcim'@'localhost'; FLUSH PRIVILEGES;"
+
+      - name: Install (fresh)
+        shell: pwsh
+        run: |
+          packaging\windows\install.ps1 -Mode install -Yes -InstallDir C:\DCIM -Port 18974 `
+            -DbUser dcim -DbPassword 'TestPass123!' -DbName dcim_test `
+            -AdminUser ciadmin -AdminPassword 'CiAdminPass123!'
+
+      - name: Verify service is really running (NSSM)
+        shell: pwsh
+        run: |
+          $svc = Get-Service -Name DCIM
+          if ($svc.Status -ne 'Running') { throw "DCIM service is not Running (status: $($svc.Status))" }
+          $h = Invoke-RestMethod -Uri "http://127.0.0.1:18974/api/health"
+          if ($h.status -ne 'ok') { throw "Health check did not report ok" }
+          Write-Host "Service running, health OK."
+
+      - name: Populate test data (proves admin account + API work for real)
+        shell: pwsh
+        run: |
+          $login = Invoke-RestMethod -Uri "http://127.0.0.1:18974/api/auth/login" -Method Post -ContentType "application/json" -Body (@{username="ciadmin";password="CiAdminPass123!"} | ConvertTo-Json)
+          $headers = @{ Authorization = "Bearer $($login.token)" }
+          Invoke-RestMethod -Uri "http://127.0.0.1:18974/api/locations" -Method Post -ContentType "application/json" -Headers $headers -Body (@{name="CiTestDC";zoneName="AZ-1"} | ConvertTo-Json) | Out-Null
+
+      - name: Upgrade
+        shell: pwsh
+        run: packaging\windows\install.ps1 -Mode upgrade -Yes -InstallDir C:\DCIM -Port 18974 -DbUser dcim -DbPassword 'TestPass123!' -DbName dcim_test
+
+      - name: Verify data survived Upgrade + service still healthy
+        shell: pwsh
+        run: |
+          Start-Sleep -Seconds 3
+          $h = Invoke-RestMethod -Uri "http://127.0.0.1:18974/api/health"
+          if ($h.status -ne 'ok') { throw "Health check failed after upgrade" }
+          $login = Invoke-RestMethod -Uri "http://127.0.0.1:18974/api/auth/login" -Method Post -ContentType "application/json" -Body (@{username="ciadmin";password="CiAdminPass123!"} | ConvertTo-Json)
+          $locs = Invoke-RestMethod -Uri "http://127.0.0.1:18974/api/locations" -Headers @{ Authorization = "Bearer $($login.token)" }
+          if (-not ($locs.name -contains "CiTestDC")) { throw "Test location did not survive Upgrade" }
+          Write-Host "Data survived Upgrade."
+
+      - name: Repair
+        shell: pwsh
+        run: packaging\windows\install.ps1 -Mode repair -Yes -InstallDir C:\DCIM -Port 18974 -DbUser dcim -DbPassword 'TestPass123!' -DbName dcim_test
+
+      - name: Verify data survived Repair + service still healthy
+        shell: pwsh
+        run: |
+          Start-Sleep -Seconds 3
+          $h = Invoke-RestMethod -Uri "http://127.0.0.1:18974/api/health"
+          if ($h.status -ne 'ok') { throw "Health check failed after repair" }
+          Write-Host "Service healthy after Repair."
+
+      - name: Delete test data, then roll back, then verify it's restored
+        shell: pwsh
+        run: |
+          $mysql = "C:\tools\mysql\current\bin\mysql.exe"
+          if (-not (Test-Path $mysql)) { $mysql = (Get-Command mysql.exe).Source }
+          & $mysql -u root dcim_test -e "DELETE FROM locations WHERE name='CiTestDC';"
+          $snapshotMarker = Get-Content "C:\DCIM\.last-pre-change-backup" -Raw
+          Write-Host "Rolling back to: $snapshotMarker"
+          echo y | packaging\windows\rollback.ps1 -InstallDir C:\DCIM
+          Start-Sleep -Seconds 3
+          $login = Invoke-RestMethod -Uri "http://127.0.0.1:18974/api/auth/login" -Method Post -ContentType "application/json" -Body (@{username="ciadmin";password="CiAdminPass123!"} | ConvertTo-Json)
+          $locs = Invoke-RestMethod -Uri "http://127.0.0.1:18974/api/locations" -Headers @{ Authorization = "Bearer $($login.token)" }
+          if (-not ($locs.name -contains "CiTestDC")) { throw "Rollback did not restore the test location" }
+          Write-Host "Rollback restored the deleted data. Full lifecycle verified on Windows."
+
+  # ubuntu-latest is a real VM with systemd as PID 1 (unlike the sandbox this
+  # was developed in, which has no systemd at all) - this is the first fully
+  # real systemd service-lifecycle test for the Linux path.
+  test-ubuntu-systemd-lifecycle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MariaDB
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y mariadb-server
+          sudo systemctl start mariadb
+          sudo mysql -u root -e "CREATE DATABASE dcim_test CHARACTER SET utf8mb4; CREATE USER 'dcim'@'localhost' IDENTIFIED BY 'TestPass123!'; GRANT ALL ON dcim_test.* TO 'dcim'@'localhost'; FLUSH PRIVILEGES;"
+
+      - name: Install (fresh)
+        run: |
+          sudo bash packaging/linux/install.sh --mode install --yes --port 18974 \
+            --db-user dcim --db-password 'TestPass123!' --db-name dcim_test \
+            --admin-user ciadmin --admin-password 'CiAdminPass123!' \
+            --csp-mode enforce --audit-retention-days 90
+
+      - name: Verify systemd service is really running
+        run: |
+          sudo systemctl is-active dcim
+          sudo systemctl is-enabled dcim
+          curl -fsS http://127.0.0.1:18974/api/health | grep -q '"status":"ok"'
+          sudo journalctl -u dcim --no-pager -n 20
+
+      - name: Verify dedicated upgrade/repair utilities are installed and work
+        run: |
+          command -v dcim-service
+          command -v dcim-upgrade
+          command -v dcim-repair
+
+      - name: Populate test data
+        run: |
+          TOKEN=$(curl -fsS -X POST http://127.0.0.1:18974/api/auth/login -H 'Content-Type: application/json' -d '{"username":"ciadmin","password":"CiAdminPass123!"}' | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>console.log(JSON.parse(d).token))")
+          curl -fsS -X POST http://127.0.0.1:18974/api/locations -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"name":"CiTestDC","zoneName":"AZ-1"}'
+
+      - name: Upgrade via the dedicated utility (dcim-upgrade)
+        run: sudo dcim-upgrade --port 18974 --db-user dcim --db-password 'TestPass123!' --db-name dcim_test
+
+      - name: Verify data survived Upgrade
+        run: |
+          sleep 3
+          curl -fsS http://127.0.0.1:18974/api/health | grep -q '"status":"ok"'
+          TOKEN=$(curl -fsS -X POST http://127.0.0.1:18974/api/auth/login -H 'Content-Type: application/json' -d '{"username":"ciadmin","password":"CiAdminPass123!"}' | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>console.log(JSON.parse(d).token))")
+          curl -fsS http://127.0.0.1:18974/api/locations -H "Authorization: Bearer $TOKEN" | grep -q CiTestDC
+
+      - name: Repair via the dedicated utility (dcim-repair)
+        run: sudo dcim-repair --port 18974 --db-user dcim --db-password 'TestPass123!' --db-name dcim_test
+
+      - name: Verify service healthy after Repair
+        run: |
+          sleep 3
+          sudo systemctl is-active dcim
+          curl -fsS http://127.0.0.1:18974/api/health | grep -q '"status":"ok"'
+
+      - name: Delete test data, roll back, verify restored
+        run: |
+          sudo mysql -u root dcim_test -e "DELETE FROM locations WHERE name='CiTestDC';"
+          SNAPSHOT=$(sudo cat /opt/dcim/.last-pre-change-backup)
+          echo "Rolling back to: $SNAPSHOT"
+          echo y | sudo bash packaging/linux/rollback.sh "$SNAPSHOT"
+          sleep 3
+          TOKEN=$(curl -fsS -X POST http://127.0.0.1:18974/api/auth/login -H 'Content-Type: application/json' -d '{"username":"ciadmin","password":"CiAdminPass123!"}' | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>console.log(JSON.parse(d).token))")
+          curl -fsS http://127.0.0.1:18974/api/locations -H "Authorization: Bearer $TOKEN" | grep -q CiTestDC
+          echo "Rollback restored the deleted data. Full lifecycle verified on Ubuntu with real systemd."
+
+  # RockyLinux/AlmaLinux containers can't run systemd as PID 1 under GitHub
+  # Actions (same limitation this whole project was developed under locally),
+  # so this verifies the .rpm installs cleanly and lays down the right files/
+  # utilities - not full service-lifecycle, which test-ubuntu-systemd-lifecycle
+  # above covers for the systemd logic shared across every Linux target.
+  test-rpm-distro-install:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: ["rockylinux:9", "almalinux:9"]
+    container: ${{ matrix.image }}
+    steps:
+      - name: Install build tools
+        run: dnf install -y rpm-build git tar which
+
+      - uses: actions/checkout@v4
+
+      - name: Build .rpm
+        run: bash packaging/linux/build-rpm.sh
+
+      - name: Install the .rpm
+        run: dnf install -y ./dist/dcim-*.rpm
+
+      - name: Verify package layout and utilities
+        run: |
+          test -x /usr/share/dcim/install.sh
+          test -x /usr/share/dcim/uninstall.sh
+          test -x /usr/share/dcim/rollback.sh
+          test -x /usr/bin/dcim-setup
+          test -x /usr/bin/dcim-service
+          test -x /usr/bin/dcim-upgrade
+          test -x /usr/bin/dcim-repair
+          test -d /usr/share/dcim/webapp/node_modules
+          test -f /usr/share/dcim/webapp/schema.sql
+          echo "Package layout verified on ${{ matrix.image }}."

@@ -10,6 +10,105 @@ changes all already existed in `server.js` before any of this work started.
 What follows deliberately keeps that code untouched and adds only what was
 genuinely missing, as thin, additive layers.
 
+## Gap-closure round (post pre-UAT review)
+
+A pre-UAT validation pass found a specific, named list of gaps. All of them
+are closed now; two real bugs were also found and fixed along the way
+(discovered only by actually running the installer, not by reading it):
+
+- **`app_settings` now included in Backup/Restore** (`BACKUP_TABLES` in
+  `server.js`) — a restore used to silently drop org/branding settings and
+  the Infrastructure wizard's OME/OneView/SMTP config. Zero changes to the
+  restore mechanism itself were needed: it already iterated `BACKUP_TABLES`
+  generically, so this was a one-line fix. Verified by a real backup →
+  wipe → restore cycle (see **Real execution evidence** below).
+- **Department / Organization Unit** fields added to Organization settings.
+- **Favicon upload** (`POST /api/setup/favicon`, served at `/favicon.ico` —
+  browsers request that path by convention, so it works with zero changes
+  to `index.html` or the compiled frontend bundle).
+- **Admin account is now configurable** at install time (`--admin-user` /
+  `--admin-password` on Linux, `-AdminUser` / `-AdminPassword` on Windows,
+  or `POST /api/setup/admin-account` directly) instead of being permanently
+  `admin`/`admin`. Force Password Change still applies exactly as before
+  when the default is left in place.
+- **Database tab** added to the Setup Wizard — shows the live connection and
+  lets you test candidate credentials. It cannot hot-swap the live
+  connection (that's a `pool` object created once at process startup); the
+  tab says so and points at the installer's `--db-*` flags / `.env` instead.
+- **Security tab** added — JWT Secret (generate + set), CSP Mode, and Audit
+  Retention. Same constraint as the Database tab and for the same reason
+  (all three are consts read once from `.env` at startup in the existing
+  security code, which was left untouched): changes write to `.env` and
+  need a restart, which the UI states plainly.
+- **Backup Retention is now truly configurable** (`app_settings`-backed, no
+  restart needed) via the existing `/api/backup/settings` endpoint — default
+  raised from the old hardcoded 3 days to 7.
+- **Config Export/Import now covers Security settings** (CSP Mode, Audit
+  Retention, and an optionally-included JWT Secret) as an opt-in, separately
+  from the rest of the bundle. The JWT Secret is encrypted under an
+  admin-chosen passphrase (not the server's own `JWT_SECRET`, which would
+  make it undecryptable on any *other* server — defeating the point of
+  exporting it for DR/migration).
+- **Dedicated `dcim-upgrade` / `dcim-repair` utilities** (Linux: `/usr/bin/`;
+  Windows: Start Menu shortcuts + `.ps1` files) alongside `install.sh
+  --mode upgrade/repair`, which they call internally unchanged.
+- **Bug fix: `DB_PORT` was silently ignored.** `server.js`'s `DB_CONFIG` never
+  read it, so a non-default MySQL port set via the installer's `--db-port`
+  flag had no effect — it always connected on 3306. One-line fix
+  (`port: Number(process.env.DB_PORT) || 3306`); default behavior unchanged.
+- **Bug fix: schema import used the wrong database.** `install.sh`'s /
+  `install.ps1`'s schema-import step piped `schema.sql` straight into
+  `mysql -D <configured db>`, but `schema.sql` itself starts with its own
+  `CREATE DATABASE datacenter_db; USE datacenter_db;` — overriding whatever
+  database the installer actually configured and failing with Access Denied
+  the moment the DB user wasn't also granted on that literal hardcoded name.
+  Fixed by removing the step entirely: `server.js`'s own `ensureDatabase()`/
+  `initDB()` already create and populate the schema automatically on first
+  start (confirmed by running it, repeatedly, during this work) — the manual
+  import was both redundant and broken.
+- **Bug fix: a new endpoint was blocked by the existing password-change
+  gate.** `/api/setup/admin-account` wasn't in `MUST_CHANGE_ALLOWED`, so the
+  installer's own `apply_admin_account` step couldn't reach it right after a
+  fresh install (where the seeded account is always flagged
+  `must_change_password`). Fixed by adding one path to that existing
+  allowlist — the same allowlist `PATCH /api/auth/change-password` is
+  already in, for the same reason.
+
+### Real execution evidence
+
+The previous round's audit noted several things were code-reviewed but
+never actually run. This round closes that gap as far as this sandbox
+allows, and hands the rest to CI:
+
+- **In this sandbox** (no systemd — verified `PID 1` is a container
+  supervisor, not `systemd`; `systemctl` fails immediately): installed for
+  real against a live MariaDB, with a `systemctl` stub that performs the
+  equivalent real action (actually starts/stops the Node process) so the
+  *script logic* runs unmodified end to end. Ran, for real: fresh install →
+  populate data via the live API → `--mode upgrade` (real `mysqldump`
+  snapshot, real file re-sync, real health recheck) → verified the data and
+  the customized admin login survived → deleted a row directly in MySQL →
+  `rollback.sh` → verified the row came back → `--mode repair` → verified
+  health and data again. Also ran, directly against the live API: logo and
+  favicon upload/retrieval, the Database tab's test-connection endpoint
+  (success and failure), the Security tab's generate/save/test-email flow,
+  and Config Export/Import with Security settings (proved the passphrase
+  round-trip with a deliberately *different* JWT secret planted first, not
+  a no-op self-test).
+- **In CI** (`.github/workflows/test-lifecycle.yml`, manually triggered):
+  runs the same install → populate → upgrade → verify → repair → verify →
+  delete → rollback → verify cycle for real, on a real `windows-latest` VM
+  (real Service Control Manager, real NSSM-registered service — the one
+  platform this sandbox genuinely cannot touch) and on `ubuntu-latest`
+  (a real VM with real `systemd`, unlike this sandbox). A third job installs
+  the built `.rpm` into real `rockylinux:9` / `almalinux:9` containers and
+  verifies the package layout and utilities land correctly; it does **not**
+  test full service lifecycle there, because containers can't run `systemd`
+  as PID 1 under GitHub Actions either — the same limitation this project
+  was developed under locally. The `ubuntu-latest` job is the evidence for
+  the systemd logic shared across every Linux target; the distro jobs are
+  evidence the package itself installs cleanly.
+
 ## What's real vs. what already existed
 
 | Roadmap phase | Status | Where |
@@ -189,13 +288,16 @@ Matches the Phase 1 spec:
 ## Install / Upgrade / Repair
 
 - **Install**: creates the `dcim` system user, copies the app, generates a
-  fresh random `JWT_SECRET`, tests the DB connection, imports `schema.sql` if
-  the database is empty, installs and starts the systemd service / Windows
-  service with auto-start on boot, then polls `/api/health` until it reports
-  `"status":"ok"`.
-- **Upgrade**: snapshots the current `.env` + a file-list tarball, stops the
-  service, re-syncs application files (never touching `.env`, `uploads/`,
-  `backups/`, or `logs/`), reinstalls the service unit, restarts, and
+  fresh random `JWT_SECRET`, tests the DB connection (the app creates and
+  populates its own schema on first start — the installer doesn't import
+  `schema.sql` itself; see the bug-fix note above for why), installs and
+  starts the systemd service / Windows service with auto-start on boot, then
+  polls `/api/health` until it reports `"status":"ok"`, then applies
+  `--admin-user`/`--admin-password` if given.
+- **Upgrade**: snapshots the current `.env` + a real `mysqldump` + a
+  file-list tarball, stops the service, re-syncs application files (never
+  touching `.env`, `uploads/`, `backups/`, or `logs/`), reinstalls the
+  service unit, restarts, and
   re-checks health.
 - **Repair**: same as upgrade, plus re-creates the system user/service file
   and re-applies file ownership/permissions if they drifted — for a box where
@@ -277,3 +379,16 @@ separate appliance variant.
 - Phase 10 (multi-tenant branding, license tiers, automated online updates,
   HA mode) is explicitly not implemented, matching the roadmap's own
   instruction that it's future scope, not initial packaging.
+- OME/OneView reachability and SMTP send were tested against deliberately
+  unreachable hosts and a local fake SMTP server respectively, to confirm
+  failures surface correctly end to end. Neither was tested against a real
+  Dell OME / HPE OneView appliance — one wasn't available in this sandbox
+  or in CI.
+- `test-lifecycle.yml` is `workflow_dispatch`-only (not run on every push),
+  since it provisions real databases and takes several minutes per OS —
+  trigger it deliberately before a release, not as routine CI.
+- The `rockylinux:9`/`almalinux:9` jobs in `test-lifecycle.yml` verify package
+  *installation*, not service lifecycle (no systemd in a GitHub Actions
+  container, on any distro) — `test-ubuntu-systemd-lifecycle` is the real
+  systemd evidence, and it exercises the identical install.sh/systemd-unit
+  logic those two distros would run.

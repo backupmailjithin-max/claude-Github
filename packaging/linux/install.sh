@@ -26,6 +26,10 @@ DB_USER="dcim"
 DB_PASSWORD=""
 DB_NAME="dcim"
 CORS_ORIGIN=""
+ADMIN_USER=""
+ADMIN_PASSWORD=""
+CSP_MODE="report-only"
+AUDIT_RETENTION_DAYS="365"
 ASSUME_YES=0
 PURGE_DATA=0
 
@@ -46,6 +50,10 @@ Options:
   --db-password PASS
   --db-name NAME         (default: dcim)
   --cors-origin ORIGIN
+  --admin-user USER     (install only) replace the seeded "admin" username on first install
+  --admin-password PASS (install only) replace the seeded "admin" password on first install
+  --csp-mode MODE       enforce | report-only (default) | off
+  --audit-retention-days N  days of audit log to keep; 0 = forever (default: 365)
   --yes                 non-interactive, assume defaults / confirmations
   --purge-data          (uninstall only) also remove the database and data files
   -h, --help            show this help
@@ -62,6 +70,10 @@ while [ $# -gt 0 ]; do
     --db-password) DB_PASSWORD="$2"; shift 2 ;;
     --db-name) DB_NAME="$2"; shift 2 ;;
     --cors-origin) CORS_ORIGIN="$2"; shift 2 ;;
+    --admin-user) ADMIN_USER="$2"; shift 2 ;;
+    --admin-password) ADMIN_PASSWORD="$2"; shift 2 ;;
+    --csp-mode) CSP_MODE="$2"; shift 2 ;;
+    --audit-retention-days) AUDIT_RETENTION_DAYS="$2"; shift 2 ;;
     --yes) ASSUME_YES=1; shift ;;
     --purge-data) PURGE_DATA=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -199,6 +211,8 @@ test_db_connection() {
 
 write_env_file() {
   local jwt_secret
+  case "$CSP_MODE" in enforce|report-only|off) ;; *) die "--csp-mode must be enforce, report-only, or off (got: $CSP_MODE)" ;; esac
+  case "$AUDIT_RETENTION_DAYS" in ''|*[!0-9]*) die "--audit-retention-days must be a non-negative whole number (got: $AUDIT_RETENTION_DAYS)" ;; esac
   jwt_secret="$(random_secret)"
   install -d -m 750 -o "$SERVICE_USER" -g "$SERVICE_USER" "$(dirname "$ENV_FILE")"
   cat > "$ENV_FILE" <<EOF
@@ -210,6 +224,8 @@ DB_PASSWORD=$DB_PASSWORD
 DB_NAME=$DB_NAME
 JWT_SECRET=$jwt_secret
 CORS_ORIGIN=$CORS_ORIGIN
+CSP_MODE=$CSP_MODE
+AUDIT_RETENTION_DAYS=$AUDIT_RETENTION_DAYS
 NODE_ENV=production
 EOF
   chmod 600 "$ENV_FILE"
@@ -253,20 +269,6 @@ install_systemd_unit() {
   systemctl daemon-reload
   systemctl enable "$SERVICE_NAME" >/dev/null
   log "Installed and enabled systemd service '$SERVICE_NAME' (auto-start on boot)."
-}
-
-import_schema_if_fresh() {
-  local mysql_bin
-  mysql_bin="$(command -v mysql || true)"
-  [ -n "$mysql_bin" ] || { log "mysql client not found; the application will create/verify the schema on first start."; return 0; }
-  local pw_arg=()
-  [ -n "$DB_PASSWORD" ] && pw_arg=(-p"$DB_PASSWORD")
-  if ! "$mysql_bin" -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" "${pw_arg[@]}" -e "USE \`$DB_NAME\`; SHOW TABLES;" 2>/dev/null | grep -q .; then
-    log "Importing schema.sql into database '$DB_NAME' ..."
-    "$mysql_bin" -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" "${pw_arg[@]}" "$DB_NAME" < "$INSTALL_DIR/webapp/schema.sql"
-  else
-    log "Database '$DB_NAME' already has tables; skipping schema import."
-  fi
 }
 
 backup_before_change() {
@@ -313,17 +315,48 @@ wait_for_health() {
   return 1
 }
 
+json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+apply_admin_account() {
+  [ -n "$ADMIN_USER" ] || [ -n "$ADMIN_PASSWORD" ] || return 0
+  local login_resp token payload
+  login_resp="$(curl -fsS -m 10 -X POST "http://127.0.0.1:${PORT}/api/auth/login" \
+    -H 'Content-Type: application/json' -d '{"username":"admin","password":"admin"}' 2>/dev/null || true)"
+  token="$(printf '%s' "$login_resp" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+  if [ -z "$token" ]; then
+    log "Skipping --admin-user/--admin-password: the default admin/admin login no longer works (already customized on a previous run, or this is an Upgrade/Repair, not a fresh install)."
+    return 0
+  fi
+  payload="{"
+  [ -n "$ADMIN_USER" ] && payload="${payload}\"newUsername\":\"$(json_escape "$ADMIN_USER")\""
+  if [ -n "$ADMIN_PASSWORD" ]; then
+    [ "$payload" != "{" ] && payload="${payload},"
+    payload="${payload}\"newPassword\":\"$(json_escape "$ADMIN_PASSWORD")\""
+  fi
+  payload="${payload}}"
+  if curl -fsS -m 10 -X POST "http://127.0.0.1:${PORT}/api/setup/admin-account" \
+      -H 'Content-Type: application/json' -H "Authorization: Bearer $token" -d "$payload" >/dev/null 2>&1; then
+    log "Admin account customized (username/password applied as requested)."
+  else
+    err "Could not apply --admin-user/--admin-password; the seeded admin/admin account is still in place. Re-run with --mode repair or sign in and change it via the Setup Wizard."
+  fi
+}
+
 do_install() {
   run_validations
   ensure_service_user
   sync_payload
   write_env_file
   test_db_connection
-  import_schema_if_fresh
   install_systemd_unit
   systemctl restart "$SERVICE_NAME"
   wait_for_health
-  log "$APP_NAME installed. Sign in as admin / admin and change the password immediately."
+  apply_admin_account
+  if [ -n "$ADMIN_USER" ] || [ -n "$ADMIN_PASSWORD" ]; then
+    log "$APP_NAME installed. Sign in with the admin credentials you provided."
+  else
+    log "$APP_NAME installed. Sign in as admin / admin and change the password immediately."
+  fi
 }
 
 do_upgrade() {

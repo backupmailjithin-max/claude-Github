@@ -32,6 +32,8 @@ Source: "install.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "uninstall.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "rollback.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "dcim-service.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dcim-upgrade.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dcim-repair.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\dcim\webapp\*"; DestDir: "{app}\webapp"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: ".env,uploads\*,backups\*,logs\*"
 Source: "runtime\node\*"; DestDir: "{app}\runtime\node"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "tools\nssm.exe"; DestDir: "{app}\tools"; Flags: ignoreversion skipifsourcedoesntexist
@@ -43,6 +45,8 @@ Name: "{app}\webapp\logs"
 
 [Icons]
 Name: "{group}\DCIM Setup / Repair"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install.ps1"" -InstallDir ""{app}"""
+Name: "{group}\DCIM Upgrade Utility"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\dcim-upgrade.ps1"" -InstallDir ""{app}"""
+Name: "{group}\DCIM Repair Utility"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\dcim-repair.ps1"" -InstallDir ""{app}"""
 Name: "{group}\DCIM Service Status"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\dcim-service.ps1"" -Action status"
 Name: "{group}\DCIM Configuration Wizard"; Filename: "http://localhost:8974/setup-wizard.html"
 Name: "{group}\DCIM Deployment Dashboard"; Filename: "http://localhost:8974/deployment-dashboard.html"

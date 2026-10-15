@@ -8,9 +8,11 @@
 // place, so none of the app's current behavior is touched.
 'use strict';
 const crypto = require('crypto');
+const mysql = require('mysql2/promise');
 const { testSmtp } = require('./smtp-client');
 
-const ORG_KEYS = ['companyName', 'appName', 'footerText', 'supportEmail', 'supportContact', 'logoPath'];
+const ORG_KEYS = ['companyName', 'appName', 'department', 'orgUnit', 'footerText', 'supportEmail', 'supportContact', 'logoPath', 'faviconPath'];
+const ORG_EDITABLE_KEYS = ['companyName', 'appName', 'department', 'orgUnit', 'footerText', 'supportEmail', 'supportContact'];
 const MONITORING_SETTING_KEY = 'integrations.monitoring';
 const SMTP_SETTING_KEY = 'integrations.smtp';
 const SETUP_COMPLETE_KEY = 'setup.completedAt';
@@ -44,10 +46,10 @@ function decryptSecret(secret, blob) {
 
 module.exports = function registerSetupRoutes(app, deps) {
   const {
-    pool, fs, path, multer, log, httpErr, sendErr,
+    pool, fs, path, multer, log, httpErr, sendErr, bcrypt,
     authenticateToken, requireGlobalAdmin,
     getSetting, setSetting, genId, normalizeHardwareType,
-    APP_VERSION, JWT_SECRET, DB_NAME, testConnection,
+    APP_VERSION, JWT_SECRET, DB_NAME, DB_CONFIG, testConnection,
     getOmeToken, getOneviewSession, monitorEnvKey,
     validateBackupDir, backupConfig, ocrEngine, webappDir,
   } = deps;
@@ -74,6 +76,7 @@ module.exports = function registerSetupRoutes(app, deps) {
         companyName: org.companyName || 'DCIM Dashboard',
         appName: org.appName || 'DCIM Dashboard',
         logoUrl: org.logoPath || '',
+        faviconUrl: org.faviconPath || '',
       });
     } catch (e) { sendErr(res, e); }
   });
@@ -85,11 +88,132 @@ module.exports = function registerSetupRoutes(app, deps) {
   app.put('/api/setup/organization', authenticateToken, requireGlobalAdmin, async (req, res) => {
     try {
       const body = req.body || {};
-      for (const k of ['companyName', 'appName', 'footerText', 'supportEmail', 'supportContact']) {
+      for (const k of ORG_EDITABLE_KEYS) {
         if (body[k] !== undefined) await setSetting(`org.${k}`, String(body[k]).slice(0, 500));
       }
       if (!(await getSetting(SETUP_COMPLETE_KEY, ''))) await setSetting(SETUP_COMPLETE_KEY, new Date().toISOString());
       res.json(await readOrgSettings());
+    } catch (e) { sendErr(res, e); }
+  });
+
+  // Lets the installer (or an Admin, post-install) replace the seeded default
+  // admin/admin credentials with a chosen username/password, in one call, as
+  // part of first-run setup. Only ever touches the CALLER'S OWN account (never
+  // another user's) - it is a thin wrapper around the exact same users-table
+  // update the existing change-password endpoint already does, so the
+  // must_change_password / password_changed_at bookkeeping behaves identically:
+  // a deliberately-chosen password here is not flagged for a forced change,
+  // while leaving the password at its default still gets caught by the
+  // existing flagDefaultPasswordAccounts() check, unchanged.
+  app.post('/api/setup/admin-account', authenticateToken, requireGlobalAdmin, async (req, res) => {
+    try {
+      const { newUsername, newPassword } = req.body || {};
+      if (!newUsername && !newPassword) return res.status(400).json({ error: 'Provide newUsername and/or newPassword.' });
+      if (newUsername !== undefined) {
+        const uname = String(newUsername).trim();
+        if (!/^[A-Za-z0-9._-]{3,50}$/.test(uname)) return res.status(400).json({ error: 'Username must be 3-50 characters: letters, numbers, dot, underscore, or hyphen.' });
+        try {
+          await pool.query('UPDATE users SET username = ? WHERE id = ?', [uname, req.user.id]);
+        } catch (e) {
+          if (e.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: `Username "${uname}" is already taken.` });
+          throw e;
+        }
+      }
+      if (newPassword !== undefined) {
+        if (String(newPassword).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+        const hash = await bcrypt.hash(String(newPassword), 10);
+        await pool.query('UPDATE users SET password_hash = ?, must_change_password = 0, password_changed_at = NOW() WHERE id = ?', [hash, req.user.id]);
+      }
+      res.json({ success: true });
+    } catch (e) { sendErr(res, e); }
+  });
+
+  // ---------- database (view current connection + test candidate credentials) ----------
+  // Deliberately does NOT change the live connection: DB_HOST/PORT/NAME/USER/PASSWORD are
+  // only ever read once at process startup from .env (see DB_CONFIG in server.js), and
+  // switching them live would mean tearing down and recreating `pool` while requests may
+  // be in flight -- out of scope for a packaging fix. This gives the wizard a way to
+  // view what's currently connected and test new credentials BEFORE an admin edits .env
+  // and restarts (via the installer's --db-* flags or by hand), catching typos early.
+  app.get('/api/setup/database', authenticateToken, requireGlobalAdmin, async (req, res) => {
+    try {
+      res.json({ host: DB_CONFIG.host, port: DB_CONFIG.port, name: DB_NAME, user: DB_CONFIG.user, connected: !!(await testConnection().catch(() => false)) });
+    } catch (e) { sendErr(res, e); }
+  });
+  app.post('/api/setup/database/test', authenticateToken, requireGlobalAdmin, async (req, res) => {
+    try {
+      const { host, port, name, user, password } = req.body || {};
+      if (!host || !user) throw httpErr(400, 'Host and username are required.');
+      let conn;
+      try {
+        conn = await mysql.createConnection({ host: String(host), port: Number(port) || 3306, user: String(user), password: password || '', connectTimeout: 8000 });
+        if (name) await conn.query(`USE \`${String(name).replace(/`/g, '')}\``);
+        await conn.query('SELECT 1');
+      } finally {
+        if (conn) await conn.end().catch(() => {});
+      }
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message });
+    }
+  });
+
+  // ---------- security (JWT secret / CSP mode / audit retention) ----------
+  // JWT_SECRET, CSP_MODE, and AUDIT_RETENTION_DAYS are all read ONCE from .env at process
+  // startup by the existing (untouched) security code in server.js - rotating JWT_SECRET
+  // live would invalidate every signed-in session instantly and mid-request, and CSP_MODE /
+  // AUDIT_RETENTION_DAYS are consts closed over by code that runs once at startup. Changing
+  // any of them safely means writing the new value to .env and restarting the service - the
+  // exact same "edit .env, then restart" pattern the Database tab above already uses, not a
+  // live override. Backup Retention is the one exception: it's already DB-backed (Phase 3/7)
+  // and takes effect immediately via the existing /api/backup/settings endpoint.
+  const envPath = path.join(webappDir, '.env');
+  function readEnvRaw() { try { return fs.readFileSync(envPath, 'utf8'); } catch (e) { return ''; } }
+  function readEnvVar(key) { const m = readEnvRaw().match(new RegExp(`^${key}=(.*)$`, 'm')); return m ? m[1] : ''; }
+  function writeEnvVar(key, value) {
+    const raw = readEnvRaw();
+    const line = `${key}=${value}`;
+    const re = new RegExp(`^${key}=.*$`, 'm');
+    const next = re.test(raw) ? raw.replace(re, line) : (raw && !raw.endsWith('\n') ? raw + '\n' : raw) + line + '\n';
+    fs.writeFileSync(envPath, next, { mode: 0o600 });
+  }
+
+  app.get('/api/setup/security', authenticateToken, requireGlobalAdmin, async (req, res) => {
+    try {
+      const cfg = await backupConfig();
+      res.json({
+        cspMode: readEnvVar('CSP_MODE') || 'report-only',
+        auditRetentionDays: readEnvVar('AUDIT_RETENTION_DAYS') || '365',
+        jwtSecretConfigured: !!readEnvVar('JWT_SECRET'),
+        backupRetentionDays: cfg.retentionDays,
+      });
+    } catch (e) { sendErr(res, e); }
+  });
+
+  app.post('/api/setup/security/generate-jwt-secret', authenticateToken, requireGlobalAdmin, (req, res) => {
+    res.json({ secret: crypto.randomBytes(32).toString('hex') });
+  });
+
+  app.put('/api/setup/security', authenticateToken, requireGlobalAdmin, async (req, res) => {
+    try {
+      const { cspMode, auditRetentionDays, jwtSecret } = req.body || {};
+      const changed = [];
+      if (cspMode !== undefined) {
+        if (!['enforce', 'report-only', 'off'].includes(cspMode)) throw httpErr(400, 'cspMode must be enforce, report-only, or off.');
+        writeEnvVar('CSP_MODE', cspMode); changed.push('CSP_MODE');
+      }
+      if (auditRetentionDays !== undefined) {
+        const n = Number(auditRetentionDays);
+        if (!Number.isFinite(n) || n < 0 || n > 3650 || Math.round(n) !== n) throw httpErr(400, 'auditRetentionDays must be a whole number of days from 0 (keep forever) to 3650.');
+        writeEnvVar('AUDIT_RETENTION_DAYS', String(n)); changed.push('AUDIT_RETENTION_DAYS');
+      }
+      if (jwtSecret !== undefined) {
+        const s = String(jwtSecret);
+        if (s.length < 32) throw httpErr(400, 'jwtSecret must be at least 32 characters. Use Generate Secure Default for a safe value.');
+        if (/[\r\n]/.test(s)) throw httpErr(400, 'jwtSecret cannot contain newlines.');
+        writeEnvVar('JWT_SECRET', s); changed.push('JWT_SECRET');
+      }
+      res.json({ success: true, changed, requiresRestart: changed.length > 0 });
     } catch (e) { sendErr(res, e); }
   });
 
@@ -111,6 +235,39 @@ module.exports = function registerSetupRoutes(app, deps) {
       await setSetting('org.logoPath', `/branding/${fname}`);
       res.json({ logoUrl: `/branding/${fname}` });
     } catch (e) { sendErr(res, e); }
+  });
+
+  const faviconUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 512 * 1024 },
+    fileFilter: (req, file, cb) => cb(null, /^image\/(x-icon|vnd\.microsoft\.icon|png)$/.test(file.mimetype)),
+  });
+  const FAVICON_MIME = { ico: 'image/x-icon', png: 'image/png' };
+  app.post('/api/setup/favicon', authenticateToken, requireGlobalAdmin, faviconUpload.single('favicon'), async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'Upload a .ico or .png favicon (max 512KB).' });
+      const ext = /png/.test(req.file.mimetype) ? 'png' : 'ico';
+      for (const old of fs.readdirSync(brandingDir)) { if (/^favicon\./.test(old)) fs.unlinkSync(path.join(brandingDir, old)); }
+      const fname = `favicon.${ext}`;
+      fs.writeFileSync(path.join(brandingDir, fname), req.file.buffer);
+      await setSetting('org.faviconPath', `/branding/${fname}`);
+      res.json({ faviconUrl: `/branding/${fname}` });
+    } catch (e) { sendErr(res, e); }
+  });
+  // Browsers request /favicon.ico by convention regardless of any <link> tag in
+  // index.html, so this makes an uploaded favicon appear without touching the
+  // compiled frontend at all. No upload yet -> 404, same as if the file never existed.
+  app.get('/favicon.ico', async (req, res) => {
+    try {
+      const faviconPath = await getSetting('org.faviconPath', '');
+      if (!faviconPath) return res.status(404).end();
+      const ext = faviconPath.slice(faviconPath.lastIndexOf('.') + 1);
+      const full = path.join(brandingDir, `favicon.${ext}`);
+      if (!fs.existsSync(full)) return res.status(404).end();
+      res.set('Content-Type', FAVICON_MIME[ext] || 'application/octet-stream');
+      res.set('Cache-Control', 'public, max-age=3600');
+      fs.createReadStream(full).pipe(res);
+    } catch (e) { res.status(404).end(); }
   });
 
   // ---------- Dell OME / HPE OneView / SMTP (infra wizard) ----------
@@ -294,24 +451,56 @@ module.exports = function registerSetupRoutes(app, deps) {
 
   // ---------- configuration export / import (DR / UAT-to-prod / rollouts) ----------
 
+  async function buildExportBundle(req) {
+    const [[locations], [zones], [hardwareTypes], [rackTypes]] = await Promise.all([
+      pool.query('SELECT id, name FROM locations'),
+      pool.query('SELECT id, site, zone_name FROM zones'),
+      pool.query('SELECT id, name, category, default_height FROM hardware_types'),
+      pool.query('SELECT id, name FROM rack_types'),
+    ]);
+    const monitoring = (await readMonitoringEntries()).map((e) => ({ product: e.product, site: e.site, zone: e.zone, host: e.host, user: e.user })); // credentials never leave the server
+    const smtp = await readSmtpSettings();
+    const bundle = {
+      format: 'dcim-config-bundle', version: 1, exportedAt: new Date().toISOString(), exportedBy: req.user.name || req.user.username, appVersion: APP_VERSION,
+      organization: await readOrgSettings(),
+      locations, zones, hardwareTypes, rackTypes,
+      monitoring,
+      smtp: smtp ? { host: smtp.host, port: smtp.port, secure: smtp.secure, user: smtp.user, fromAddress: smtp.fromAddress } : null,
+      backup: await backupConfig(),
+    };
+    // Security settings are opt-in and separate from the rest of the bundle: CSP mode and
+    // audit retention aren't secret, but the JWT secret is, and it needs to be decryptable
+    // on a DIFFERENT server (that's the point of exporting it for DR/UAT-to-prod) - so unlike
+    // the OME/OneView passwords above, it can't be encrypted under THIS server's own
+    // JWT_SECRET (that would make it undecryptable anywhere else by definition). It's
+    // encrypted under an admin-supplied passphrase instead, reusing the same AES-256-GCM
+    // helpers, and only included at all if the caller explicitly asks for it.
+    if (req.body && req.body.includeSecurity) {
+      if (!req.body.securityPassphrase || String(req.body.securityPassphrase).length < 8) {
+        throw httpErr(400, 'securityPassphrase (at least 8 characters) is required to include security settings in the export.');
+      }
+      const currentJwtSecret = readEnvVar('JWT_SECRET') || JWT_SECRET;
+      bundle.security = {
+        cspMode: readEnvVar('CSP_MODE') || 'report-only',
+        auditRetentionDays: readEnvVar('AUDIT_RETENTION_DAYS') || '365',
+        jwtSecretEnc: encryptSecret(req.body.securityPassphrase, currentJwtSecret),
+      };
+    }
+    return bundle;
+  }
+
   app.get('/api/setup/export', authenticateToken, requireGlobalAdmin, async (req, res) => {
     try {
-      const [[locations], [zones], [hardwareTypes], [rackTypes]] = await Promise.all([
-        pool.query('SELECT id, name FROM locations'),
-        pool.query('SELECT id, site, zone_name FROM zones'),
-        pool.query('SELECT id, name, category, default_height FROM hardware_types'),
-        pool.query('SELECT id, name FROM rack_types'),
-      ]);
-      const monitoring = (await readMonitoringEntries()).map((e) => ({ product: e.product, site: e.site, zone: e.zone, host: e.host, user: e.user })); // credentials never leave the server
-      const smtp = await readSmtpSettings();
-      const bundle = {
-        format: 'dcim-config-bundle', version: 1, exportedAt: new Date().toISOString(), exportedBy: req.user.name || req.user.username, appVersion: APP_VERSION,
-        organization: await readOrgSettings(),
-        locations, zones, hardwareTypes, rackTypes,
-        monitoring,
-        smtp: smtp ? { host: smtp.host, port: smtp.port, secure: smtp.secure, user: smtp.user, fromAddress: smtp.fromAddress } : null,
-        backup: await backupConfig(),
-      };
+      const bundle = await buildExportBundle(req);
+      res.setHeader('Content-Disposition', `attachment; filename="dcim-config-${new Date().toISOString().slice(0, 10)}.json"`);
+      res.json(bundle);
+    } catch (e) { sendErr(res, e); }
+  });
+  // Same export, but accepts a body so includeSecurity/securityPassphrase never ride in a URL
+  // (query strings get logged by proxies/servers; a POST body does not).
+  app.post('/api/setup/export', authenticateToken, requireGlobalAdmin, async (req, res) => {
+    try {
+      const bundle = await buildExportBundle(req);
       res.setHeader('Content-Disposition', `attachment; filename="dcim-config-${new Date().toISOString().slice(0, 10)}.json"`);
       res.json(bundle);
     } catch (e) { sendErr(res, e); }
@@ -327,7 +516,7 @@ module.exports = function registerSetupRoutes(app, deps) {
       const summary = { locations: 0, zones: 0, hardwareTypes: 0, rackTypes: 0, monitoring: 0 };
 
       if (bundle.organization) {
-        for (const k of ['companyName', 'appName', 'footerText', 'supportEmail', 'supportContact']) {
+        for (const k of ORG_EDITABLE_KEYS) {
           if (bundle.organization[k]) await setSetting(`org.${k}`, String(bundle.organization[k]).slice(0, 500));
         }
       }
@@ -360,7 +549,21 @@ module.exports = function registerSetupRoutes(app, deps) {
         await setSetting(MONITORING_SETTING_KEY, JSON.stringify(next));
       }
 
-      res.json({ success: true, imported: summary, note: summary.monitoring ? 'Imported monitoring entries have no password - add credentials in the Infrastructure wizard before testing them.' : undefined });
+      let securityNote;
+      if (bundle.security) {
+        const changed = [];
+        if (bundle.security.cspMode && ['enforce', 'report-only', 'off'].includes(bundle.security.cspMode)) { writeEnvVar('CSP_MODE', bundle.security.cspMode); changed.push('CSP_MODE'); }
+        if (bundle.security.auditRetentionDays !== undefined) { writeEnvVar('AUDIT_RETENTION_DAYS', String(bundle.security.auditRetentionDays)); changed.push('AUDIT_RETENTION_DAYS'); }
+        if (bundle.security.jwtSecretEnc) {
+          const pass = req.body && req.body.securityPassphrase;
+          const decrypted = pass ? decryptSecret(pass, bundle.security.jwtSecretEnc) : '';
+          if (decrypted && decrypted.length >= 32) { writeEnvVar('JWT_SECRET', decrypted); changed.push('JWT_SECRET'); }
+          else securityNote = pass ? 'JWT secret in the bundle could not be decrypted with that passphrase - it was not changed.' : 'The bundle includes an encrypted JWT secret, but no securityPassphrase was provided - it was not changed.';
+        }
+        if (changed.length) securityNote = `Security settings written to .env (${changed.join(', ')}) - restart the service for these to take effect.` + (securityNote ? ' ' + securityNote : '');
+      }
+
+      res.json({ success: true, imported: summary, note: summary.monitoring ? 'Imported monitoring entries have no password - add credentials in the Infrastructure wizard before testing them.' : undefined, securityNote });
     } catch (e) { sendErr(res, e); }
   });
 

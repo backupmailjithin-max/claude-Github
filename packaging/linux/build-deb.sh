@@ -29,7 +29,9 @@ cp "$SCRIPT_DIR/nginx-dcim.conf" "$STAGE/usr/share/dcim/nginx-dcim.conf"
 chmod 755 "$STAGE/usr/share/dcim/install.sh" "$STAGE/usr/share/dcim/uninstall.sh" "$STAGE/usr/share/dcim/rollback.sh"
 
 cp "$SCRIPT_DIR/dcim-service.sh" "$STAGE/usr/bin/dcim-service"
-chmod 755 "$STAGE/usr/bin/dcim-service"
+cp "$SCRIPT_DIR/dcim-upgrade.sh" "$STAGE/usr/bin/dcim-upgrade"
+cp "$SCRIPT_DIR/dcim-repair.sh" "$STAGE/usr/bin/dcim-repair"
+chmod 755 "$STAGE/usr/bin/dcim-service" "$STAGE/usr/bin/dcim-upgrade" "$STAGE/usr/bin/dcim-repair"
 
 cp -a "$REPO_ROOT/dcim/webapp" "$STAGE/usr/share/dcim/webapp"
 rm -rf "$STAGE/usr/share/dcim/webapp/.env" \

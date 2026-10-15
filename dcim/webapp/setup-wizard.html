@@ -65,7 +65,9 @@
   <nav>
     <button class="active" data-tab="org">Organization &amp; Branding</button>
     <button data-tab="catalog">Default Catalog</button>
+    <button data-tab="database">Database</button>
     <button data-tab="infra">Infrastructure</button>
+    <button data-tab="security">Security</button>
     <button data-tab="export">Export / Import</button>
   </nav>
   <main>
@@ -76,6 +78,10 @@
       <input type="text" id="orgCompanyName">
       <label>Application Name</label>
       <input type="text" id="orgAppName">
+      <div class="row">
+        <div><label>Department</label><input type="text" id="orgDepartment"></div>
+        <div><label>Organization Unit</label><input type="text" id="orgOrgUnit"></div>
+      </div>
       <label>Footer Text</label>
       <input type="text" id="orgFooterText">
       <div class="row">
@@ -92,6 +98,26 @@
         <div class="hint">PNG, JPEG, or SVG, max 2MB.</div>
         <div class="msg" id="logoMsg"></div>
       </fieldset>
+
+      <fieldset>
+        <legend>Favicon</legend>
+        <input type="file" id="faviconFile" accept="image/x-icon,image/png,.ico">
+        <button class="btn secondary" onclick="uploadFavicon()">Upload</button>
+        <div class="hint">.ico or .png, max 512KB. Served at /favicon.ico — appears in the browser tab after a hard refresh.</div>
+        <div class="msg" id="faviconMsg"></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Administrator Account</legend>
+        <p class="hint">Only works once, right after a fresh install, while the seeded admin/admin credentials are still active.</p>
+        <div class="row">
+          <div><label>New Admin Username</label><input type="text" id="adminNewUsername" placeholder="leave blank to keep 'admin'"></div>
+          <div><label>New Admin Password</label><input type="password" id="adminNewPassword" placeholder="leave blank to keep current"></div>
+        </div>
+        <button class="btn secondary" onclick="updateAdminAccount()">Apply</button>
+        <div class="hint">Force Password Change still applies: if you leave the password as the shipped default, the account is flagged to change it at next sign-in, same as before.</div>
+        <div class="msg" id="adminMsg"></div>
+      </fieldset>
     </section>
 
     <section class="panel" id="tab-catalog">
@@ -99,6 +125,34 @@
       <p class="hint">Seeds the standard hardware types (Dell Server, HPE Server, Storage, Switch, Firewall, Load Balancer, HSM, PDU, ATS, Others) and rack types (Compute, Storage, Network, Backup, Management, Custom). Existing entries are never modified or duplicated — safe to run more than once.</p>
       <button class="btn" onclick="seedDefaults()">Seed Defaults</button>
       <div class="msg" id="seedMsg"></div>
+    </section>
+
+    <section class="panel" id="tab-database">
+      <h2>Database</h2>
+      <p class="hint">This shows the database the running server is actually connected to right now. Changing it takes effect only after editing the server's <code>.env</code> (or re-running the installer with <code>--db-host</code>/<code>--db-port</code>/<code>--db-name</code>/<code>--db-user</code>/<code>--db-password</code>) and restarting the service — this page cannot switch the live connection without a restart. Use Test Connection below to check new credentials before you do that.</p>
+      <table><tbody>
+        <tr><td style="color:var(--muted)">Host</td><td id="dbCurHost">—</td></tr>
+        <tr><td style="color:var(--muted)">Port</td><td id="dbCurPort">—</td></tr>
+        <tr><td style="color:var(--muted)">Database</td><td id="dbCurName">—</td></tr>
+        <tr><td style="color:var(--muted)">User</td><td id="dbCurUser">—</td></tr>
+        <tr><td style="color:var(--muted)">Status</td><td id="dbCurStatus">—</td></tr>
+      </tbody></table>
+
+      <fieldset>
+        <legend>Test New Credentials</legend>
+        <div class="row">
+          <div><label>Database Host</label><input type="text" id="dbTestHost"></div>
+          <div><label>Database Port</label><input type="number" id="dbTestPort" value="3306"></div>
+        </div>
+        <div class="row">
+          <div><label>Database Name</label><input type="text" id="dbTestName"></div>
+          <div><label>Username</label><input type="text" id="dbTestUser"></div>
+        </div>
+        <label>Password</label>
+        <input type="password" id="dbTestPassword">
+        <button class="btn secondary" onclick="testDatabase()">Test Connection</button>
+        <div class="msg" id="dbMsg"></div>
+      </fieldset>
     </section>
 
     <section class="panel" id="tab-infra">
@@ -144,15 +198,66 @@
       </fieldset>
     </section>
 
+    <section class="panel" id="tab-security">
+      <h2>Security</h2>
+      <p class="hint">JWT Secret, CSP Mode, and Audit Retention are read from the server's <code>.env</code> once at startup, so saving a change here writes it to <code>.env</code> and requires a service restart to take effect (<code>dcim-service restart</code> / <code>DCIM Upgrade or Repair Utility</code>) — it does not apply live. Backup Retention is different: it's stored in the database and applies immediately, no restart needed.</p>
+
+      <fieldset>
+        <legend>JWT Secret</legend>
+        <p class="hint">Currently configured: <span id="secJwtStatus">—</span></p>
+        <button class="btn secondary" onclick="generateJwtSecret()">Generate Secure Default</button>
+        <label>New JWT Secret</label>
+        <input type="text" id="secJwtSecret" placeholder="generate one above, or paste your own (min 32 characters)">
+        <div class="hint">Rotating this signs out every current session once the service restarts.</div>
+      </fieldset>
+
+      <fieldset>
+        <legend>CSP Mode</legend>
+        <select id="secCspMode">
+          <option value="report-only">report-only (default — violations logged, nothing blocked)</option>
+          <option value="enforce">enforce</option>
+          <option value="off">off</option>
+        </select>
+      </fieldset>
+
+      <fieldset>
+        <legend>Audit Retention</legend>
+        <label>Days to keep audit log entries (0 = keep forever)</label>
+        <input type="number" id="secAuditRetention" min="0" max="3650">
+      </fieldset>
+
+      <button class="btn" onclick="saveSecurity()">Save (writes .env — restart required)</button>
+      <div class="msg" id="secMsg"></div>
+
+      <fieldset>
+        <legend>Backup Retention</legend>
+        <label>Days of automatic backups to keep (applies immediately, no restart)</label>
+        <input type="number" id="secBackupRetention" min="1" max="365">
+        <button class="btn secondary" onclick="saveBackupRetention()">Save</button>
+        <div class="msg" id="secBackupMsg"></div>
+      </fieldset>
+    </section>
+
     <section class="panel" id="tab-export">
       <h2>Configuration Export / Import</h2>
       <p class="hint">Exports organization settings, locations, zones, hardware types, rack types, and infra connection details (host/user only — never passwords) as a portable JSON bundle. Use this for disaster recovery, UAT-to-production promotion, or rolling the same configuration out to a new customer site.</p>
       <button class="btn" onclick="exportConfig()">Export Configuration</button>
+
+      <fieldset>
+        <legend>Include Security Settings (optional)</legend>
+        <label><input type="checkbox" id="exportIncludeSecurity" style="width:auto;display:inline;margin-right:6px"> Also export CSP Mode, Audit Retention, and the JWT Secret</label>
+        <label>Passphrase (required if checked — encrypts the JWT Secret; you'll need this same passphrase to import it)</label>
+        <input type="password" id="exportPassphrase">
+        <button class="btn secondary" onclick="exportConfigWithSecurity()">Export With Security Settings</button>
+      </fieldset>
+
       <fieldset style="margin-top:20px">
         <legend>Import into this server</legend>
         <input type="file" id="importFile" accept="application/json">
+        <label>Passphrase (only needed if the bundle includes an encrypted JWT Secret)</label>
+        <input type="password" id="importPassphrase">
         <button class="btn secondary" onclick="importConfig()">Import</button>
-        <div class="hint">Imported monitoring entries will need their password re-entered in the Infrastructure tab above.</div>
+        <div class="hint">Imported monitoring entries will need their password re-entered in the Infrastructure tab above. Imported security settings are written to .env and need a service restart.</div>
       </fieldset>
       <div class="msg" id="exportMsg"></div>
     </section>
@@ -194,6 +299,8 @@ async function loadOrg() {
   const org = await api('/api/setup/organization');
   document.getElementById('orgCompanyName').value = org.companyName || '';
   document.getElementById('orgAppName').value = org.appName || '';
+  document.getElementById('orgDepartment').value = org.department || '';
+  document.getElementById('orgOrgUnit').value = org.orgUnit || '';
   document.getElementById('orgFooterText').value = org.footerText || '';
   document.getElementById('orgSupportEmail').value = org.supportEmail || '';
   document.getElementById('orgSupportContact').value = org.supportContact || '';
@@ -203,6 +310,8 @@ async function saveOrg() {
     await api('/api/setup/organization', { method: 'PUT', body: JSON.stringify({
       companyName: document.getElementById('orgCompanyName').value,
       appName: document.getElementById('orgAppName').value,
+      department: document.getElementById('orgDepartment').value,
+      orgUnit: document.getElementById('orgOrgUnit').value,
       footerText: document.getElementById('orgFooterText').value,
       supportEmail: document.getElementById('orgSupportEmail').value,
       supportContact: document.getElementById('orgSupportContact').value,
@@ -221,6 +330,28 @@ async function uploadLogo() {
     loadBranding();
   } catch (e) { show('logoMsg', false, e.message); }
 }
+async function uploadFavicon() {
+  try {
+    const f = document.getElementById('faviconFile').files[0];
+    if (!f) return show('faviconMsg', false, 'Choose a file first.');
+    const fd = new FormData(); fd.append('favicon', f);
+    await api('/api/setup/favicon', { method: 'POST', body: fd });
+    show('faviconMsg', true, 'Favicon updated — refresh the page (hard refresh) to see it in the browser tab.');
+  } catch (e) { show('faviconMsg', false, e.message); }
+}
+async function updateAdminAccount() {
+  try {
+    const newUsername = document.getElementById('adminNewUsername').value.trim();
+    const newPassword = document.getElementById('adminNewPassword').value;
+    if (!newUsername && !newPassword) return show('adminMsg', false, 'Enter a new username and/or password.');
+    await api('/api/setup/admin-account', { method: 'POST', body: JSON.stringify({
+      ...(newUsername ? { newUsername } : {}),
+      ...(newPassword ? { newPassword } : {}),
+    })});
+    show('adminMsg', true, 'Admin account updated.' + (newUsername ? ' Sign in with the new username next time.' : ''));
+    document.getElementById('adminNewPassword').value = '';
+  } catch (e) { show('adminMsg', false, e.message); }
+}
 async function loadBranding() {
   const s = await api('/api/setup/status');
   document.getElementById('brandTitle').textContent = s.appName + ' Setup';
@@ -234,6 +365,64 @@ async function seedDefaults() {
     const n = r.hardwareTypes.length + r.rackTypes.length;
     show('seedMsg', true, n ? `Created: ${[...r.hardwareTypes, ...r.rackTypes].join(', ')}` : 'Nothing to create - all default types already exist.');
   } catch (e) { show('seedMsg', false, e.message); }
+}
+
+async function loadDatabase() {
+  try {
+    const d = await api('/api/setup/database');
+    document.getElementById('dbCurHost').textContent = d.host;
+    document.getElementById('dbCurPort').textContent = d.port;
+    document.getElementById('dbCurName').textContent = d.name;
+    document.getElementById('dbCurUser').textContent = d.user;
+    document.getElementById('dbCurStatus').innerHTML = d.connected ? '<span class="pill ok">connected</span>' : '<span class="pill err">not connected</span>';
+    document.getElementById('dbTestHost').value = d.host;
+    document.getElementById('dbTestPort').value = d.port;
+    document.getElementById('dbTestName').value = d.name;
+    document.getElementById('dbTestUser').value = d.user;
+  } catch (e) { /* non-fatal on this tab */ }
+}
+async function testDatabase() {
+  try {
+    const r = await api('/api/setup/database/test', { method: 'POST', body: JSON.stringify({
+      host: document.getElementById('dbTestHost').value.trim(),
+      port: Number(document.getElementById('dbTestPort').value),
+      name: document.getElementById('dbTestName').value.trim(),
+      user: document.getElementById('dbTestUser').value.trim(),
+      password: document.getElementById('dbTestPassword').value,
+    })});
+    show('dbMsg', true, 'Connection OK.');
+  } catch (e) { show('dbMsg', false, e.message); }
+}
+
+async function loadSecurity() {
+  try {
+    const s = await api('/api/setup/security');
+    document.getElementById('secJwtStatus').textContent = s.jwtSecretConfigured ? 'set' : 'using the built-in development default — set one before production use';
+    document.getElementById('secCspMode').value = s.cspMode;
+    document.getElementById('secAuditRetention').value = s.auditRetentionDays;
+    document.getElementById('secBackupRetention').value = s.backupRetentionDays;
+  } catch (e) { /* non-fatal on this tab */ }
+}
+async function generateJwtSecret() {
+  const r = await api('/api/setup/security/generate-jwt-secret', { method: 'POST' });
+  document.getElementById('secJwtSecret').value = r.secret;
+}
+async function saveSecurity() {
+  try {
+    const body = { cspMode: document.getElementById('secCspMode').value, auditRetentionDays: Number(document.getElementById('secAuditRetention').value) };
+    const jwt = document.getElementById('secJwtSecret').value.trim();
+    if (jwt) body.jwtSecret = jwt;
+    const r = await api('/api/setup/security', { method: 'PUT', body: JSON.stringify(body) });
+    show('secMsg', true, r.requiresRestart ? `Saved to .env (${r.changed.join(', ')}). Restart the service for this to take effect.` : 'Nothing changed.');
+    document.getElementById('secJwtSecret').value = '';
+    loadSecurity();
+  } catch (e) { show('secMsg', false, e.message); }
+}
+async function saveBackupRetention() {
+  try {
+    await api('/api/backup/settings', { method: 'PUT', body: JSON.stringify({ retentionDays: Number(document.getElementById('secBackupRetention').value) }) });
+    show('secBackupMsg', true, 'Saved — applies immediately.');
+  } catch (e) { show('secBackupMsg', false, e.message); }
 }
 
 async function loadMonitoring() {
@@ -310,16 +499,25 @@ async function testSmtp() {
   } catch (e) { show('smtpMsg', false, e.message); }
 }
 
+async function downloadExport(body) {
+  const res = await fetch('/api/setup/export', { method: 'POST', headers: authHeaders(true), body: JSON.stringify(body || {}) });
+  if (!res.ok) { const d = await res.json().catch(() => null); throw new Error((d && d.error) || ('Export failed (' + res.status + ')')); }
+  const blob = await res.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'dcim-config-' + new Date().toISOString().slice(0, 10) + '.json';
+  a.click();
+}
 async function exportConfig() {
+  try { await downloadExport({}); show('exportMsg', true, 'Downloaded.'); } catch (e) { show('exportMsg', false, e.message); }
+}
+async function exportConfigWithSecurity() {
   try {
-    const res = await fetch('/api/setup/export', { headers: authHeaders() });
-    if (!res.ok) throw new Error('Export failed (' + res.status + ')');
-    const blob = await res.blob();
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'dcim-config-' + new Date().toISOString().slice(0, 10) + '.json';
-    a.click();
-    show('exportMsg', true, 'Downloaded.');
+    if (!document.getElementById('exportIncludeSecurity').checked) return show('exportMsg', false, 'Check the box above to include security settings, or use the plain Export Configuration button instead.');
+    const pass = document.getElementById('exportPassphrase').value;
+    if (!pass || pass.length < 8) return show('exportMsg', false, 'Enter a passphrase of at least 8 characters.');
+    await downloadExport({ includeSecurity: true, securityPassphrase: pass });
+    show('exportMsg', true, 'Downloaded with security settings. Remember the passphrase — it is required to import the JWT secret elsewhere.');
   } catch (e) { show('exportMsg', false, e.message); }
 }
 async function importConfig() {
@@ -327,9 +525,11 @@ async function importConfig() {
     const f = document.getElementById('importFile').files[0];
     if (!f) throw new Error('Choose a configuration bundle file first.');
     const fd = new FormData(); fd.append('bundle', f);
+    const pass = document.getElementById('importPassphrase').value;
+    if (pass) fd.append('securityPassphrase', pass);
     const r = await api('/api/setup/import', { method: 'POST', body: fd });
     const counts = Object.entries(r.imported).map(([k, v]) => `${k}: ${v}`).join(', ');
-    show('exportMsg', true, `Imported — ${counts}.` + (r.note ? ' ' + r.note : ''));
+    show('exportMsg', true, `Imported — ${counts}.` + (r.note ? ' ' + r.note : '') + (r.securityNote ? ' ' + r.securityNote : ''));
   } catch (e) { show('exportMsg', false, e.message); }
 }
 
@@ -338,7 +538,7 @@ async function boot() {
     await api('/api/setup/organization'); // also verifies the token is valid + admin
     document.getElementById('loginGate').classList.remove('active');
     document.getElementById('app').classList.remove('hidden');
-    await Promise.all([loadOrg(), loadBranding(), loadMonitoring()]);
+    await Promise.all([loadOrg(), loadBranding(), loadMonitoring(), loadDatabase(), loadSecurity()]);
   } catch (e) {
     document.getElementById('app').classList.add('hidden');
     document.getElementById('loginGate').classList.add('active');

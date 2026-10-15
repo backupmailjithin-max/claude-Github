@@ -18,6 +18,8 @@ PAYLOAD="$TOPDIR/SOURCES/dcim-payload"
 mkdir -p "$PAYLOAD"
 
 cp "$SCRIPT_DIR/dcim-service.sh" "$TOPDIR/SOURCES/dcim-service.sh"
+cp "$SCRIPT_DIR/dcim-upgrade.sh" "$TOPDIR/SOURCES/dcim-upgrade.sh"
+cp "$SCRIPT_DIR/dcim-repair.sh" "$TOPDIR/SOURCES/dcim-repair.sh"
 cp "$SCRIPT_DIR/install.sh" "$PAYLOAD/install.sh"
 cp "$SCRIPT_DIR/uninstall.sh" "$PAYLOAD/uninstall.sh"
 cp "$SCRIPT_DIR/rollback.sh" "$PAYLOAD/rollback.sh"

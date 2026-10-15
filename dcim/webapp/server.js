@@ -571,6 +571,7 @@ const movementUpload = multer({
 // MySQL Connection Pool (created after the database itself is ensured to exist)
 const DB_CONFIG = {
   host: process.env.DB_HOST || 'localhost',
+  port: Number(process.env.DB_PORT) || 3306, // was previously unread by mysql2 -- DB_PORT in .env silently had no effect
   user: process.env.DB_USER || 'root',
   password: process.env.DB_PASSWORD || '',
 };
@@ -2032,7 +2033,12 @@ function purgeAuthCacheForUser(userId) {
   for (const [k, v] of authUserCache) { if (v.row && String(v.row.id) === String(userId)) authUserCache.delete(k); }
 }
 // HARDENING: an account that still has its seeded/default password may only change that password (or sign out) until it has done so.
-const MUST_CHANGE_ALLOWED = new Set(['POST /api/auth/logout', 'POST /api/auth/heartbeat', 'GET /api/auth/me', 'PATCH /api/auth/change-password']);
+// /api/setup/admin-account is allowed here too: it's the installer's equivalent of
+// change-password (same must_change_password=0 / password_changed_at=NOW() bookkeeping),
+// just able to also set a custom username in the same call. Discovered by actually running
+// the installer end-to-end: without this, the forced-default-password gate below blocks the
+// install flow from ever reaching that endpoint.
+const MUST_CHANGE_ALLOWED = new Set(['POST /api/auth/logout', 'POST /api/auth/heartbeat', 'GET /api/auth/me', 'PATCH /api/auth/change-password', 'POST /api/setup/admin-account']);
 function mustChangeBlocked(req, res) {
   if (!req.user || !Number(req.user.must_change_password)) return false;
   if (MUST_CHANGE_ALLOWED.has(`${req.method} ${String(req.originalUrl || '').split('?')[0]}`)) return false;
@@ -7686,9 +7692,14 @@ app.get('/api/audit-logs', authenticateToken, requireGlobalAdmin, async (req, re
 // Settings (enabled / folder) live in the app_settings table and can only be read or changed by an Admin.
 const crypto = require('crypto'); // zlib is required once, near the top of the file
 // Every data table the app depends on. (rack_components / asset_movements / material_movement_documents were missing: a restore silently lost rack components and lifecycle history.)
-const BACKUP_TABLES = ['locations', 'rack_types', 'hardware_types', 'zones', 'racks', 'floor_plans', 'users', 'assets', 'rack_components', 'asset_movements', 'issues', 'dc_activities', 'material_movements', 'material_movement_documents', 'firmware_targets', 'firmware_model_targets', 'asset_connectivity', 'asset_hw_details'];
+// app_settings added so Organization/Branding settings and the Infrastructure wizard's
+// OME/OneView/SMTP config travel with Backup/Restore too (previously silently dropped on
+// a restore). Encrypted credential values inside it only decrypt on a server with the same
+// JWT_SECRET they were encrypted under -- restoring to a different server still needs those
+// passwords re-entered via the wizard, exactly as Config Export/Import already documents.
+const BACKUP_TABLES = ['locations', 'rack_types', 'hardware_types', 'zones', 'racks', 'floor_plans', 'users', 'assets', 'rack_components', 'asset_movements', 'issues', 'dc_activities', 'material_movements', 'material_movement_documents', 'firmware_targets', 'firmware_model_targets', 'asset_connectivity', 'asset_hw_details', 'app_settings'];
 const BACKUP_FORMAT = 'dc-dashboard-backup', BACKUP_VERSION = 1;
-const BACKUP_RETENTION_DAYS = 3;                       // today + the previous 2 days are kept
+const BACKUP_RETENTION_DAYS = Math.max(1, Number(process.env.BACKUP_RETENTION_DAYS) || 7); // configurable; default widened from the old hardcoded 3 to 7 per the packaging review
 const BACKUP_TIME = /^([01]\d|2[0-3]):([0-5]\d)$/.test(process.env.BACKUP_TIME || '') ? process.env.BACKUP_TIME : '23:00';   // HH:MM server time
 const DEFAULT_BACKUP_DIR = process.env.BACKUP_DIR ? path.resolve(process.env.BACKUP_DIR) : path.join(__dirname, 'backups');
 const BACKUP_NAME_RE = /^dc-backup-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-(auto|manual|prerestore)\.json\.gz$/;
@@ -7708,7 +7719,9 @@ async function getSetting(key, dflt) { const [r] = await pool.query('SELECT v FR
 async function setSetting(key, value) { await pool.query('INSERT INTO app_settings (k, v) VALUES (?, ?) ON DUPLICATE KEY UPDATE v = VALUES(v)', [key, String(value)]); }
 async function backupConfig() {
   const enabled = await getSetting('backup.enabled', '1'); const dir = await getSetting('backup.dir', '');
-  return { enabled: enabled !== '0', dir: dir || DEFAULT_BACKUP_DIR, customDir: !!dir };
+  const retentionRaw = await getSetting('backup.retentionDays', '');
+  const retentionDays = retentionRaw ? Math.max(1, Math.min(365, Number(retentionRaw) || BACKUP_RETENTION_DAYS)) : BACKUP_RETENTION_DAYS;
+  return { enabled: enabled !== '0', dir: dir || DEFAULT_BACKUP_DIR, customDir: !!dir, retentionDays };
 }
 
 // A folder is accepted only if it is a full path, is (or can be made into) a folder and a test file can be written to it
@@ -7773,8 +7786,8 @@ async function writeBackupFile(kind, by) {
 async function readBackupMeta(dir, name) { try { return JSON.parse(await fs.promises.readFile(path.join(dir, name + '.meta.json'), 'utf8')); } catch (e) { return null; } }
 
 // Keep today and the previous (RETENTION - 1) days; delete OUR backup files older than that. Other files are never touched.
-async function pruneBackups(dir, now = new Date()) {
-  const cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (BACKUP_RETENTION_DAYS - 1)).getTime(); const deleted = [];
+async function pruneBackups(dir, retentionDays = BACKUP_RETENTION_DAYS, now = new Date()) {
+  const cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (retentionDays - 1)).getTime(); const deleted = [];
   let names = []; try { names = await fs.promises.readdir(dir); } catch (e) { return deleted; }
   for (const f of names) { const d = backupNameDate(f); if (d && d.getTime() < cutoff) { try { await fs.promises.unlink(path.join(dir, f)); fs.promises.unlink(path.join(dir, f + '.meta.json')).catch(() => {}); deleted.push(f); } catch (e) { log.warn('[backup] could not delete', f, e.message); } } }
   return deleted;
@@ -7791,7 +7804,7 @@ async function runBackupJob(kind, by) {
   if (backupBusy) return { ok: false, at: new Date().toISOString(), kind, error: 'Another backup or restore is already running.' };
   backupBusy = true; const at = new Date().toISOString();
   try {
-    const w = await writeBackupFile(kind, by); const deleted = await pruneBackups(w.dir);
+    const w = await writeBackupFile(kind, by); const cfg = await backupConfig(); const deleted = await pruneBackups(w.dir, cfg.retentionDays);
     const res = { ok: true, at, kind, file: w.name, size: w.size, dir: w.dir, deleted };
     await setSetting('backup.lastRun', JSON.stringify(res)); if (kind === 'auto') await setSetting('backup.lastAutoOk', at);
     auditLog(null, 'BACKUP_CREATE', { username: by || 'system', entity: 'backup', entityId: w.name, details: { kind, size: w.size, sha256: w.meta && w.meta.fileSha256, appVersion: APP_VERSION } });
@@ -8421,17 +8434,22 @@ app.get('/api/backup/download-mine', authenticateToken, async (req, res) => {
 async function settingsPayload() {
   const cfg = await backupConfig(); let lastRun = null; try { lastRun = JSON.parse(await getSetting('backup.lastRun', 'null')); } catch (e) { lastRun = null; }
   let dirExists = false, dirWritable = false; try { await fs.promises.access(cfg.dir, fs.constants.F_OK); dirExists = true; await fs.promises.access(cfg.dir, fs.constants.W_OK); dirWritable = true; } catch (e) { /* not there yet / not writable */ }
-  return { enabled: cfg.enabled, dir: cfg.dir, customDir: cfg.customDir, defaultDir: DEFAULT_BACKUP_DIR, dirExists, dirWritable, time: BACKUP_TIME, retentionDays: BACKUP_RETENTION_DAYS,
+  return { enabled: cfg.enabled, dir: cfg.dir, customDir: cfg.customDir, defaultDir: DEFAULT_BACKUP_DIR, dirExists, dirWritable, time: BACKUP_TIME, retentionDays: cfg.retentionDays,
     nextRun: cfg.enabled ? nextBackupAt().toISOString() : null, lastRun, files: await listBackupFiles(cfg.dir), busy: backupBusy, tz: Intl.DateTimeFormat().resolvedOptions().timeZone, serverNow: new Date().toISOString() };
 }
 
 app.get('/api/backup/settings', authenticateToken, requireGlobalAdmin, async (req, res) => { try { res.json(await settingsPayload()); } catch (e) { sendErr(res, e); } });
 app.put('/api/backup/settings', authenticateToken, requireGlobalAdmin, async (req, res) => {
   try {
-    const { enabled, path: p } = req.body || {};
+    const { enabled, path: p, retentionDays } = req.body || {};
     if (p !== undefined) { if (p === null || String(p).trim() === '') await setSetting('backup.dir', ''); else await setSetting('backup.dir', await validateBackupDir(p)); }
     if (enabled !== undefined) await setSetting('backup.enabled', enabled ? '1' : '0');
-    log.info(`[backup] settings changed by ${req.user.username}: enabled=${(await backupConfig()).enabled}, folder=${(await backupConfig()).dir}`);
+    if (retentionDays !== undefined) {
+      const n = Number(retentionDays);
+      if (!Number.isFinite(n) || n < 1 || n > 365) return res.status(400).json({ error: 'Retention must be a whole number of days between 1 and 365.' });
+      await setSetting('backup.retentionDays', String(Math.round(n)));
+    }
+    log.info(`[backup] settings changed by ${req.user.username}: enabled=${(await backupConfig()).enabled}, folder=${(await backupConfig()).dir}, retentionDays=${(await backupConfig()).retentionDays}`);
     res.json(await settingsPayload());
   } catch (e) { sendErr(res, e); }
 });
@@ -8516,10 +8534,10 @@ app.post('/api/backup/restore', authenticateToken, requireGlobalAdmin, restoreUp
 // has actually started and `pool` is set).
 const livePool = new Proxy({}, { get: (_, prop) => { const v = pool[prop]; return typeof v === 'function' ? v.bind(pool) : v; } });
 const setupRoutesModule = require('./lib/setup-routes')(app, {
-  pool: livePool, fs, path, multer, log, httpErr, sendErr,
+  pool: livePool, fs, path, multer, log, httpErr, sendErr, bcrypt,
   authenticateToken, requireGlobalAdmin,
   getSetting, setSetting, genId, normalizeHardwareType,
-  APP_VERSION, JWT_SECRET, DB_NAME, testConnection,
+  APP_VERSION, JWT_SECRET, DB_NAME, DB_CONFIG, testConnection,
   getOmeToken, getOneviewSession, monitorEnvKey,
   validateBackupDir, backupConfig, ocrEngine, webappDir: __dirname,
 });
@@ -8628,7 +8646,7 @@ async function startServer() {
       log.info(`Login video (media/login-bg.mp4): ${require('fs').existsSync(path.join(__dirname, 'media', 'login-bg.mp4')) ? '✓ Found' : '✗ NOT FOUND - put the media folder next to server.js (login page will show the animated fallback)'}`);
       log.info(`Serving from folder: ${__dirname}`);
       startBackupScheduler();
-      backupConfig().then((c) => log.info(`Auto backup: ${c.enabled ? 'ON' : 'OFF'} - daily at ${BACKUP_TIME} (server time), keeps the last ${BACKUP_RETENTION_DAYS} days -> ${c.dir}`)).catch(() => {});
+      backupConfig().then((c) => log.info(`Auto backup: ${c.enabled ? 'ON' : 'OFF'} - daily at ${BACKUP_TIME} (server time), keeps the last ${c.retentionDays} days -> ${c.dir}`)).catch(() => {});
       console.log(`========================================\n`);
     });
   } catch (e) {
