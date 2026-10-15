@@ -370,6 +370,37 @@ apply_admin_account() {
   fi
 }
 
+print_health_validation() {
+  local login_user login_pass login_resp token
+  login_user="${ADMIN_USER:-admin}"
+  login_pass="${ADMIN_PASSWORD:-admin}"
+  login_resp="$(curl -fsS -m 10 -X POST "http://127.0.0.1:${PORT}/api/auth/login" \
+    -H 'Content-Type: application/json' -d "{\"username\":\"$(json_escape "$login_user")\",\"password\":\"$(json_escape "$login_pass")\"}" 2>/dev/null || true)"
+  token="$(printf '%s' "$login_resp" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+  if [ -z "$token" ]; then
+    log "Health validation skipped (could not sign in as '$login_user' to run it - this is expected if the admin password was already changed). View it at: http://127.0.0.1:${PORT}/api/health/validate (after signing in via the dashboard)."
+    return 0
+  fi
+  local report
+  report="$(curl -fsS -m 15 "http://127.0.0.1:${PORT}/api/health/validate" -H "Authorization: Bearer $token" 2>/dev/null || true)"
+  [ -n "$report" ] || { log "Health validation: could not reach /api/health/validate."; return 0; }
+  echo ""
+  echo "  Health Validation"
+  echo "  -----------------"
+  "$NODE_BIN" -e '
+    let d=""; process.stdin.on("data", c => d += c);
+    process.stdin.on("end", () => {
+      try {
+        const r = JSON.parse(d);
+        for (const c of r.checks) console.log("  " + c.status.padEnd(8) + c.name.padEnd(18) + (c.detail || ""));
+        console.log("");
+        console.log("  Overall: " + r.overall);
+      } catch (e) { console.log("  (could not parse health report)"); }
+    });
+  ' <<< "$report"
+  echo ""
+}
+
 do_install() {
   run_validations
   ensure_service_user
@@ -381,6 +412,7 @@ do_install() {
   systemctl restart "$SERVICE_NAME"
   wait_for_health
   apply_admin_account
+  print_health_validation
   if [ -n "$ADMIN_USER" ] || [ -n "$ADMIN_PASSWORD" ]; then
     log "$APP_NAME installed. Sign in with the admin credentials you provided."
   else
@@ -398,6 +430,7 @@ do_upgrade() {
   install_systemd_unit
   systemctl restart "$SERVICE_NAME"
   wait_for_health
+  print_health_validation
   log "$APP_NAME upgraded in place. Previous config snapshot kept under /var/backups/dcim/."
 }
 
@@ -412,6 +445,7 @@ do_repair() {
   chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
   systemctl restart "$SERVICE_NAME"
   wait_for_health
+  print_health_validation
   log "$APP_NAME repaired (files, service, and permissions re-applied; your .env and data were preserved)."
 }
 

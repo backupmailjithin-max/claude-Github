@@ -2038,7 +2038,10 @@ function purgeAuthCacheForUser(userId) {
 // just able to also set a custom username in the same call. Discovered by actually running
 // the installer end-to-end: without this, the forced-default-password gate below blocks the
 // install flow from ever reaching that endpoint.
-const MUST_CHANGE_ALLOWED = new Set(['POST /api/auth/logout', 'POST /api/auth/heartbeat', 'GET /api/auth/me', 'PATCH /api/auth/change-password', 'POST /api/setup/admin-account']);
+// /api/health/validate and /api/support/bundle are allowed too, for the same reason: the
+// installer (and a repair run) signs in with the still-default admin/admin to print a
+// post-install health report, which would otherwise 403 on every fresh install.
+const MUST_CHANGE_ALLOWED = new Set(['POST /api/auth/logout', 'POST /api/auth/heartbeat', 'GET /api/auth/me', 'PATCH /api/auth/change-password', 'POST /api/setup/admin-account', 'GET /api/health/validate', 'POST /api/support/bundle']);
 function mustChangeBlocked(req, res) {
   if (!req.user || !Number(req.user.must_change_password)) return false;
   if (MUST_CHANGE_ALLOWED.has(`${req.method} ${String(req.originalUrl || '').split('?')[0]}`)) return false;

@@ -8,8 +8,11 @@
 // place, so none of the app's current behavior is touched.
 'use strict';
 const crypto = require('crypto');
+const os = require('os');
+const { execFile } = require('child_process');
 const mysql = require('mysql2/promise');
 const { testSmtp } = require('./smtp-client');
+const { buildZip } = require('./zip-writer');
 
 const ORG_KEYS = ['companyName', 'appName', 'department', 'orgUnit', 'footerText', 'supportEmail', 'supportContact', 'logoPath', 'faviconPath'];
 const ORG_EDITABLE_KEYS = ['companyName', 'appName', 'department', 'orgUnit', 'footerText', 'supportEmail', 'supportContact'];
@@ -423,6 +426,169 @@ module.exports = function registerSetupRoutes(app, deps) {
 
     const overallOk = Object.values(checks).every((c) => c.ok !== false);
     res.status(overallOk ? 200 : 503).json({ status: overallOk ? 'ok' : 'degraded', version: APP_VERSION, checks });
+  });
+
+  // ---------- structured health validation (PASS/WARNING/FAIL) ----------
+  // Separate from /api/health/full above (kept untouched - it's already relied
+  // on) rather than refactored to share code with it, so this new report can't
+  // regress that existing endpoint. Run automatically by install.sh/install.ps1
+  // immediately after install/upgrade/repair, and shown in the deployment
+  // dashboard.
+
+  async function checkUploadEngine() {
+    const uploadsDir = path.join(webappDir, 'uploads');
+    try {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+      const probe = path.join(uploadsDir, `.health-probe-${Date.now()}`);
+      fs.writeFileSync(probe, 'ok');
+      fs.unlinkSync(probe);
+      return { name: 'Upload Engine', status: 'PASS', detail: uploadsDir };
+    } catch (e) {
+      return { name: 'Upload Engine', status: 'FAIL', detail: e.message };
+    }
+  }
+
+  async function checkBackupEngine() {
+    try {
+      const cfg = await backupConfig();
+      await withTimeout(validateBackupDir(cfg.dir), 8000, 'backup folder check');
+      if (!cfg.enabled) return { name: 'Backup Engine', status: 'WARNING', detail: 'Backup is disabled.' };
+      let lastBackup = null;
+      try { lastBackup = JSON.parse(await getSetting('backup.lastResult', 'null')); } catch (e) { /* ignore */ }
+      if (lastBackup && lastBackup.ok === false) return { name: 'Backup Engine', status: 'WARNING', detail: `Last backup run failed: ${lastBackup.error || 'unknown error'}` };
+      return { name: 'Backup Engine', status: 'PASS', detail: cfg.dir };
+    } catch (e) {
+      return { name: 'Backup Engine', status: 'FAIL', detail: e.message };
+    }
+  }
+
+  async function checkMonitoringProduct(product) {
+    const entries = (await readMonitoringEntries()).filter((e) => e.product === product);
+    if (!entries.length) return { name: product === 'OME' ? 'Dell OME' : 'HPE OneView', status: 'WARNING', detail: 'Not configured.' };
+    const results = [];
+    for (const e of entries) {
+      try {
+        const session = product === 'OME' ? await withTimeout(getOmeToken(e.site, e.zone), 8000, 'OME check') : await withTimeout(getOneviewSession(e.site, e.zone), 8000, 'OneView check');
+        results.push({ site: e.site, zone: e.zone, ok: !!session });
+      } catch (err) { results.push({ site: e.site, zone: e.zone, ok: false, error: err.message }); }
+    }
+    const allOk = results.every((r) => r.ok);
+    return { name: product === 'OME' ? 'Dell OME' : 'HPE OneView', status: allOk ? 'PASS' : 'FAIL', detail: results.map((r) => `${r.site}/${r.zone}: ${r.ok ? 'ok' : r.error || 'failed'}`).join('; ') };
+  }
+
+  async function runHealthValidation() {
+    const checks = [];
+    checks.push({ name: 'Service', status: 'PASS', detail: `up ${Math.round(process.uptime())}s, node ${process.version}` });
+
+    try {
+      await withTimeout(pool.query('SELECT 1'), 5000, 'db check');
+      checks.push({ name: 'Database', status: 'PASS', detail: `${DB_NAME}@${DB_CONFIG.host}:${DB_CONFIG.port}` });
+    } catch (e) {
+      checks.push({ name: 'Database', status: 'FAIL', detail: e.message });
+    }
+
+    checks.push(ocrEngine
+      ? { name: 'OCR', status: 'PASS', detail: 'engine loaded' }
+      : { name: 'OCR', status: 'WARNING', detail: 'OCR engine not loaded (OCR features unavailable).' });
+
+    checks.push({ name: 'API Health', status: 'PASS', detail: 'responding' });
+
+    checks.push(APP_VERSION
+      ? { name: 'Version Endpoint', status: 'PASS', detail: APP_VERSION }
+      : { name: 'Version Endpoint', status: 'WARNING', detail: 'APP_VERSION is not set.' });
+
+    checks.push(await checkUploadEngine());
+    checks.push(await checkBackupEngine());
+
+    const smtp = await readSmtpSettings().catch(() => null);
+    checks.push(smtp
+      ? { name: 'SMTP', status: 'PASS', detail: `${smtp.host}:${smtp.port}` }
+      : { name: 'SMTP', status: 'WARNING', detail: 'Not configured.' });
+
+    checks.push(await checkMonitoringProduct('OME'));
+    checks.push(await checkMonitoringProduct('ONEVIEW'));
+
+    const overall = checks.some((c) => c.status === 'FAIL') ? 'FAIL' : checks.some((c) => c.status === 'WARNING') ? 'WARNING' : 'PASS';
+    return { overall, checkedAt: new Date().toISOString(), version: APP_VERSION, checks };
+  }
+
+  app.get('/api/health/validate', authenticateToken, requireGlobalAdmin, async (req, res) => {
+    try {
+      const report = await runHealthValidation();
+      res.status(report.overall === 'FAIL' ? 503 : 200).json(report);
+    } catch (e) { sendErr(res, e); }
+  });
+
+  // ---------- support bundle (for troubleshooting) ----------
+
+  function execFilePromise(cmd, args, opts) {
+    return new Promise((resolve, reject) => {
+      execFile(cmd, args, opts, (err, stdout, stderr) => {
+        if (err) return reject(Object.assign(err, { stderr }));
+        resolve(stdout);
+      });
+    });
+  }
+
+  function redactEnv() {
+    try {
+      return fs.readFileSync(path.join(webappDir, '.env'), 'utf8').replace(/^(.*(PASSWORD|SECRET).*)=.*/gim, '$1=[redacted]');
+    } catch (e) { return `(.env not readable: ${e.message})`; }
+  }
+
+  async function collectLogs() {
+    if (process.platform === 'win32') {
+      const out = {};
+      for (const f of ['service-stdout.log', 'service-stderr.log']) {
+        try { out[f] = fs.readFileSync(path.join(webappDir, 'logs', f), 'utf8').split(/\r?\n/).slice(-500).join('\n'); }
+        catch (e) { out[f] = `(not available: ${e.message})`; }
+      }
+      return out;
+    }
+    try {
+      const out = await execFilePromise('journalctl', ['-u', 'dcim', '-n', '500', '--no-pager'], { timeout: 8000, maxBuffer: 10 * 1024 * 1024 });
+      return { 'journalctl-dcim.log': out };
+    } catch (e) {
+      return { 'journalctl-dcim.log': `(not available from inside the running process - this usually needs root/systemd-journal group access. Run on the server: sudo journalctl -u dcim -n 500. Error: ${e.message})` };
+    }
+  }
+
+  function performanceSnapshot() {
+    const mem = process.memoryUsage();
+    return {
+      uptimeSeconds: Math.round(process.uptime()),
+      cpuUsage: process.cpuUsage(),
+      memory: { rss: mem.rss, heapTotal: mem.heapTotal, heapUsed: mem.heapUsed, external: mem.external },
+      os: { platform: os.platform(), release: os.release(), arch: os.arch(), totalMemMB: Math.round(os.totalmem() / 1048576), freeMemMB: Math.round(os.freemem() / 1048576), loadavg: os.loadavg() },
+    };
+  }
+
+  app.post('/api/support/bundle', authenticateToken, requireGlobalAdmin, async (req, res) => {
+    try {
+      const [health, logs] = await Promise.all([runHealthValidation().catch((e) => ({ overall: 'FAIL', error: e.message })), collectLogs()]);
+      const systemInfo = {
+        generatedAt: new Date().toISOString(),
+        generatedBy: req.user.name || req.user.username,
+        appVersion: APP_VERSION,
+        nodeVersion: process.version,
+        platform: os.platform(),
+        hostname: os.hostname(),
+      };
+      const entries = [
+        { name: 'system-info.json', data: Buffer.from(JSON.stringify(systemInfo, null, 2)) },
+        { name: 'health-report.json', data: Buffer.from(JSON.stringify(health, null, 2)) },
+        { name: 'performance-report.json', data: Buffer.from(JSON.stringify(performanceSnapshot(), null, 2)) },
+        { name: 'env-redacted.txt', data: Buffer.from(redactEnv()) },
+      ];
+      for (const [fname, content] of Object.entries(logs)) {
+        entries.push({ name: `logs/${fname}`, data: Buffer.from(content) });
+      }
+      const zip = buildZip(entries);
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', `attachment; filename="dcim-support-bundle-${stamp}.zip"`);
+      res.send(zip);
+    } catch (e) { sendErr(res, e); }
   });
 
   // ---------- deployment dashboard ----------

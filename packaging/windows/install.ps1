@@ -255,6 +255,33 @@ function Set-AdminAccount {
   }
 }
 
+function Show-HealthValidation {
+  $loginUser = if ($AdminUser) { $AdminUser } else { "admin" }
+  $loginPass = if ($AdminPassword) { $AdminPassword } else { "admin" }
+  try {
+    $login = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/auth/login" -Method Post -ContentType "application/json" `
+      -Body (@{ username = $loginUser; password = $loginPass } | ConvertTo-Json) -TimeoutSec 10 -ErrorAction Stop
+  } catch {
+    Log "Health validation skipped (could not sign in as '$loginUser' - expected if the admin password was already changed). View it at: http://127.0.0.1:$Port/api/health/validate (after signing in via the dashboard)."
+    return
+  }
+  try {
+    $report = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/health/validate" -Headers @{ Authorization = "Bearer $($login.token)" } -TimeoutSec 15 -ErrorAction Stop
+  } catch {
+    Log "Health validation: could not reach /api/health/validate."
+    return
+  }
+  Write-Host ""
+  Write-Host "  Health Validation"
+  Write-Host "  -----------------"
+  foreach ($c in $report.checks) {
+    Write-Host ("  {0,-8}{1,-18}{2}" -f $c.status, $c.name, $c.detail)
+  }
+  Write-Host ""
+  Write-Host "  Overall: $($report.overall)"
+  Write-Host ""
+}
+
 function Invoke-Install {
   Invoke-Validations
   Sync-Payload
@@ -263,6 +290,7 @@ function Invoke-Install {
   Install-WindowsService
   Wait-ForHealth
   Set-AdminAccount
+  Show-HealthValidation
   if ($AdminUser -or $AdminPassword) {
     Log "DCIM installed. Sign in with the admin credentials you provided."
   } else {
@@ -278,6 +306,7 @@ function Invoke-Upgrade {
   Sync-Payload
   Install-WindowsService
   Wait-ForHealth
+  Show-HealthValidation
   Log "DCIM upgraded in place. Previous config snapshot kept under C:\ProgramData\dcim-backups\."
 }
 
@@ -294,6 +323,7 @@ function Invoke-Repair {
   Sync-Payload
   Install-WindowsService
   Wait-ForHealth
+  Show-HealthValidation
   Log "DCIM repaired (files and service re-applied; your .env and data were preserved)."
 }
 
