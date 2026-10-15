@@ -208,12 +208,18 @@ function Backup-BeforeChange {
     $dumpArgs += @("--single-transaction", "--routines", "--triggers", $env.DB_NAME)
     $sqlPath = Join-Path $backupDir "database.sql"
     try {
-      & $dump.Source @dumpArgs 2> (Join-Path $backupDir "mysqldump.err") | Out-File -FilePath $sqlPath -Encoding utf8
+      # Native `>` redirection (not `| Out-File`): Out-File would capture
+      # mysqldump's stdout as a PowerShell array-of-strings and re-encode it,
+      # whereas `>` on a native command writes its raw output bytes directly -
+      # safer for a SQL dump, which must round-trip byte-for-byte for the
+      # restore below to import cleanly.
+      & $dump.Source @dumpArgs 2> (Join-Path $backupDir "mysqldump.err") > $sqlPath
+      if ($LASTEXITCODE -ne 0) { throw "mysqldump exited with code $LASTEXITCODE - see $backupDir\mysqldump.err" }
       Compress-Archive -Path $sqlPath -DestinationPath "$sqlPath.zip" -Force
       Remove-Item $sqlPath
       Log "Database snapshot saved to $sqlPath.zip"
     } catch {
-      Log "WARNING: mysqldump failed; only config snapshot was taken. Consider running the app's own Backup/Restore before continuing."
+      Log "WARNING: mysqldump failed ($($_.Exception.Message)); only config snapshot was taken. Consider running the app's own Backup/Restore before continuing."
     }
   } else {
     Log "mysqldump.exe not found; only config snapshot was taken. Consider running the app's own Backup/Restore before continuing."

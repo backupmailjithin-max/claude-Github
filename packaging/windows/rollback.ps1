@@ -49,10 +49,30 @@ if (Test-Path $zip) {
     Expand-Archive -Path $zip -DestinationPath $extractDir -Force
     $envMap = @{}
     Get-Content $envPath | ForEach-Object { if ($_ -match '^([A-Z_]+)=(.*)$') { $envMap[$matches[1]] = $matches[2] } }
-    $args = @("-h", $envMap.DB_HOST, "-u", $envMap.DB_USER)
-    if ($envMap.DB_PASSWORD) { $args += "-p$($envMap.DB_PASSWORD)" }
     Log "Restoring database '$($envMap.DB_NAME)' ..."
-    cmd /c "`"$($mysql.Source)`" $($args -join ' ') $($envMap.DB_NAME) < `"$extractDir\database.sql`""
+    # Found via real execution: the previous `cmd /c "mysql ... < file"` never
+    # checked its exit code, so a failed import was silently treated as success
+    # (the log said "Database restored" even when nothing was actually
+    # restored). Using Process/ProcessStartInfo directly instead of cmd.exe
+    # redirection also avoids manually quoting arguments (ArgumentList lets
+    # .NET escape each one correctly - DB_PASSWORD can contain characters that
+    # are awkward for a hand-built cmd.exe command line) and streams the dump
+    # file as raw bytes rather than through a text pipeline that could
+    # re-encode it.
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $mysql.Source
+    $psi.ArgumentList.Add("-h"); $psi.ArgumentList.Add($envMap.DB_HOST)
+    $psi.ArgumentList.Add("-u"); $psi.ArgumentList.Add($envMap.DB_USER)
+    if ($envMap.DB_PASSWORD) { $psi.ArgumentList.Add("-p$($envMap.DB_PASSWORD)") }
+    $psi.ArgumentList.Add($envMap.DB_NAME)
+    $psi.RedirectStandardInput = $true
+    $psi.UseShellExecute = $false
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $bytes = [System.IO.File]::ReadAllBytes((Join-Path $extractDir "database.sql"))
+    $proc.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
+    $proc.StandardInput.Close()
+    $proc.WaitForExit()
+    if ($proc.ExitCode -ne 0) { throw "mysql restore exited with code $($proc.ExitCode) - the database was NOT restored." }
     Log "Database restored."
   }
 } else {
