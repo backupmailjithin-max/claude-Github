@@ -1,0 +1,74 @@
+#!/usr/bin/env sh
+# Top-level OS-detecting launcher for the DCIM Enterprise Offline Distribution
+# Kit. This is a thin dispatcher only - it contains NO install logic of its
+# own. It detects the Linux distribution family and hands off to that
+# distro's own native package manager (apt/dpkg for Debian-family, dnf/yum
+# for RHEL-family) installing the matching package shipped alongside it
+# (linux/deb/*.deb or linux/rpm/*.rpm), exactly the same artifacts already
+# built and tested individually. Pass --appliance to use the fully
+# self-contained .run installer instead (no package manager involved at
+# all) - this is also the automatic fallback for a distro this dispatcher
+# doesn't recognize.
+set -eu
+KIT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+log()  { printf '[dcim-kit] %s\n' "$*"; }
+err()  { printf '[dcim-kit] ERROR: %s\n' "$*" >&2; }
+die()  { err "$*"; exit 1; }
+
+[ "$(id -u)" = "0" ] || die "Run as root (sudo ./install)."
+
+USE_APPLIANCE=0
+if [ "${1:-}" = "--appliance" ]; then
+  USE_APPLIANCE=1
+  shift
+fi
+
+launch_appliance() {
+  run="$(ls "$KIT_DIR"/linux/appliance/*.run 2>/dev/null | head -n1)"
+  [ -n "$run" ] || die "No appliance (.run) found under $KIT_DIR/linux/appliance/"
+  log "Launching the self-contained offline appliance installer: $run"
+  exec "$run" "$@"
+}
+
+if [ "$USE_APPLIANCE" -eq 1 ]; then
+  launch_appliance "$@"
+fi
+
+ID=""
+ID_LIKE=""
+if [ -r /etc/os-release ]; then
+  . /etc/os-release
+fi
+
+family=""
+case " ${ID:-} ${ID_LIKE:-} " in
+  *" debian "*|*" ubuntu "*) family="debian" ;;
+  *" rhel "*|*" fedora "*|*" rocky "*|*" almalinux "*|*" centos "*) family="rhel" ;;
+esac
+
+case "$family" in
+  debian)
+    pkg="$(ls "$KIT_DIR"/linux/deb/*.deb 2>/dev/null | head -n1)"
+    [ -n "$pkg" ] || die "No .deb package found under $KIT_DIR/linux/deb/"
+    log "Detected Debian/Ubuntu family (ID=${ID:-unknown}); installing native package: $pkg"
+    dpkg -i "$pkg" || apt-get -f install -y
+    log "Installed. Run 'sudo dcim-setup' to complete first-time configuration."
+    ;;
+  rhel)
+    pkg="$(ls "$KIT_DIR"/linux/rpm/*.rpm 2>/dev/null | head -n1)"
+    [ -n "$pkg" ] || die "No .rpm package found under $KIT_DIR/linux/rpm/"
+    log "Detected RHEL-family distro (ID=${ID:-unknown}); installing native package: $pkg"
+    if command -v dnf >/dev/null 2>&1; then
+      dnf install -y "$pkg"
+    else
+      yum install -y "$pkg"
+    fi
+    log "Installed. Run 'sudo dcim-setup' to complete first-time configuration."
+    ;;
+  *)
+    log "Unrecognized distro (ID=${ID:-unknown} ID_LIKE=${ID_LIKE:-unknown})."
+    log "Falling back to the self-contained offline appliance, which has no distro-specific dependency."
+    launch_appliance "$@"
+    ;;
+esac

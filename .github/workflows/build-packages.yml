@@ -75,15 +75,64 @@ jobs:
         shell: pwsh
         run: packaging\windows\fetch-nssm.ps1
 
-      - name: Compile installer with Inno Setup
+      - name: Compile installer + upgrade/repair utilities with Inno Setup
         shell: pwsh
         run: |
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { throw "Inno Setup (ISCC.exe) not found on this runner image." }
+          # All three share the same payload (webapp/runtime/nssm staged above) and
+          # the same AppId, differing only in which install.ps1 -Mode they force -
+          # not three separate install engines, just three entry points into the
+          # one already-tested install.ps1.
           & $iscc packaging\windows\dcim-installer.iss
+          & $iscc packaging\windows\dcim-upgrade-utility.iss
+          & $iscc packaging\windows\dcim-repair-utility.iss
 
       - name: Upload .exe
         uses: actions/upload-artifact@v4
         with:
           name: dcim-windows-installer
           path: packaging/windows/Output/*.exe
+
+  # Assembles the single-download Distribution Kit from the four artifacts
+  # above. This job only arranges already-built, already-tested files - see
+  # packaging/kit/build-kit.sh. If any one upstream build fails, the kit still
+  # gets built with whatever did succeed (build-kit.sh warns, doesn't fail) so
+  # a partial run still produces something inspectable.
+  build-kit:
+    needs: [build-deb, build-rpm, build-appliance, build-windows-exe]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download .deb
+        uses: actions/download-artifact@v4
+        with: { name: dcim-deb, path: dist }
+        continue-on-error: true
+
+      - name: Download .rpm
+        uses: actions/download-artifact@v4
+        with: { name: dcim-rpm, path: dist }
+        continue-on-error: true
+
+      - name: Download appliance
+        uses: actions/download-artifact@v4
+        with: { name: dcim-offline-appliance, path: dist }
+        continue-on-error: true
+
+      - name: Download Windows installer + utilities
+        uses: actions/download-artifact@v4
+        with: { name: dcim-windows-installer, path: packaging/windows/Output }
+        continue-on-error: true
+
+      - name: Assemble kit
+        run: bash packaging/kit/build-kit.sh
+
+      - name: Upload kit
+        uses: actions/upload-artifact@v4
+        with:
+          name: dcim-enterprise-offline-kit
+          path: |
+            dist/DCIM-Enterprise-Offline-Kit-*.tar.gz
+            dist/DCIM-Enterprise-Offline-Kit-*.zip
