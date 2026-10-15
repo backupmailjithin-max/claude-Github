@@ -261,3 +261,69 @@ jobs:
           test -d /usr/share/dcim/webapp/node_modules
           test -f /usr/share/dcim/webapp/schema.sql
           echo "Package layout verified on ${{ matrix.image }}."
+
+  # Real execution of the --embedded-db option (Database Strategy "Option 1"):
+  # no external MySQL/MariaDB at all - install.sh brings up its own private
+  # MariaDB instance (dcim-mariadb.service) and the app connects to that.
+  test-embedded-db:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage bundled MariaDB runtime
+        run: bash packaging/linux/fetch-mariadb-runtime.sh packaging/linux/runtime
+
+      - name: Install (fresh, --embedded-db, no external MySQL/MariaDB present)
+        run: |
+          sudo bash packaging/linux/install.sh --mode install --yes --embedded-db --port 18975 \
+            --admin-user ciadmin --admin-password 'CiAdminPass123!'
+
+      - name: Diagnostics (always, even on failure)
+        if: always()
+        run: |
+          echo "--- systemctl status dcim-mariadb ---"
+          sudo systemctl status dcim-mariadb --no-pager || true
+          echo "--- journalctl -u dcim-mariadb ---"
+          sudo journalctl -u dcim-mariadb --no-pager -n 100 || true
+          echo "--- systemctl status dcim ---"
+          sudo systemctl status dcim --no-pager || true
+          echo "--- journalctl -u dcim ---"
+          sudo journalctl -u dcim --no-pager -n 100 || true
+          echo "--- .env (redacted) ---"
+          sudo sed -E 's/(PASSWORD|SECRET)=.*/\1=[redacted]/' /opt/dcim/webapp/.env || true
+
+      - name: Verify both services are really running
+        run: |
+          sudo systemctl is-active dcim-mariadb
+          sudo systemctl is-enabled dcim-mariadb
+          sudo systemctl is-active dcim
+          sudo systemctl is-enabled dcim
+          curl -fsS http://127.0.0.1:18975/api/health | grep -q '"status":"ok"'
+
+      - name: Populate test data
+        run: |
+          TOKEN=$(curl -fsS -X POST http://127.0.0.1:18975/api/auth/login -H 'Content-Type: application/json' -d '{"username":"ciadmin","password":"CiAdminPass123!"}' | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>console.log(JSON.parse(d).token))")
+          curl -fsS -X POST http://127.0.0.1:18975/api/locations -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"name":"CiEmbeddedDC","zoneName":"AZ-1"}'
+
+      - name: Upgrade (embedded DB must survive and stay usable)
+        run: sudo dcim-upgrade --port 18975
+
+      - name: Verify data survived Upgrade
+        run: |
+          sleep 3
+          curl -fsS http://127.0.0.1:18975/api/health | grep -q '"status":"ok"'
+          TOKEN=$(curl -fsS -X POST http://127.0.0.1:18975/api/auth/login -H 'Content-Type: application/json' -d '{"username":"ciadmin","password":"CiAdminPass123!"}' | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>console.log(JSON.parse(d).token))")
+          curl -fsS http://127.0.0.1:18975/api/locations -H "Authorization: Bearer $TOKEN" | grep -q CiEmbeddedDC
+
+      - name: Repair (must re-detect embedded mode without --embedded-db being re-passed)
+        run: sudo dcim-repair --port 18975
+
+      - name: Verify embedded DB and data survived Repair
+        run: |
+          sleep 3
+          sudo systemctl is-active dcim-mariadb
+          sudo systemctl is-active dcim
+          curl -fsS http://127.0.0.1:18975/api/health | grep -q '"status":"ok"'
+          TOKEN=$(curl -fsS -X POST http://127.0.0.1:18975/api/auth/login -H 'Content-Type: application/json' -d '{"username":"ciadmin","password":"CiAdminPass123!"}' | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>console.log(JSON.parse(d).token))")
+          curl -fsS http://127.0.0.1:18975/api/locations -H "Authorization: Bearer $TOKEN" | grep -q CiEmbeddedDC
+          echo "Embedded MariaDB verified across install, upgrade, and repair."

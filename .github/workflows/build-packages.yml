@@ -18,6 +18,9 @@ jobs:
       - name: Stage bundled Node.js runtime
         run: bash packaging/linux/fetch-node-runtime.sh x64 packaging/linux/runtime
 
+      - name: Stage bundled MariaDB runtime (for --embedded-db)
+        run: bash packaging/linux/fetch-mariadb-runtime.sh packaging/linux/runtime
+
       - name: Build .deb
         run: bash packaging/linux/build-deb.sh
 
@@ -34,6 +37,9 @@ jobs:
 
       - name: Stage bundled Node.js runtime
         run: bash packaging/linux/fetch-node-runtime.sh x64 packaging/linux/runtime
+
+      - name: Stage bundled MariaDB runtime (for --embedded-db)
+        run: bash packaging/linux/fetch-mariadb-runtime.sh packaging/linux/runtime
 
       - name: Build offline appliance (.run)
         run: bash packaging/appliance/build-appliance.sh
