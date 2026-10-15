@@ -174,6 +174,36 @@ function Sync-Payload {
   }
 }
 
+function Ensure-NssmBinary {
+  # Setup-EmbeddedDb and Install-WindowsService each register their own NSSM
+  # service and both need nssm.exe staged under $InstallDir\tools. Found via
+  # real CI execution: when embedded-DB mode runs first, its nssm.exe copy
+  # becomes the live process image of the DCIMMariaDB service it just
+  # registered, so a second unconditional Copy-Item -Force from
+  # Install-WindowsService fails with "The process cannot access the file
+  # ... because it is being used by another process."
+  $nssm = Join-Path $InstallDir "tools\nssm.exe"
+  New-Item -ItemType Directory -Force -Path (Split-Path $nssm) | Out-Null
+  if (Test-Path $nssm) {
+    if ((Get-FileHash $PayloadNssm).Hash -eq (Get-FileHash $nssm).Hash) { return $nssm }
+  }
+  try {
+    Copy-Item $PayloadNssm $nssm -Force
+  } catch {
+    # Only swallow the "in use by another process" case when the staged copy
+    # is already byte-identical to the payload (the embedded-DB-then-service
+    # ordering above) - a genuinely different nssm.exe (e.g. a version bump
+    # shipped by an upgrade) must still fail loudly rather than silently
+    # keep the old binary running.
+    if ((Get-FileHash $PayloadNssm).Hash -eq (Get-FileHash $nssm).Hash) {
+      Log "nssm.exe already staged and in use by a just-registered service; reusing it."
+    } else {
+      throw
+    }
+  }
+  return $nssm
+}
+
 function Setup-EmbeddedDb {
   $mariadbdExe = Join-Path $PayloadMariadb "bin\mariadbd.exe"
   if (-not (Test-Path $mariadbdExe)) { Die "-EmbeddedDb requires a bundled MariaDB runtime (run fetch-mariadb-runtime.ps1 at package-build time)." }
@@ -204,9 +234,7 @@ function Setup-EmbeddedDb {
     if ($LASTEXITCODE -ne 0) { Die "mariadb-install-db.exe failed (exit $LASTEXITCODE)." }
   }
 
-  $nssm = Join-Path $InstallDir "tools\nssm.exe"
-  New-Item -ItemType Directory -Force -Path (Split-Path $nssm) | Out-Null
-  Copy-Item $PayloadNssm $nssm -Force
+  $nssm = Ensure-NssmBinary
   if (Get-Service -Name $EmbeddedDbServiceName -ErrorAction SilentlyContinue) {
     & $nssm stop $EmbeddedDbServiceName | Out-Null
     & $nssm remove $EmbeddedDbServiceName confirm | Out-Null
@@ -257,9 +285,7 @@ function Setup-EmbeddedDb {
 function Install-WindowsService {
   $nodeBin = if (Test-Path (Join-Path $InstallDir "runtime\node\node.exe")) { Join-Path $InstallDir "runtime\node\node.exe" } else { $script:NodeBin }
   $appDir = Join-Path $InstallDir "webapp"
-  $nssm = Join-Path $InstallDir "tools\nssm.exe"
-  New-Item -ItemType Directory -Force -Path (Split-Path $nssm) | Out-Null
-  Copy-Item $PayloadNssm $nssm -Force
+  $nssm = Ensure-NssmBinary
 
   if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
     & $nssm stop $ServiceName | Out-Null

@@ -293,6 +293,21 @@ admin can already do with any standard unzip tool.
   exact grant this installer's own docs ask customers to set up) will
   never have. Added `--set-gtid-purged=OFF` to both platforms' `mysqldump`
   calls, which skips that lookup entirely.
+- With `-EmbeddedDb`, `Setup-EmbeddedDb` and `Install-WindowsService` each
+  staged their own copy of `nssm.exe` under `$InstallDir\tools`. Confirmed
+  via a real `test-windows-embedded-db` CI run: `Setup-EmbeddedDb` runs
+  first and its copy of `nssm.exe` becomes the live process image of the
+  `DCIMMariaDB` service it just registered, so `Install-WindowsService`'s
+  own unconditional `Copy-Item -Force` to the same path then fails with
+  "The process cannot access the file ... because it is being used by
+  another process" — even though embedded MariaDB itself had already
+  initialized and come up correctly. Replaced both copies with a shared
+  `Ensure-NssmBinary` helper: it skips the copy when the staged binary is
+  already byte-identical to the payload (comparing `Get-FileHash`), and
+  only swallows the "in use" exception in that identical case — a
+  genuinely different `nssm.exe` (e.g. a version bump shipped by an
+  upgrade) still fails loudly instead of silently leaving the old binary
+  running.
 
 ## What's real vs. what already existed
 
