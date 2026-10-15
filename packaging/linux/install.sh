@@ -259,7 +259,14 @@ sync_payload() {
 }
 
 install_systemd_unit() {
-  local exec_node="/usr/bin/node"
+  # NODE_BIN is set by validate_node() (always called via run_validations before
+  # this function runs). Bundled runtime wins if present; otherwise use the
+  # actual resolved system node path -- NOT a hardcoded /usr/bin/node, which
+  # silently fails with systemd exit code 203/EXEC wherever Node isn't installed
+  # at exactly that path (e.g. nvm/n/NodeSource-style installs under
+  # /usr/local/bin -- confirmed by running this on a real GitHub Actions
+  # ubuntu-latest runner, where system Node lives at /usr/local/bin/node).
+  local exec_node="${NODE_BIN:-/usr/bin/node}"
   [ -x "$INSTALL_DIR/runtime/node/bin/node" ] && exec_node="$INSTALL_DIR/runtime/node/bin/node"
   sed \
     -e "s#@EXEC_NODE@#$exec_node#g" \
