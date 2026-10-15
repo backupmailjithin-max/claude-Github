@@ -127,7 +127,8 @@ begin
   end
   else if CurPageID = AppSettingsPage.ID then
   begin
-    if not TryStrToInt(Trim(AppSettingsPage.Values[0]), PortNum) or (PortNum < 1) or (PortNum > 65535) then
+    PortNum := StrToIntDef(Trim(AppSettingsPage.Values[0]), -1);
+    if (PortNum < 1) or (PortNum > 65535) then
     begin
       MsgBox('Please enter a valid HTTP port (1-65535).', mbError, MB_OK);
       Result := False;
