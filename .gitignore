@@ -3,4 +3,7 @@ packaging/linux/runtime/
 packaging/windows/runtime/
 packaging/windows/tools/
 packaging/windows/Output/
-dist/
+# repo-root build output only (packaging/*/build-*.sh write here) -- anchored
+# with a leading slash so it does NOT also match node_modules/*/dist/, which
+# bypassed bcryptjs's required ./dist/bcrypt.js and broke every real install
+/dist/
