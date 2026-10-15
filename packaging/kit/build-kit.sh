@@ -57,6 +57,12 @@ shopt -u nullglob
 
 [ -f "$REPO_ROOT/docs/PACKAGING.md" ] && cp "$REPO_ROOT/docs/PACKAGING.md" "$KIT/common/docs/"
 [ -f "$REPO_ROOT/docs/RELEASE_NOTES.md" ] && cp "$REPO_ROOT/docs/RELEASE_NOTES.md" "$KIT/common/release-notes/"
+[ -f "$REPO_ROOT/docs/KNOWN_LIMITATIONS.md" ] && cp "$REPO_ROOT/docs/KNOWN_LIMITATIONS.md" "$KIT/common/docs/"
+[ -f "$REPO_ROOT/docs/UPGRADE_MATRIX.md" ] && cp "$REPO_ROOT/docs/UPGRADE_MATRIX.md" "$KIT/common/docs/"
+if [ -d "$REPO_ROOT/docs/guides" ]; then
+  mkdir -p "$KIT/common/docs/guides"
+  cp "$REPO_ROOT/docs/guides/"*.md "$KIT/common/docs/guides/" 2>/dev/null || warn "no guide files found in $REPO_ROOT/docs/guides"
+fi
 
 cat > "$KIT/common/branding/README.md" <<'EOF'
 Reserved for customer-supplied branding assets (logo, favicon). These are
@@ -74,12 +80,91 @@ EOF
 
 echo "$VERSION" > "$KIT/VERSION"
 
+# ---- Generated release artifacts (derived from the actual build, so they
+# can never drift from what's really in this kit - never hand-maintained). ----
+
+COMMIT_ID="$(cd "$REPO_ROOT" && git rev-parse HEAD 2>/dev/null || echo "unknown (not a git checkout)")"
+BUILD_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+{
+  echo "# DCIM Version Report"
+  echo
+  echo "| Field | Value |"
+  echo "|---|---|"
+  echo "| Version | $VERSION |"
+  echo "| Commit | $COMMIT_ID |"
+  echo "| Build date (UTC) | $BUILD_DATE |"
+  echo
+  echo "## Package sizes"
+  echo
+  echo "| Artifact | Size |"
+  echo "|---|---|"
+  for f in "$KIT"/linux/deb/*.deb "$KIT"/linux/rpm/*.rpm "$KIT"/linux/appliance/*.run \
+           "$KIT"/windows/*.exe; do
+    [ -f "$f" ] || continue
+    printf "| %s | %s |\n" "$(basename "$f")" "$(du -h "$f" | cut -f1)"
+  done
+} > "$KIT/common/docs/VERSION_REPORT.md"
+
+{
+  echo "# DCIM Dependency Report"
+  echo
+  echo "Bundled runtimes (offline - fetched once at build time, never at"
+  echo "install/upgrade/repair time):"
+  echo
+  echo "| Component | Version |"
+  echo "|---|---|"
+  node_ver="$(sed -n 's/^NODE_VERSION="\${NODE_VERSION:-\(.*\)}"/\1/p' "$REPO_ROOT/packaging/linux/fetch-node-runtime.sh" 2>/dev/null || true)"
+  mariadb_ver="$(sed -n 's/^MARIADB_VERSION="\${MARIADB_VERSION:-\(.*\)}"/\1/p' "$REPO_ROOT/packaging/linux/fetch-mariadb-runtime.sh" 2>/dev/null || true)"
+  echo "| Node.js (bundled) | ${node_ver:-see fetch-node-runtime.sh} |"
+  echo "| MariaDB (bundled, --embedded-db) | ${mariadb_ver:-see fetch-mariadb-runtime.sh} |"
+  echo "| OCR engine | Tesseract.js (bundled under webapp/ocr/vendor) |"
+  echo
+  echo "Direct application dependencies (from webapp/package.json):"
+  echo
+  echo "| Package | Version |"
+  echo "|---|---|"
+  if command -v node >/dev/null 2>&1; then
+    node -e '
+      const pkg = require(process.argv[1]);
+      for (const [name, ver] of Object.entries(pkg.dependencies || {})) {
+        console.log(`| ${name} | ${ver} |`);
+      }
+    ' "$REPO_ROOT/dcim/webapp/package.json"
+  else
+    python3 -c "
+import json
+with open('$REPO_ROOT/dcim/webapp/package.json') as f:
+    pkg = json.load(f)
+for name, ver in pkg.get('dependencies', {}).items():
+    print(f'| {name} | {ver} |')
+"
+  fi
+} > "$KIT/common/docs/DEPENDENCY_REPORT.md"
+
+# MANIFEST.txt: every file in the kit with its size, generated before
+# CHECKSUMS.sha256 (below) so it's covered by the checksum too - unlike
+# CHECKSUMS.sha256 itself, a manifest listing itself is not self-referentially
+# broken (its own size just won't count its own final byte count, which is
+# an accepted cosmetic quirk, not a correctness issue).
+( cd "$KIT" && find . -type f | sort | while IFS= read -r f; do
+    printf '%-70s %10s bytes\n' "$f" "$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f")"
+  done ) > "$KIT/MANIFEST.txt"
+
 # Write checksums to a temp file OUTSIDE $KIT first, then move it in - writing
 # directly to $KIT/CHECKSUMS.sha256 via redirection creates the (empty) file
 # before `find` runs, so it would hash itself as an empty file and ship a
 # bogus self-referential entry.
+#
+# Found via real execution (package-validation.yml's checksum-verification
+# step): paths must be relative to $KIT itself (./VERSION, ./install, ...),
+# not prefixed with $KIT_NAME - a customer (or the CI check above) naturally
+# extracts the tarball, cd's into the resulting DCIM-Enterprise-Offline-Kit-*
+# directory, and runs `sha256sum -c CHECKSUMS.sha256` from there. Prefixing
+# every path with the kit's own directory name made every single entry
+# resolve to a nonexistent double-nested path from that directory.
 CHECKSUMS_TMP="$STAGE/CHECKSUMS.sha256.tmp"
-( cd "$STAGE" && find "$KIT_NAME" -type f | sort | xargs sha256sum ) > "$CHECKSUMS_TMP"
+( cd "$KIT" && find . -type f | sort | xargs sha256sum ) > "$CHECKSUMS_TMP"
 mv "$CHECKSUMS_TMP" "$KIT/CHECKSUMS.sha256"
 
 mkdir -p "$OUT_DIR"
