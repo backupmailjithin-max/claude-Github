@@ -25,6 +25,7 @@ cp "$SCRIPT_DIR/install.sh" "$STAGE/usr/share/dcim/install.sh"
 cp "$SCRIPT_DIR/uninstall.sh" "$STAGE/usr/share/dcim/uninstall.sh"
 cp "$SCRIPT_DIR/rollback.sh" "$STAGE/usr/share/dcim/rollback.sh"
 cp "$SCRIPT_DIR/dcim.service.template" "$STAGE/usr/share/dcim/dcim.service.template"
+cp "$SCRIPT_DIR/dcim-mariadb.service.template" "$STAGE/usr/share/dcim/dcim-mariadb.service.template"
 cp "$SCRIPT_DIR/nginx-dcim.conf" "$STAGE/usr/share/dcim/nginx-dcim.conf"
 chmod 755 "$STAGE/usr/share/dcim/install.sh" "$STAGE/usr/share/dcim/uninstall.sh" "$STAGE/usr/share/dcim/rollback.sh"
 
@@ -48,6 +49,14 @@ if [ -x "$SCRIPT_DIR/runtime/node/bin/node" ]; then
   echo "Bundling Node runtime: $("$SCRIPT_DIR/runtime/node/bin/node" --version)"
 else
   echo "No staged runtime found (run fetch-node-runtime.sh first for a bundled package); .deb will require system Node.js >= 18."
+fi
+
+if [ -x "$SCRIPT_DIR/runtime/mariadb/bin/mariadbd" ]; then
+  mkdir -p "$STAGE/usr/share/dcim/runtime"
+  cp -a "$SCRIPT_DIR/runtime/mariadb" "$STAGE/usr/share/dcim/runtime/mariadb"
+  echo "Bundling embedded MariaDB (run 'dcim-setup --embedded-db' to use it instead of an external database)."
+else
+  echo "No staged MariaDB runtime found (run fetch-mariadb-runtime.sh first to offer --embedded-db); .deb will support external DB only."
 fi
 
 ln -s /usr/share/dcim/install.sh "$STAGE/usr/bin/dcim-setup"

@@ -24,6 +24,7 @@ cp "$SCRIPT_DIR/install.sh" "$PAYLOAD/install.sh"
 cp "$SCRIPT_DIR/uninstall.sh" "$PAYLOAD/uninstall.sh"
 cp "$SCRIPT_DIR/rollback.sh" "$PAYLOAD/rollback.sh"
 cp "$SCRIPT_DIR/dcim.service.template" "$PAYLOAD/dcim.service.template"
+cp "$SCRIPT_DIR/dcim-mariadb.service.template" "$PAYLOAD/dcim-mariadb.service.template"
 cp "$SCRIPT_DIR/nginx-dcim.conf" "$PAYLOAD/nginx-dcim.conf"
 chmod 755 "$PAYLOAD/install.sh" "$PAYLOAD/uninstall.sh" "$PAYLOAD/rollback.sh"
 

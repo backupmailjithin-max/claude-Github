@@ -35,6 +35,7 @@ install -m 755 "%{_sourcedir}/dcim-repair.sh" %{buildroot}/usr/bin/dcim-repair
 %attr(755,root,root) /usr/share/dcim/uninstall.sh
 %attr(755,root,root) /usr/share/dcim/rollback.sh
 /usr/share/dcim/dcim.service.template
+/usr/share/dcim/dcim-mariadb.service.template
 /usr/share/dcim/nginx-dcim.conf
 /usr/share/dcim/webapp
 %dir /usr/share/dcim

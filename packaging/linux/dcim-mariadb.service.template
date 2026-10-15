@@ -1,0 +1,17 @@
+[Unit]
+Description=DCIM embedded MariaDB instance
+Before=dcim.service
+
+[Service]
+Type=simple
+ExecStart=@MARIADBD_BIN@ --no-defaults --datadir=@DATA_DIR@ --socket=@SOCKET_PATH@ --pid-file=@PID_FILE@ --port=@DB_PORT@ --bind-address=127.0.0.1 --skip-networking=0 --basedir=@BASE_DIR@
+User=@SERVICE_USER@
+Group=@SERVICE_USER@
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dcim-mariadb
+
+[Install]
+WantedBy=multi-user.target

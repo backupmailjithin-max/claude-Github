@@ -1,7 +1,8 @@
 [Unit]
 Description=DCIM web application
-After=network.target mysqld.service mariadb.service
+After=network.target mysqld.service mariadb.service@DB_DEPENDENCY_SUFFIX@
 Wants=network-online.target
+@DB_REQUIRES_LINE@
 
 [Service]
 Type=simple

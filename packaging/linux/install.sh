@@ -16,6 +16,7 @@ REQUIRED_PORT_DEFAULT=8974
 
 PAYLOAD_WEBAPP="$SCRIPT_DIR/webapp"
 PAYLOAD_RUNTIME="$SCRIPT_DIR/runtime/node"
+PAYLOAD_MARIADB="$SCRIPT_DIR/runtime/mariadb"
 [ -d "$PAYLOAD_WEBAPP" ] || PAYLOAD_WEBAPP="$SCRIPT_DIR/../../dcim/webapp"
 
 MODE=""
@@ -32,6 +33,10 @@ CSP_MODE="report-only"
 AUDIT_RETENTION_DAYS="365"
 ASSUME_YES=0
 PURGE_DATA=0
+EMBEDDED_DB=0
+EMBEDDED_DB_PORT=3307
+EMBEDDED_DB_SERVICE="dcim-mariadb"
+EMBEDDED_DB_DIR="$INSTALL_DIR/mariadb"
 
 log()  { printf '[dcim-install] %s\n' "$*"; }
 err()  { printf '[dcim-install] ERROR: %s\n' "$*" >&2; }
@@ -44,11 +49,18 @@ Usage: $0 [--mode install|upgrade|repair] [options]
 Options:
   --mode MODE          install | upgrade | repair (skips the interactive menu)
   --port PORT          HTTP port the app listens on (default: $REQUIRED_PORT_DEFAULT)
-  --db-host HOST        (default: localhost)
-  --db-port PORT        (default: 3306)
-  --db-user USER        (default: dcim)
-  --db-password PASS
+  --db-host HOST        (default: localhost; ignored with --embedded-db)
+  --db-port PORT        (default: 3306; ignored with --embedded-db)
+  --db-user USER        (default: dcim; ignored with --embedded-db)
+  --db-password PASS    (ignored with --embedded-db - a random one is generated)
   --db-name NAME         (default: dcim)
+  --embedded-db         bundle and run a private MariaDB instance instead of
+                        using an external one (Option 1 vs. the --db-* flags'
+                        Option 2) - requires the package to have been built
+                        with fetch-mariadb-runtime.sh
+  --embedded-db-port PORT  port for the embedded instance (default: 3307,
+                        deliberately not 3306, to avoid colliding with any
+                        existing system MySQL/MariaDB)
   --cors-origin ORIGIN
   --admin-user USER     (install only) replace the seeded "admin" username on first install
   --admin-password PASS (install only) replace the seeded "admin" password on first install
@@ -69,6 +81,8 @@ while [ $# -gt 0 ]; do
     --db-user) DB_USER="$2"; shift 2 ;;
     --db-password) DB_PASSWORD="$2"; shift 2 ;;
     --db-name) DB_NAME="$2"; shift 2 ;;
+    --embedded-db) EMBEDDED_DB=1; shift ;;
+    --embedded-db-port) EMBEDDED_DB_PORT="$2"; shift 2 ;;
     --cors-origin) CORS_ORIGIN="$2"; shift 2 ;;
     --admin-user) ADMIN_USER="$2"; shift 2 ;;
     --admin-password) ADMIN_PASSWORD="$2"; shift 2 ;;
@@ -268,14 +282,111 @@ install_systemd_unit() {
   # ubuntu-latest runner, where system Node lives at /usr/local/bin/node).
   local exec_node="${NODE_BIN:-/usr/bin/node}"
   [ -x "$INSTALL_DIR/runtime/node/bin/node" ] && exec_node="$INSTALL_DIR/runtime/node/bin/node"
+  local db_dep_suffix="" db_requires_line=""
+  if [ -d "$EMBEDDED_DB_DIR/data" ]; then
+    db_dep_suffix=" ${EMBEDDED_DB_SERVICE}.service"
+    db_requires_line="Requires=${EMBEDDED_DB_SERVICE}.service"
+  fi
   sed \
     -e "s#@EXEC_NODE@#$exec_node#g" \
     -e "s#@INSTALL_DIR@#$INSTALL_DIR#g" \
     -e "s#@SERVICE_USER@#$SERVICE_USER#g" \
+    -e "s#@DB_DEPENDENCY_SUFFIX@#$db_dep_suffix#g" \
+    -e "s#@DB_REQUIRES_LINE@#$db_requires_line#g" \
     "$SCRIPT_DIR/dcim.service.template" > "$UNIT_PATH"
   systemctl daemon-reload
   systemctl enable "$SERVICE_NAME" >/dev/null
   log "Installed and enabled systemd service '$SERVICE_NAME' (auto-start on boot)."
+}
+
+setup_embedded_db() {
+  [ -x "$PAYLOAD_MARIADB/bin/mariadbd" ] || die "--embedded-db requires a bundled MariaDB runtime (run fetch-mariadb-runtime.sh at package-build time)."
+  local engine_dir="$EMBEDDED_DB_DIR/engine"
+  local data_dir="$EMBEDDED_DB_DIR/data"
+  local socket_path="$EMBEDDED_DB_DIR/mariadb.sock"
+  local pid_file="$EMBEDDED_DB_DIR/mariadb.pid"
+  local marker="$EMBEDDED_DB_DIR/.initialized"
+  local unit_path="/etc/systemd/system/${EMBEDDED_DB_SERVICE}.service"
+
+  install -d -m 755 "$EMBEDDED_DB_DIR"
+  rm -rf "$engine_dir"
+  install -d -m 755 "$engine_dir"
+  cp -a "$PAYLOAD_MARIADB/." "$engine_dir/"
+
+  local first_init=0
+  if [ ! -d "$data_dir" ]; then
+    first_init=1
+    install -d -m 750 "$data_dir"
+    log "Initializing embedded MariaDB data directory..."
+    local install_db_bin="$engine_dir/bin/mariadb-install-db"
+    [ -x "$install_db_bin" ] || install_db_bin="$engine_dir/scripts/mariadb-install-db"
+    [ -x "$install_db_bin" ] || install_db_bin="$engine_dir/scripts/mysql_install_db"
+    [ -x "$install_db_bin" ] || die "Could not find mariadb-install-db in the bundled MariaDB runtime."
+    # --force: skips the hostname-resolves-to-itself check, which fails in many
+    # containers/offline hosts with unusual /etc/hosts or no DNS at all (found
+    # via real execution: "Neither host '...' nor 'localhost' could be looked
+    # up") - this installer already doesn't depend on the system hostname
+    # resolving to anything for the app itself to work, so skipping that check
+    # here is safe.
+    "$install_db_bin" --no-defaults --basedir="$engine_dir" --datadir="$data_dir" \
+      --auth-root-authentication-method=normal --force >/dev/null
+  fi
+  chown -R "$SERVICE_USER:$SERVICE_USER" "$EMBEDDED_DB_DIR"
+
+  # Render + (re)install the dedicated systemd unit for the embedded instance -
+  # idempotent and safe to re-run on install/repair; data is untouched either way.
+  sed \
+    -e "s#@MARIADBD_BIN@#$engine_dir/bin/mariadbd#g" \
+    -e "s#@DATA_DIR@#$data_dir#g" \
+    -e "s#@SOCKET_PATH@#$socket_path#g" \
+    -e "s#@PID_FILE@#$pid_file#g" \
+    -e "s#@DB_PORT@#$EMBEDDED_DB_PORT#g" \
+    -e "s#@BASE_DIR@#$engine_dir#g" \
+    -e "s#@SERVICE_USER@#$SERVICE_USER#g" \
+    "$SCRIPT_DIR/dcim-mariadb.service.template" > "$unit_path"
+  systemctl daemon-reload
+  systemctl enable "$EMBEDDED_DB_SERVICE" >/dev/null
+  systemctl restart "$EMBEDDED_DB_SERVICE"
+
+  log "Waiting for embedded MariaDB to become available..."
+  local i
+  for i in $(seq 1 30); do
+    "$engine_dir/bin/mysqladmin" --no-defaults --socket="$socket_path" -u root ping >/dev/null 2>&1 && break
+    sleep 1
+  done
+  "$engine_dir/bin/mysqladmin" --no-defaults --socket="$socket_path" -u root ping >/dev/null 2>&1 \
+    || die "Embedded MariaDB did not start within 30s. Check: journalctl -u $EMBEDDED_DB_SERVICE -n 100"
+
+  if [ "$first_init" -eq 1 ]; then
+    DB_PASSWORD="$(random_secret | head -c 32)"
+    local root_pw esc_db_pw esc_root_pw
+    root_pw="$(random_secret | head -c 32)"
+    esc_db_pw="$(printf '%s' "$DB_PASSWORD" | sed "s/'/''/g")"
+    esc_root_pw="$(printf '%s' "$root_pw" | sed "s/'/''/g")"
+    "$engine_dir/bin/mysql" --no-defaults --socket="$socket_path" -u root <<SQL
+ALTER USER 'root'@'localhost' IDENTIFIED BY '$esc_root_pw';
+CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4;
+CREATE USER IF NOT EXISTS '$DB_USER'@'127.0.0.1' IDENTIFIED BY '$esc_db_pw';
+GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'127.0.0.1';
+FLUSH PRIVILEGES;
+SQL
+    echo "$root_pw" > "$EMBEDDED_DB_DIR/.root-password"
+    chmod 600 "$EMBEDDED_DB_DIR/.root-password"
+    chown "$SERVICE_USER:$SERVICE_USER" "$EMBEDDED_DB_DIR/.root-password"
+    touch "$marker"
+    log "Embedded MariaDB initialized: database '$DB_NAME', user '$DB_USER'. Root password saved to $EMBEDDED_DB_DIR/.root-password (needed only for advanced maintenance)."
+  else
+    # Repair / re-run: data + credentials already exist. Reuse the existing
+    # DB_PASSWORD from .env rather than generating a new one - generating one
+    # here without also updating MariaDB's own stored password for the user
+    # would just lock the app out.
+    if [ -f "$ENV_FILE" ]; then DB_PASSWORD="$(sed -n 's/^DB_PASSWORD=//p' "$ENV_FILE")"; fi
+    [ -n "$DB_PASSWORD" ] || die "Embedded MariaDB data already exists but no existing DB_PASSWORD was found in $ENV_FILE to reuse. Restore it from backup, or remove $EMBEDDED_DB_DIR to reinitialize (data loss)."
+    log "Embedded MariaDB already initialized; reusing the existing database and credentials."
+  fi
+
+  DB_HOST="127.0.0.1"
+  DB_PORT="$EMBEDDED_DB_PORT"
 }
 
 install_cli_utilities() {
@@ -290,7 +401,12 @@ install_cli_utilities() {
   # paths before calling into install.sh, and this must not clobber those.
   local cli_dir="$INSTALL_DIR/cli"
   install -d -m 755 "$cli_dir"
-  for f in dcim-service.sh dcim-upgrade.sh dcim-repair.sh install.sh uninstall.sh rollback.sh; do
+  # install.sh itself renders dcim.service.template / dcim-mariadb.service.template
+  # from "$SCRIPT_DIR/..." - once dcim-upgrade/dcim-repair resolve back to this
+  # cached copy (see below), SCRIPT_DIR becomes $cli_dir, so those templates must
+  # be cached here too or a later repair/upgrade run fails to find them.
+  for f in dcim-service.sh dcim-upgrade.sh dcim-repair.sh install.sh uninstall.sh rollback.sh \
+           dcim.service.template dcim-mariadb.service.template; do
     [ -f "$SCRIPT_DIR/$f" ] || continue
     # On a standalone (non-.deb/.rpm) install, /usr/bin/dcim-upgrade resolves back to
     # THIS SAME cached copy at $cli_dir (that's the point - it survives the original
@@ -414,6 +530,7 @@ do_install() {
   ensure_service_user
   sync_payload
   install_cli_utilities
+  [ "$EMBEDDED_DB" -eq 1 ] && setup_embedded_db
   write_env_file
   test_db_connection
   install_systemd_unit
@@ -449,6 +566,10 @@ do_repair() {
   backup_before_change
   sync_payload
   install_cli_utilities
+  # Auto-detect: a repair run doesn't need --embedded-db re-passed to know an
+  # embedded instance is in use, since its data directory is the evidence.
+  [ -d "$EMBEDDED_DB_DIR/data" ] && EMBEDDED_DB=1
+  [ "$EMBEDDED_DB" -eq 1 ] && setup_embedded_db
   install_systemd_unit
   chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
   systemctl restart "$SERVICE_NAME"

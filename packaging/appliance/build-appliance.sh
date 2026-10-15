@@ -27,10 +27,15 @@ PAYLOAD="$STAGE/dcim-appliance"
 mkdir -p "$PAYLOAD"
 cp "$LINUX_DIR/install.sh" "$LINUX_DIR/uninstall.sh" "$LINUX_DIR/rollback.sh" "$LINUX_DIR/dcim-service.sh" \
    "$LINUX_DIR/dcim-upgrade.sh" "$LINUX_DIR/dcim-repair.sh" \
-   "$LINUX_DIR/dcim.service.template" "$LINUX_DIR/nginx-dcim.conf" "$PAYLOAD/"
+   "$LINUX_DIR/dcim.service.template" "$LINUX_DIR/dcim-mariadb.service.template" "$LINUX_DIR/nginx-dcim.conf" "$PAYLOAD/"
 chmod 755 "$PAYLOAD"/*.sh
 
 cp -a "$LINUX_DIR/runtime" "$PAYLOAD/runtime"
+if [ -x "$LINUX_DIR/runtime/mariadb/bin/mariadbd" ]; then
+  echo "Bundling embedded MariaDB (run with --embedded-db to use it)."
+else
+  echo "No bundled MariaDB found (run fetch-mariadb-runtime.sh first to offer --embedded-db) - appliance will support external DB only."
+fi
 
 cp -a "$REPO_ROOT/dcim/webapp" "$PAYLOAD/webapp"
 rm -rf "$PAYLOAD/webapp/.env" "$PAYLOAD/webapp/uploads" "$PAYLOAD/webapp/backups" "$PAYLOAD/webapp/logs"
