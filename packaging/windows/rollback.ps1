@@ -13,7 +13,11 @@ function Log($msg) { Write-Host "[dcim-rollback] $msg" }
 if (-not $SnapshotDir) {
   $marker = Join-Path $InstallDir ".last-pre-change-backup"
   if (-not (Test-Path $marker)) { throw "No -SnapshotDir given and no recorded last snapshot at $marker." }
-  $SnapshotDir = Get-Content $marker -Raw
+  # .Trim() matters: Get-Content -Raw returns the file's exact bytes, including
+  # the trailing newline Set-Content wrote when install.ps1 recorded this path -
+  # without it, Test-Path below is asked about "...\20261015-200935\r\n" and
+  # fails even though the real directory exists (confirmed via real execution).
+  $SnapshotDir = (Get-Content $marker -Raw).Trim()
   Log "Using most recent recorded snapshot: $SnapshotDir"
 }
 if (-not (Test-Path $SnapshotDir)) { throw "Snapshot directory not found: $SnapshotDir" }
