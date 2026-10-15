@@ -109,6 +109,191 @@ allows, and hands the rest to CI:
   the systemd logic shared across every Linux target; the distro jobs are
   evidence the package itself installs cleanly.
 
+## Architecture round: single-download Distribution Kit, embedded database, DR hardening
+
+Following an architecture review (separate platform installers vs. a single
+unified package), the decision was: keep the native per-platform installers
+as the actual install mechanism (no new cross-platform install engine), but
+wrap them in one outer "kit" so the customer downloads a single archive and
+a thin OS-detecting dispatcher invokes the right native installer
+underneath. Everything below is additive to the Gap-closure round above;
+nothing already shipped was changed in behavior except where a real bug was
+found (noted explicitly).
+
+### DCIM Enterprise Offline Distribution Kit
+
+`packaging/kit/build-kit.sh` assembles `DCIM-Enterprise-Offline-Kit-v<version>.{tar.gz,zip}`
+from the four already-built, already-tested artifacts:
+
+```
+DCIM-Enterprise-Offline-Kit-v3.2.2/
+├── install                  POSIX dispatcher: reads /etc/os-release, installs
+│                             the matching .deb (dpkg) or .rpm (dnf/yum), or
+│                             falls back to the self-contained .run appliance
+│                             for anything it doesn't recognize (also
+│                             selectable explicitly via --appliance)
+├── install.ps1               Windows dispatcher: logs the detected Windows
+│                             edition, launches windows\DCIM-Setup*.exe
+├── VERSION
+├── CHECKSUMS.sha256
+├── windows/
+│   ├── DCIM-Setup-<ver>.exe        the main installer (unchanged)
+│   ├── DCIM-Upgrade-<ver>.exe      carries a NEW payload, forces -Mode upgrade
+│   └── DCIM-Repair-<ver>.exe       carries a NEW payload, forces -Mode repair
+├── linux/
+│   ├── deb/*.deb
+│   ├── rpm/*.rpm
+│   ├── appliance/*.run
+│   ├── dcim-upgrade            thin wrapper over install.sh --mode upgrade
+│   └── dcim-repair             thin wrapper over install.sh --mode repair
+└── common/{docs,branding,templates,release-notes}/
+```
+
+The dispatchers contain **no install logic of their own** — they only detect
+the OS and hand off to the same native artifact that was already built and
+tested individually. `windows-2019` support evidence could not be produced:
+three separate CI runs confirmed GitHub no longer offers that hosted runner
+image at all (jobs stayed queued indefinitely, never assigned a runner) —
+this was removed from `test-lifecycle.yml`'s matrix rather than left to
+silently stall every future run.
+
+**Windows Upgrade/Repair utilities**: `dcim-upgrade-utility.iss` /
+`dcim-repair-utility.iss` are two more Inno Setup scripts sharing
+`dcim-installer.iss`'s payload and AppId, differing only in forcing
+`install.ps1 -Mode upgrade` / `-Mode repair` instead of auto-detecting. This
+fixed a real, previously-undetected gap: the existing "DCIM Upgrade Utility"
+Start Menu shortcut re-syncs `install.ps1`'s own already-installed webapp
+folder over itself, so it never actually carries a newer version — it was
+only ever equivalent to Repair. The kit's `DCIM-Upgrade.exe` carries the new
+payload with it, the same way running a newer `DCIM-Setup.exe` already does,
+just without the full installer wizard.
+
+### Embedded MariaDB (Database Strategy "Option 1")
+
+`--embedded-db` (Linux) / `-EmbeddedDb` (Windows) bring up a **private**
+MariaDB instance instead of requiring an external one — Option 2 (external
+MySQL/MariaDB, the `--db-*`/`-Db*` flags) is unchanged and remains the
+default.
+
+- `fetch-mariadb-runtime.sh` / `.ps1` download a generic MariaDB server
+  build at package-build time (same pattern as the Node runtime/NSSM
+  fetchers) — not committed to git, not run by the installer itself.
+- On install: initializes a private data directory under
+  `$InstallDir/mariadb/data`, runs the engine as its **own** service
+  (`dcim-mariadb.service` on Linux, `DCIMMariaDB` via NSSM on Windows),
+  bound to `127.0.0.1` on port **3307** (deliberately not 3306, to avoid
+  colliding with any existing system MySQL/MariaDB), and creates the app's
+  database/user/random-password through the bundled engine — no system
+  package manager involved.
+- The app's own service unit is wired to depend on it
+  (`Requires=`/`After=` on Linux, NSSM `DependOnService` on Windows),
+  auto-detected from the data directory's presence — a repair run doesn't
+  need the flag re-passed to keep working.
+- Idempotent across repair: a second run reuses the existing data and
+  credentials (read back from `.env`) instead of reinitializing, which
+  would just lock the app out.
+- RPM has no bundled-runtime story at all yet (pre-existing, see *Known
+  limitations*) — `--embedded-db` there is a no-op until that's addressed.
+
+Real bugs found only by actually running this (not by reading it), all
+fixed:
+- A `.gitignore` rule meant for the repo-root build-output directory
+  (`dist/`) was unanchored, so it also matched `node_modules/*/dist/`
+  anywhere in the tree — silently stripping `bcryptjs`'s required
+  `dist/bcrypt.js` (the server couldn't start at all) and
+  `wasm-feature-detect`/`idb-keyval` (OCR would have broken on first real
+  use). Anchored to `/dist/`; the five stripped directories were restored.
+- `mariadb-install-db`'s hostname-resolution check fails in many
+  containers/offline hosts with unusual `/etc/hosts` — added `--force`.
+- The original `share/` trim step for the bundled runtime deleted
+  MariaDB's system-table bootstrap SQL (`mysql_system_tables.sql`,
+  `fill_help_tables.sql`, etc.), which live as plain files directly under
+  `share/`, not inside a locale subdirectory — `mariadb-install-db` failed
+  outright until the trim was narrowed to only non-English locale
+  subdirectories.
+- A standalone (non-`.deb`/`.rpm`) install's cached CLI copy
+  (`$InstallDir/cli`, see *dcim-upgrade/dcim-repair* below) has no bundled
+  MariaDB payload next to it on repair — only the scripts are cached
+  there, not the multi-hundred-MB engine. Fixed by falling back to the
+  already-staged engine instead of requiring a payload that was never
+  going to be there.
+- Windows's `mariadb-install-db.exe` rejects
+  `--auth-root-authentication-method` outright (unsupported on that
+  platform's build) — removed for the Windows path; its default already
+  creates root with no password, the same end state.
+- `dcim-upgrade.sh`/`dcim-repair.sh` resolve `install.sh` via
+  `dirname "${BASH_SOURCE[0]}"`, but when invoked through a symlink (the
+  standalone-install case) that resolves to the *symlink's* directory, not
+  the real file's — fixed with `readlink -f` first.
+
+### Session Timeout, Password Policy, branding preview
+
+- **Session Timeout**: `server.js`'s JWT expiry was hardcoded `'8h'` in both
+  places it's issued. Parameterized via one `JWT_EXPIRES_IN` constant
+  (same "read once from `.env` at startup" pattern as `JWT_SECRET`/
+  `CSP_MODE`), exposed as `sessionTimeoutHours` in the Security tab.
+- **Password Policy**: a configurable minimum password length
+  (`app_settings`-backed, applies immediately) governing the Admin Account
+  tool's own password check — deliberately scoped to that one additive
+  endpoint; the app's own sign-in/change-password minimum is untouched,
+  existing business logic.
+- **Branding preview**: logo/favicon inputs show a live local preview
+  (`FileReader`, no upload) before saving.
+
+### Structured Health Validation and Support Bundle
+
+- `GET /api/health/validate` (Admin) returns PASS/WARNING/FAIL per
+  component — Service, Database, OCR, API Health, Version Endpoint, Upload
+  Engine, Backup Engine, SMTP, Dell OME, HPE OneView — composing the same
+  checks `/api/health/full` already uses (kept untouched). `install.sh` /
+  `install.ps1` sign in and print this automatically after install/
+  upgrade/repair.
+- `POST /api/support/bundle` (Admin) downloads a `.zip` (system info, the
+  health report, a performance snapshot, redacted `.env`, last 500 log
+  lines) for troubleshooting. No new npm dependency: `lib/zip-writer.js`
+  is a small self-contained ZIP writer (deflate + central directory),
+  round-trip tested against the system `unzip` binary.
+- Both endpoints needed adding to `server.js`'s existing
+  `MUST_CHANGE_ALLOWED` allowlist — found the same way the earlier
+  `/api/setup/admin-account` gap was: the installer signs in with the
+  still-default `admin`/`admin` account to print the report, which 403'd
+  under the forced-password-change gate otherwise.
+
+### Disaster-recovery file export
+
+Backup/Restore (`BACKUP_TABLES`) and Config Export/Import already cover
+every DB table and setting — confirmed by reading `server.js`, not
+assumed. The actual gap: two upload directories
+(`webapp/uploads/branding` for logo/favicon, `webapp/uploads/movements`
+for Material Movement DC/invoice documents) store files on local disk with
+only the filename kept in the database. `GET /api/backup/files-archive`
+(Admin) zips the entire `uploads/` tree for download — read-only against
+the existing upload code, using the same zip-writer as the support bundle.
+Scoped to export only: a matching import/extract endpoint would mean
+hand-rolling a ZIP *reader* for a lower-value automation of something an
+admin can already do with any standard unzip tool.
+
+### Two more real bugs found via CI (Windows-specific)
+
+- `rollback.ps1`'s confirmation prompt (`Read-Host`) is not satisfied by
+  `echo y | rollback.ps1` the way a POSIX shell's `read` is — PowerShell
+  pipeline input and console stdin are different things. Added a real
+  `-Yes` switch.
+- The database restore step used `cmd /c "mysql ... < file"` without
+  checking its exit code, so a failed import was silently logged as
+  "Database restored" — replaced with `System.Diagnostics.Process`/
+  `ProcessStartInfo` (exit code checked, arguments passed via
+  `ArgumentList` instead of a hand-quoted command line, the dump streamed
+  as raw bytes instead of through a text pipeline that could re-encode
+  it).
+- `mysqldump` failed outright against a real MySQL 8 server with "Couldn't
+  execute 'FLUSH TABLES': Access denied" — MySQL 8 attempts to record GTID
+  state (needing a global privilege) even with `--single-transaction`,
+  which a least-privilege DB user scoped to just this app's database (the
+  exact grant this installer's own docs ask customers to set up) will
+  never have. Added `--set-gtid-purged=OFF` to both platforms' `mysqldump`
+  calls, which skips that lookup entirely.
+
 ## What's real vs. what already existed
 
 | Roadmap phase | Status | Where |
@@ -180,57 +365,90 @@ second simulated "new" bundle.
 
 ```
 dcim/webapp/                  The application payload (Node/Express + MySQL).
-  server.js                   ~20 lines added (require + register the new module); nothing else changed.
-  lib/setup-routes.js         New: Phase 2/3/4/5/9 + export/import APIs (see above).
-  lib/smtp-client.js          New: dependency-free raw SMTP client for the SMTP test action.
-  setup-wizard.html           New: standalone first-run / infra-config admin page.
-  deployment-dashboard.html   New: standalone deployment status admin page.
+  server.js                   Additive: require + register the new module, MUST_CHANGE_ALLOWED
+                               entries, JWT_EXPIRES_IN constant. Nothing else changed.
+  lib/setup-routes.js         Phase 2/3/4/5/9 + export/import + health-validate + support-bundle +
+                               DR files-archive APIs (see above).
+  lib/smtp-client.js          Dependency-free raw SMTP client for the SMTP test action.
+  lib/zip-writer.js           Dependency-free ZIP writer (deflate + central directory), used by
+                               the support bundle and the DR files-archive export.
+  setup-wizard.html           Standalone first-run / infra-config admin page.
+  deployment-dashboard.html   Standalone deployment status admin page.
+
+packaging/kit/
+  install                     POSIX OS-detecting dispatcher for the Distribution Kit.
+  install.ps1                 Windows dispatcher for the Distribution Kit.
+  build-kit.sh                Assembles DCIM-Enterprise-Offline-Kit-v<version>.{tar.gz,zip}
+                               from the four platform artifacts below.
 
 packaging/linux/
-  install.sh                  Install / Upgrade / Repair, with pre-flight validation.
+  install.sh                  Install / Upgrade / Repair, with pre-flight validation and
+                               --embedded-db.
   uninstall.sh                Stops + disables the service; --purge-data removes files too.
   rollback.sh                 Restores files/.env/database from an Upgrade/Repair's pre-change snapshot.
   dcim-service.sh             `dcim-service {start|stop|restart|status|logs}` convenience wrapper.
+  dcim-upgrade.sh / dcim-repair.sh
+                               Dedicated CLI entry points, installed on PATH (by the package's
+                               postinst, or by install.sh itself on a standalone install).
   dcim.service.template       Hardened systemd unit (placeholders filled in by install.sh).
+  dcim-mariadb.service.template
+                               systemd unit for the embedded MariaDB instance.
   nginx-dcim.conf             Optional reverse proxy config.
   fetch-node-runtime.sh       Build-time helper: downloads a Node runtime to bundle.
-  build-deb.sh                Stages a .deb (supports a bundled runtime).
-  build-rpm.sh                Stages a .rpm (requires system Node.js today).
+  fetch-mariadb-runtime.sh    Build-time helper: downloads a MariaDB server to bundle (--embedded-db).
+  build-deb.sh                Stages a .deb (supports bundled Node + bundled MariaDB).
+  build-rpm.sh                Stages a .rpm (requires system Node.js today; no --embedded-db).
   debian/, rpm/                Control files / spec used by the two build scripts.
 
 packaging/windows/
-  install.ps1                 Install / Upgrade / Repair, registers a Windows Service via NSSM.
+  install.ps1                 Install / Upgrade / Repair, registers a Windows Service via NSSM,
+                               supports -EmbeddedDb.
   uninstall.ps1                Removes the service (and optionally the files).
   rollback.ps1                 Restores .env/database from an Upgrade/Repair's pre-change snapshot.
   dcim-service.ps1             `dcim-service.ps1 -Action {start|stop|restart|status}` convenience wrapper.
+  dcim-upgrade.ps1 / dcim-repair.ps1
+                               Thin wrappers over install.ps1 -Mode upgrade/repair.
   fetch-node-runtime.ps1       Build-time helper: downloads a Node runtime to bundle.
   fetch-nssm.ps1               Build-time helper: downloads nssm.exe (service wrapper).
+  fetch-mariadb-runtime.ps1    Build-time helper: downloads a MariaDB server to bundle (-EmbeddedDb).
   dcim-installer.iss           Inno Setup script -> compiled to dcim-setup-<version>.exe.
+  dcim-upgrade-utility.iss / dcim-repair-utility.iss
+                               Same payload/AppId as dcim-installer.iss, forcing -Mode upgrade/repair -
+                               compiled to standalone DCIM-Upgrade/DCIM-Repair .exe utilities.
 
 packaging/appliance/
-  build-appliance.sh           Phase 7: bundles runtime + webapp + every installer script into
-                                ONE self-extracting dcim-appliance-<version>-linux-x64.run file.
+  build-appliance.sh           Bundles runtime (+ MariaDB if staged) + webapp + every installer
+                                script into ONE self-extracting dcim-appliance-<version>-linux-x64.run.
 
 .github/workflows/build-packages.yml
-                               CI: builds the .deb, .rpm, Windows .exe, and the offline appliance
-                               on every tag push (or manual dispatch) and uploads them as artifacts.
+                               CI: builds the .deb, .rpm, Windows .exe (+ utilities), and the
+                               offline appliance, assembles the Distribution Kit, and smoke-tests
+                               the kit's dispatcher for real - on every tag push or manual dispatch.
+.github/workflows/test-lifecycle.yml
+                               CI (manual dispatch only): real install/upgrade/repair/rollback
+                               lifecycle on Windows and Ubuntu, for both external-DB and
+                               --embedded-db, plus RPM package-layout checks on Rocky/Alma.
 ```
 
-## Why Node is "bundled" but MySQL isn't
+## Why Node is always bundled, and MySQL/MariaDB is now optional
 
-Phase 1 calls for bundling the Node.js runtime, which this does: `fetch-node-runtime.*`
-downloads a pinned Node build at **package-build time** (locally or in CI) and the
-installers prefer it over any system Node. The runtime itself is never committed to
-git — only the scripts that fetch it — so the repository doesn't carry vendored
-binaries, and bumping the Node version is a one-line change.
+`fetch-node-runtime.*` downloads a pinned Node build at **package-build
+time** (locally or in CI) and the installers prefer it over any system
+Node. The runtime itself is never committed to git — only the scripts that
+fetch it — so the repository doesn't carry vendored binaries, and bumping
+the Node version is a one-line change.
 
-MySQL/MariaDB is intentionally **not** bundled. The installers validate connectivity
-to an existing MySQL 8 / MariaDB 10.6+ instance instead of vendoring a database
-server. Bundling a full DB engine (an "omnibus" style package, as some enterprise
-installers do) is a much larger undertaking — embedded data directory
-initialization, its own upgrade/rollback story, platform-specific binaries — and
-was deliberately deferred so Phase 1 stays focused on packaging the application
-itself. If/when that's wanted, it's a follow-on phase, not a tweak to this one.
+MySQL/MariaDB has two supported paths, selected at install time (see
+**Embedded MariaDB** above for the full picture):
+
+- **Option 2 (default, unchanged)**: validate connectivity to an existing
+  MySQL 8 / MariaDB 10.6+ instance via `--db-*` / `-Db*` flags.
+- **Option 1 (`--embedded-db` / `-EmbeddedDb`)**: bundle and run a private
+  MariaDB instance, the same "fetch at build time, never commit the
+  binary" pattern as Node. This was a genuinely larger undertaking than
+  Phase 1's Node bundling (data directory initialization, its own service
+  lifecycle, platform-specific binaries) and was deliberately sequenced
+  after the rest of the packaging work for that reason.
 
 ## Windows .exe
 
@@ -366,10 +584,18 @@ separate appliance variant.
   pass `--db-*` flags; the `.deb`/`.rpm` postinst therefore only auto-runs on
   **upgrade** (where a config already exists) and tells you to run
   `sudo dcim-setup` interactively on a fresh install.
-- RPM packaging and the offline appliance both currently require the Linux
-  `.deb`-style bundled-runtime path to have been staged; `build-rpm.sh`
-  itself still always requires a system Node.js >= 18 (not yet wired to the
-  bundled runtime).
+- RPM packaging still always requires a system Node.js >= 18 and does not
+  support `--embedded-db` (no bundled-runtime story there at all yet,
+  Node included) — a pre-existing gap, unchanged scope. The offline
+  appliance and `.deb` both support bundled Node and `--embedded-db` once
+  `fetch-node-runtime.sh`/`fetch-mariadb-runtime.sh` have been staged.
+- `windows-2019` has no CI coverage: GitHub no longer offers it as a
+  hosted runner image (confirmed by three separate runs never getting a
+  runner assigned). Genuine Server 2019 execution evidence would require a
+  self-hosted runner.
+- The DR file export (`/api/backup/files-archive`) is export-only; restoring
+  the files on a new server is a manual unzip-and-copy into
+  `webapp/uploads/`, documented in the wizard rather than automated.
 - `/api/settings/integrations/test` and the deep health check's monitoring
   probe make a real network call to whatever OME/OneView host is configured;
   there's no mock mode, so testing them end-to-end needs a reachable
