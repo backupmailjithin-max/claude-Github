@@ -291,7 +291,15 @@ install_cli_utilities() {
   local cli_dir="$INSTALL_DIR/cli"
   install -d -m 755 "$cli_dir"
   for f in dcim-service.sh dcim-upgrade.sh dcim-repair.sh install.sh uninstall.sh rollback.sh; do
-    [ -f "$SCRIPT_DIR/$f" ] && install -m 755 "$SCRIPT_DIR/$f" "$cli_dir/$f"
+    [ -f "$SCRIPT_DIR/$f" ] || continue
+    # On a standalone (non-.deb/.rpm) install, /usr/bin/dcim-upgrade resolves back to
+    # THIS SAME cached copy at $cli_dir (that's the point - it survives the original
+    # extract dir being removed), so re-running upgrade/repair makes $SCRIPT_DIR ==
+    # $cli_dir and this would otherwise try to `install` a file onto itself. Skip
+    # when source and destination are already the same file (confirmed via real
+    # execution: "install: '...' and '...' are the same file").
+    if [ -e "$cli_dir/$f" ] && [ "$SCRIPT_DIR/$f" -ef "$cli_dir/$f" ]; then continue; fi
+    install -m 755 "$SCRIPT_DIR/$f" "$cli_dir/$f"
   done
   for name in dcim-service dcim-upgrade dcim-repair; do
     [ -e "/usr/bin/$name" ] || ln -s "$cli_dir/${name}.sh" "/usr/bin/$name"

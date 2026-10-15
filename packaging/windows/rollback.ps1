@@ -3,7 +3,8 @@
 # automatically by install.ps1 before an Upgrade or Repair.
 param(
   [string]$InstallDir = "C:\DCIM",
-  [string]$SnapshotDir
+  [string]$SnapshotDir,
+  [switch]$Yes
 )
 $ErrorActionPreference = "Stop"
 $ServiceName = "DCIM"
@@ -22,8 +23,15 @@ if (-not $SnapshotDir) {
 }
 if (-not (Test-Path $SnapshotDir)) { throw "Snapshot directory not found: $SnapshotDir" }
 
-$confirm = Read-Host "This will stop DCIM, restore .env from $SnapshotDir, and restore the database if a dump is present. Continue? [y/N]"
-if ($confirm -ne "y" -and $confirm -ne "Y") { throw "Aborted." }
+if (-not $Yes) {
+  # Found via real execution: `echo y | rollback.ps1` (the natural way to script a
+  # yes-answer, and the pattern the Linux rollback.sh test already used successfully)
+  # does NOT satisfy Read-Host on Windows - PowerShell pipeline input and console
+  # stdin are different things, unlike a POSIX shell's `read`. A real -Yes switch
+  # (matching install.ps1's own convention) is the only way to automate this.
+  $confirm = Read-Host "This will stop DCIM, restore .env from $SnapshotDir, and restore the database if a dump is present. Continue? [y/N]"
+  if ($confirm -ne "y" -and $confirm -ne "Y") { throw "Aborted." }
+}
 
 Stop-Service -Name $ServiceName -ErrorAction SilentlyContinue
 

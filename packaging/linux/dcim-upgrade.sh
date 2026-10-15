@@ -12,4 +12,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 INSTALL_SH="$SCRIPT_DIR/install.sh"
 [ -x "$INSTALL_SH" ] || INSTALL_SH="/usr/share/dcim/install.sh"
+# Note for a standalone (non-.deb/.rpm) install: $INSTALL_SH here is the CACHED
+# copy install_cli_utilities() staged at first install, not whatever newer
+# install.sh may exist elsewhere - so this re-applies the currently cached
+# version (useful for re-registering the service, fixing permissions, etc.),
+# it does not fetch or apply a newer release. To actually move to a newer
+# version on such an install, run the NEW version's own install.sh --mode
+# upgrade directly (or the Distribution Kit's per-version artifacts) instead
+# of this PATH shortcut. A .deb/.rpm install doesn't have this limitation:
+# installing the new package itself replaces this file with the new version
+# before any upgrade logic runs.
 exec "$INSTALL_SH" --mode upgrade --yes "$@"
