@@ -9,16 +9,22 @@ below. This document is for you, not your customers.
 
 - You hold a private signing key. The app ships with the matching **public**
   key, which can verify a license but never create one.
-- A license file (`.lic`) is a small signed JSON blob: customer name, max
-  active users, expiry date, and (optionally) the one machine it's allowed
-  to run on.
+- A license is a small signed blob: customer name, max active users,
+  optional expiry date, and (optionally) the one machine it's allowed to run
+  on. It comes in two equivalent forms — pick whichever is easier to send:
+  - **Activation code** — the same license as one line of text (e.g.
+    `eyJhbGc-iOiJFZ...`), made for pasting into **Settings → License**
+    directly in the app, or into an email.
+  - **`.lic` file** — the original JSON form, for uploading if you prefer
+    attaching a file instead.
 - The app checks the license on every request. Missing/invalid/expired →
   the app still starts and an Admin can still sign in, but everything else
-  returns `402 License required` until a valid license is uploaded via
-  Settings → License (or `POST /api/license/activate`).
-- A license bound to a machine ID fails immediately if the file is copied
-  to a different machine — the signature still checks out (it really was
-  issued by you), but the machine fingerprint won't match.
+  returns `402 License required` until a valid license is activated from
+  **Settings → License** (or via `POST /api/license/activate`).
+- A license bound to a machine ID fails immediately if it's copied to a
+  different machine — the signature still checks out (it really was issued
+  by you), but the machine fingerprint won't match, so the activation is
+  rejected there.
 
 See `dcim/webapp/lib/license.js` for the full verification logic and
 `docs/guides/` wherever you'd like to fold this into customer-facing docs.
@@ -58,40 +64,41 @@ See `dcim/webapp/lib/license.js` for the full verification logic and
 
 ## Issuing a license to a customer (do this per customer)
 
-1. Get the customer's machine ID. They can find it one of two ways:
-   - From the command line on their machine:
-     `node tools/license-fingerprint.js` (run from the installed
-     `dcim/webapp` directory).
-   - Or, since they're already signed in as Admin to troubleshoot an
-     unlicensed install, via the API directly:
-     `GET /api/license/fingerprint` (works even before activation,
-     precisely so this is possible).
+1. The customer opens **Settings → License** in the app (visible to Global
+   Admins) and copies their **machine ID** shown there, and emails it to you.
+   (If the app is fully blocked and they can't reach that page for some
+   reason, `GET /api/license/fingerprint` or
+   `node tools/license-fingerprint.js` on their machine gives the same ID.)
 2. On your own machine, with your private key:
    ```bash
    node tools/license-issue.js \
      --private-key /path/to/license-private-key.pem \
      --customer "Acme Corp" \
      --max-users 25 \
-     --expires 2027-10-17 \
      --machine-id <the ID they sent you> \
      --out acme-corp.lic
    ```
+   This prints an **activation code** (a single line of text) to the
+   terminal, and also writes `acme-corp.lic` (same license, as a file) in
+   case you'd rather send that instead.
    Omit `--machine-id` only for an intentionally non-machine-locked license
    (e.g. an evaluation copy) — it will then validate on any machine.
-   Omit `--expires` for a license that never expires.
-3. Send `acme-corp.lic` to the customer. A Global Admin activates it by
-   uploading the file to `POST /api/license/activate` (multipart form
-   field name `license`) — e.g.:
+   Add `--expires 2027-10-17` only if you want the license to expire —
+   by default licenses never expire.
+3. Send the activation code to the customer (paste it straight into the
+   email — no attachment needed). They paste it into **Settings → License**
+   in the app and click **Activate**. (If they'd rather use the file, the
+   same page also has an **Upload .lic file** button — either works.)
+   The app unlocks immediately on success — no internet connection needed
+   on their end for any of this.
+
+   Scripting the activation instead of using the UI also works:
    ```bash
    curl -X POST http://localhost:8974/api/license/activate \
      -H "Authorization: Bearer <their admin JWT>" \
-     -F "license=@acme-corp.lic"
+     -H "Content-Type: application/json" \
+     -d '{"code":"<the activation code>"}'
    ```
-   The app unlocks immediately on success — no internet connection needed
-   on their end for any of this. There's no dedicated Settings page for
-   this yet (ask if you'd like one added — the backend is already fully
-   wired for it: `GET /api/license/status`, `GET /api/license/fingerprint`,
-   `POST /api/license/activate`).
 
 ## What this does and doesn't protect against
 

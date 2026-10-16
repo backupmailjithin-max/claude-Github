@@ -9971,6 +9971,109 @@ function ScopedBackupPanel({ currentUser }) {
         note && React.createElement("div", { "data-bk": "note", role: note.ok ? "status" : "alert", style: { marginTop: 12, padding: "8px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, background: note.ok ? "#ECFDF5" : "#FEF2F2", color: note.ok ? "#047857" : "#B91C1C", border: "1px solid " + (note.ok ? "#A7F3D0" : "#FECACA") } }, note.text),
         React.createElement("p", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#475569", margin: "12px 0 0", lineHeight: 1.5 } }, "This copy contains only your location's assets, issues, activities, material movements, racks and floor plans - no user accounts or passwords. Restoring data is done by the Administrator from a full backup."));
 }
+function LicensePanel() {
+    const [status, setStatus] = useState(null);
+    const [loadErr, setLoadErr] = useState("");
+    const [code, setCode] = useState("");
+    const [busy, setBusy] = useState(false);
+    const [note, setNote] = useState(null); // {ok, text}
+    const [copied, setCopied] = useState(false);
+    const fileRef = useRef(null);
+    const load = async () => { try {
+        const s = await apiFetch("/license/status");
+        setStatus(s);
+        setLoadErr("");
+    }
+    catch (e) {
+        setLoadErr(e.message || "Could not load license status");
+    } };
+    useEffect(() => { load(); }, []);
+    const copyFingerprint = () => {
+        if (!status)
+            return;
+        navigator.clipboard.writeText(status.fingerprint).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        }).catch(() => { });
+    };
+    const handleActivateResult = async (r) => {
+        setNote({ ok: true, text: `Activated - licensed to ${r.status.license.customer}.` });
+        setCode("");
+        await load();
+    };
+    const activateCode = async () => {
+        if (!code.trim())
+            return;
+        setBusy(true);
+        setNote(null);
+        try {
+            const r = await apiFetch("/license/activate", { method: "POST", body: JSON.stringify({ code: code.trim() }) });
+            await handleActivateResult(r);
+        }
+        catch (e) {
+            setNote({ ok: false, text: e.message || "Activation failed" });
+        }
+        setBusy(false);
+    };
+    const activateFile = async (e) => {
+        const f = e.target.files && e.target.files[0];
+        if (!f)
+            return;
+        setBusy(true);
+        setNote(null);
+        try {
+            const fd = new FormData();
+            fd.append("license", f);
+            const token = getToken();
+            const res = await fetch(API_BASE + "/license/activate", { method: "POST", headers: token ? { Authorization: "Bearer " + token } : {}, body: fd });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok)
+                throw new Error(data.error || "Upload failed");
+            await handleActivateResult(data);
+        }
+        catch (e) {
+            setNote({ ok: false, text: e.message || "Activation failed" });
+        }
+        setBusy(false);
+        if (fileRef.current)
+            fileRef.current.value = "";
+    };
+    const card = { padding: 22, marginBottom: 18 };
+    if (loadErr)
+        return React.createElement("div", { className: "neu-card", style: card }, React.createElement(AlertTriangle, { s: 16, c: "#DC2626" }), " ", loadErr);
+    if (!status)
+        return React.createElement("div", { className: "neu-card", style: card }, "Loading...");
+    if (!status.enforced) {
+        return React.createElement("div", { className: "neu-card", style: card },
+            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontWeight: 700, fontSize: 15, marginBottom: 6, display: "flex", alignItems: "center", gap: 8 } }, React.createElement(Shield, { s: 17, c: "#64748B" }), "Licensing not configured"),
+            React.createElement("div", { style: { fontSize: 12.5, color: "#64748B" } }, "This install doesn't enforce a license - nothing to activate here."));
+    }
+    return React.createElement(React.Fragment, null,
+        React.createElement("div", { className: "neu-card", style: card },
+            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontWeight: 700, fontSize: 15, marginBottom: 12, display: "flex", alignItems: "center", gap: 8 } },
+                status.valid ? React.createElement(CheckCircle2, { s: 17, c: "#16A34A" }) : React.createElement(AlertTriangle, { s: 17, c: "#DC2626" }),
+                status.valid ? "License active" : "License required"),
+            !status.valid && React.createElement("div", { style: { fontSize: 12.5, color: "#DC2626", marginBottom: 14 } }, status.reason),
+            status.valid && status.license && React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 12.5, color: "#334155", marginBottom: 14 } },
+                React.createElement("div", null, React.createElement("b", null, "Licensed to: "), status.license.customer),
+                React.createElement("div", null, React.createElement("b", null, "Seats: "), status.license.maxUsers || "Unlimited"),
+                React.createElement("div", null, React.createElement("b", null, "Expires: "), status.license.expiresAt ? new Date(status.license.expiresAt).toLocaleDateString() : "Never"),
+                React.createElement("div", null, React.createElement("b", null, "Machine-locked: "), status.license.machineBound ? "Yes" : "No")),
+            React.createElement("div", { style: { fontSize: 11.5, color: "#64748B", marginBottom: 4 } }, "This machine's ID (send this to your vendor to request a license):"),
+            React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
+                React.createElement("code", { className: "neu-pressed", style: { padding: "6px 10px", borderRadius: 8, fontSize: 12.5, letterSpacing: 0.5 } }, status.fingerprint),
+                React.createElement("button", { className: "neu-btn", onClick: copyFingerprint, style: { fontSize: 11.5, padding: "6px 10px" } }, copied ? "Copied!" : "Copy"))),
+        React.createElement("div", { className: "neu-card", style: card },
+            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontWeight: 700, fontSize: 14, marginBottom: 10 } }, status.valid ? "Replace license" : "Activate a license"),
+            React.createElement("div", { style: { fontSize: 11.5, color: "#64748B", marginBottom: 8 } }, "Paste the activation code your vendor sent you:"),
+            React.createElement("textarea", { className: "neu-input", rows: 3, value: code, onChange: (e) => setCode(e.target.value), placeholder: "DCIM-LIC-...", style: { width: "100%", fontFamily: "monospace", fontSize: 11.5, marginBottom: 10, resize: "vertical" } }),
+            React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" } },
+                React.createElement("button", { className: "neu-btn-primary", disabled: busy || !code.trim(), onClick: activateCode, style: { fontSize: 12.5, padding: "8px 16px" } }, busy ? "Activating..." : "Activate"),
+                React.createElement("span", { style: { fontSize: 11.5, color: "#94A3B8" } }, "or"),
+                React.createElement("button", { className: "neu-btn", disabled: busy, onClick: () => fileRef.current && fileRef.current.click(), style: { fontSize: 12.5, padding: "8px 16px" } }, "Upload .lic file"),
+                React.createElement("input", { ref: fileRef, type: "file", accept: ".lic", style: { display: "none" }, onChange: activateFile })),
+            note && React.createElement("div", { style: { marginTop: 12, fontSize: 12.5, color: note.ok ? "#16A34A" : "#DC2626" } }, note.text)));
+}
 function SettingsPage({ users, onRefresh, locations, currentUser, isAdmin, isGlobalAdmin, onChangePassword }) {
     const [section, setSection] = useState(isGlobalAdmin ? "users" : "account");
     const pill = (key, label) => React.createElement("button", { key: key, "data-settings-tab": key, onClick: () => setSection(key), className: `tab-pill ${section === key ? "active" : ""}`, style: { fontSize: 12.5 } }, label);
@@ -9982,11 +10085,13 @@ function SettingsPage({ users, onRefresh, locations, currentUser, isAdmin, isGlo
             React.createElement("span", { style: { fontSize: 11.5, color: "#64748B" } }, isAdmin ? "Administrator" : currentUser.name),
             React.createElement("div", { className: "neu-pressed", style: { display: "inline-flex", gap: 6, padding: 5, borderRadius: 40, marginLeft: "auto" } }, isGlobalAdmin ? React.createElement(React.Fragment, null,
                 pill("users", "Users"),
-                pill("backup", "Backup & Restore")) : React.createElement(React.Fragment, null,
+                pill("backup", "Backup & Restore"),
+                pill("license", "License")) : React.createElement(React.Fragment, null,
                 pill("account", "My account"),
                 pill("export", "Manual backup")))),
         isGlobalAdmin && section === "users" && React.createElement(UserManagement, { users: users, onRefresh: onRefresh, canAdmin: true, locations: locations }),
         isGlobalAdmin && section === "backup" && React.createElement(BackupRestorePanel, null),
+        isGlobalAdmin && section === "license" && React.createElement(LicensePanel, null),
         section === "account" && React.createElement(MyAccountPanel, { currentUser: currentUser, onChangePassword: onChangePassword }),
         !isGlobalAdmin && section === "export" && React.createElement(ScopedBackupPanel, { currentUser: currentUser }));
 }

@@ -73,7 +73,15 @@ const licenseFile = { alg: 'Ed25519', payloadJson, signature };
 const outPath = args.out || `${String(args.customer).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'customer'}.lic`;
 fs.writeFileSync(outPath, JSON.stringify(licenseFile, null, 2));
 
+// Same signed license, as one line of text instead of a file - paste this
+// straight into the customer's Settings -> License page (or email it to
+// them to paste in). Dashes are cosmetic, stripped again on activation.
+const code = Buffer.from(JSON.stringify(licenseFile)).toString('base64url');
+const codeGrouped = code.match(/.{1,8}/g).join('-');
+
 console.log('License issued:', outPath);
 console.log(payload);
 if (!payload.machineId) console.log('\nNote: this license is NOT bound to a specific machine (no --machine-id given) - it will validate on any machine. Only use this for evaluation copies or if you are intentionally not machine-locking this customer.');
 if (!payload.expiresAt) console.log('Note: this license never expires (no --expires given).');
+console.log('\nActivation code (paste into Settings -> License, or email this instead of the .lic file):\n');
+console.log(codeGrouped);

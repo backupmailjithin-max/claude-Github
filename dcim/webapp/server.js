@@ -2176,15 +2176,35 @@ const licenseUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 16 * 1024 }, // a .lic file is a small JSON blob
 });
+// Accepts either a .lic file upload (multipart field "license") or a pasted
+// activation code (JSON body { code: "..." }) — the code is just the same
+// signed license, base64url-encoded into one line so it can be emailed/pasted
+// instead of attached as a file. Both end up validated and stored the same way.
+function decodeLicenseInput(req) {
+  if (req.file) {
+    const text = req.file.buffer.toString('utf8');
+    try { return { buffer: req.file.buffer, parsed: JSON.parse(text) }; }
+    catch (e) { return { error: 'That file is not a valid license (not JSON).' }; }
+  }
+  const code = req.body && typeof req.body.code === 'string' ? req.body.code : '';
+  const cleaned = code.replace(/[\s-]/g, '');
+  if (!cleaned) return { error: 'Paste an activation code or upload a .lic file.' };
+  let text;
+  try { text = Buffer.from(cleaned, 'base64url').toString('utf8'); }
+  catch (e) { return { error: 'That activation code is not valid.' }; }
+  try { return { buffer: Buffer.from(text, 'utf8'), parsed: JSON.parse(text) }; }
+  catch (e) { return { error: 'That activation code is not valid.' }; }
+}
+
 app.post('/api/license/activate', authenticateToken, requireGlobalAdmin, licenseUpload.single('license'), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'Upload a .lic license file.' });
-    let parsed;
-    try { parsed = JSON.parse(req.file.buffer.toString('utf8')); } catch (e) { return res.status(400).json({ error: 'That file is not a valid license (not JSON).' }); }
+    const decoded = decodeLicenseInput(req);
+    if (decoded.error) return res.status(400).json({ error: decoded.error });
+    const parsed = decoded.parsed;
     if (!parsed || parsed.alg !== 'Ed25519' || typeof parsed.payloadJson !== 'string' || typeof parsed.signature !== 'string') {
-      return res.status(400).json({ error: 'That file is not a recognized license.' });
+      return res.status(400).json({ error: 'That is not a recognized license.' });
     }
-    await fs.promises.writeFile(LICENSE_FILE, req.file.buffer);
+    await fs.promises.writeFile(LICENSE_FILE, decoded.buffer);
     const status = license.getLicenseStatus(LICENSE_FILE);
     if (!status.valid) {
       // Keep the file either way (so the admin/support can see exactly what
