@@ -677,6 +677,84 @@ print_health_validation() {
   echo ""
 }
 
+# Re-reads the installed .env so the summary below is always accurate even
+# when the in-memory PORT/DB_*/CSP_MODE/etc. variables don't reflect the real
+# running config - e.g. an upgrade/repair run where these flags weren't
+# re-passed and still hold their command-line defaults, not what's actually
+# in the file that was written on the original install.
+reload_env_for_summary() {
+  [ -f "$ENV_FILE" ] || return 0
+  local v
+  v="$(sed -n 's/^PORT=//p' "$ENV_FILE")"; [ -n "$v" ] && PORT="$v"
+  v="$(sed -n 's/^DB_HOST=//p' "$ENV_FILE")"; [ -n "$v" ] && DB_HOST="$v"
+  v="$(sed -n 's/^DB_PORT=//p' "$ENV_FILE")"; [ -n "$v" ] && DB_PORT="$v"
+  v="$(sed -n 's/^DB_USER=//p' "$ENV_FILE")"; [ -n "$v" ] && DB_USER="$v"
+  v="$(sed -n 's/^DB_NAME=//p' "$ENV_FILE")"; [ -n "$v" ] && DB_NAME="$v"
+  DB_PASSWORD="$(sed -n 's/^DB_PASSWORD=//p' "$ENV_FILE")"
+  v="$(sed -n 's/^CSP_MODE=//p' "$ENV_FILE")"; [ -n "$v" ] && CSP_MODE="$v"
+  v="$(sed -n 's/^AUDIT_RETENTION_DAYS=//p' "$ENV_FILE")"; [ -n "$v" ] && AUDIT_RETENTION_DAYS="$v"
+  # NOTE: must not be the last statement above as a bare `[ ... ] && X=1` (or
+  # an if/fi with no else) - under `set -e`, a function's exit status is that
+  # of its last command, and this function is always called as a bare
+  # statement, so a false condition here would otherwise silently kill the
+  # whole install/upgrade/repair run right after reporting success.
+  if [ -d "$EMBEDDED_DB_DIR/data" ]; then EMBEDDED_DB=1; fi
+  return 0
+}
+
+# Prints (and, for the GUI/whiptail-driven install, relies on being the only
+# place) every value a customer needs to actually reach the app afterward -
+# port, admin account, database connection, config file location - since the
+# embedded-db password and JWT secret in particular are generated here and
+# never shown anywhere else except $ENV_FILE itself. Called at the end of
+# install/upgrade/repair so it's always the last thing on screen.
+print_summary() {
+  local server_ip db_desc admin_user_shown admin_pass_shown
+  server_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  [ -n "$server_ip" ] || server_ip="<this-server-ip>"
+
+  if [ "$EMBEDDED_DB" -eq 1 ]; then
+    db_desc="Embedded (bundled private MariaDB)"
+  else
+    db_desc="External MySQL/MariaDB"
+  fi
+
+  if [ -n "$ADMIN_USER" ] || [ -n "$ADMIN_PASSWORD" ]; then
+    admin_user_shown="${ADMIN_USER:-admin}"
+    admin_pass_shown="(the password you provided)"
+  else
+    admin_user_shown="admin"
+    admin_pass_shown="admin   <- you MUST change this on first sign-in"
+  fi
+
+  log ""
+  log "======================================================================"
+  log " $APP_NAME Installation Summary - SAVE THIS INFORMATION"
+  log "======================================================================"
+  log " Web UI (from this machine): http://localhost:${PORT}/"
+  log " Web UI (from the network):  http://${server_ip}:${PORT}/"
+  log ""
+  log " Administrator account:"
+  log "   Username: $admin_user_shown"
+  log "   Password: $admin_pass_shown"
+  log ""
+  log " Database ($db_desc):"
+  log "   Host:Port: ${DB_HOST}:${DB_PORT}"
+  log "   Database:  $DB_NAME"
+  log "   DB user:   $DB_USER"
+  if [ "$EMBEDDED_DB" -eq 1 ]; then
+    log "   DB password: $DB_PASSWORD   (auto-generated; also saved in $ENV_FILE)"
+  fi
+  log ""
+  log " Security: CSP mode=$CSP_MODE, audit log retention=${AUDIT_RETENTION_DAYS}d (0=forever)"
+  log ""
+  log " Install directory: $INSTALL_DIR"
+  log " Config file:        $ENV_FILE"
+  log " Service:            systemctl status $SERVICE_NAME"
+  log "======================================================================"
+  log ""
+}
+
 do_install() {
   run_validations
   ensure_service_user
@@ -690,11 +768,9 @@ do_install() {
   wait_for_health
   apply_admin_account
   print_health_validation
-  if [ -n "$ADMIN_USER" ] || [ -n "$ADMIN_PASSWORD" ]; then
-    log "$APP_NAME installed. Sign in with the admin credentials you provided."
-  else
-    log "$APP_NAME installed. Sign in as admin / admin and change the password immediately."
-  fi
+  log "$APP_NAME installed."
+  reload_env_for_summary
+  print_summary
 }
 
 do_upgrade() {
@@ -709,6 +785,8 @@ do_upgrade() {
   wait_for_health
   print_health_validation
   log "$APP_NAME upgraded in place. Previous config snapshot kept under /var/backups/dcim/."
+  reload_env_for_summary
+  print_summary
 }
 
 do_repair() {
@@ -748,6 +826,8 @@ do_repair() {
   wait_for_health
   print_health_validation
   log "$APP_NAME repaired (files, service, and permissions re-applied; your .env and data were preserved)."
+  reload_env_for_summary
+  print_summary
 }
 
 main() {

@@ -57,6 +57,7 @@ Name: "{group}\Uninstall DCIM"; Filename: "{uninstallexe}"
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install.ps1"" -InstallDir ""{app}"" -Yes {code:GetInstallParams}"; \
   StatusMsg: "Configuring and starting the DCIM service..."; Flags: runascurrentuser waituntilterminated
 Filename: "{code:GetAppUrl}"; Description: "Open DCIM in your browser now"; Flags: postinstall shellexec skipifsilent
+Filename: "notepad.exe"; Parameters: """{app}\INSTALL-SUMMARY.txt"""; Description: "View installation summary (admin account, port, database, config)"; Flags: postinstall skipifsilent unchecked
 
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\uninstall.ps1"" -InstallDir ""{app}"""; \

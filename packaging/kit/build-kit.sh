@@ -64,6 +64,68 @@ if [ -d "$REPO_ROOT/docs/guides" ]; then
   cp "$REPO_ROOT/docs/guides/"*.md "$KIT/common/docs/guides/" 2>/dev/null || warn "no guide files found in $REPO_ROOT/docs/guides"
 fi
 
+cat > "$KIT/README.md" <<EOF
+# DCIM Enterprise Offline Distribution Kit v${VERSION}
+
+Start here. Everything needed to install, run, and manage DCIM is in this
+kit - no internet access is required or used at any point.
+
+## 1. Install
+
+| Platform | Run |
+|---|---|
+| Linux    | \`sudo ./install\` (auto-picks .deb/.rpm/appliance for your distro) |
+| Windows  | \`.\install.ps1\` (launches the bundled \`windows\DCIM-Setup.exe\`) |
+
+Installing by hand instead? See \`common/docs/guides/installation-guide.md\`
+for every native package, flag, and the guided GUI/terminal wizard both
+platforms offer.
+
+## 2. Running the website day to day
+
+Once installed, DCIM runs as a background service (systemd on Linux, a
+Windows Service on Windows) that starts automatically on boot - there is
+nothing to manually "start" after install.
+
+| Task | Linux | Windows |
+|---|---|---|
+| Open the site | \`http://<server>:<port>/\` in a browser | same |
+| Check it's running | \`systemctl status dcim\` | \`Get-Service DCIM\` |
+| Health check | \`curl http://127.0.0.1:<port>/api/health\` | \`Invoke-RestMethod http://127.0.0.1:<port>/api/health\` |
+| Restart it | \`sudo systemctl restart dcim\` | \`Restart-Service DCIM\` |
+| View logs | \`journalctl -u dcim -n 100\` | \`<installdir>\webapp\logs\` + Event Viewer |
+| Upgrade | \`sudo dcim-upgrade\` | run \`windows\DCIM-Upgrade.exe\` |
+| Repair | \`sudo dcim-repair\` | run \`windows\DCIM-Repair.exe\` |
+
+## 3. Your port, admin account, and database - where to find them
+
+**Install, Upgrade, and Repair all end by printing a Configuration
+Summary** with the exact URL, administrator account, database connection
+(including the auto-generated password if you picked the embedded
+database - shown nowhere else), and config file location. Save it when it
+appears.
+
+- Linux / Windows console: printed directly to the terminal.
+- Windows GUI installer (\`DCIM-Setup.exe\`): also saved to
+  \`INSTALL-SUMMARY.txt\` in the install directory, since the installer's
+  own window closes as soon as it finishes - tick "View installation
+  summary" on the Finish page, or open that file any time afterward.
+
+Full details: \`common/docs/guides/installation-guide.md\` section 5.
+
+## 4. Everything else
+
+| Document | Covers |
+|---|---|
+| \`common/docs/guides/installation-guide.md\` | Full install reference, both platforms |
+| \`common/docs/guides/administrator-guide.md\` | Setup Wizard, users, monitoring integrations, troubleshooting |
+| \`common/docs/guides/upgrade-guide.md\`, \`repair-guide.md\`, \`rollback-guide.md\` | Day-2 operations |
+| \`common/docs/guides/backup-guide.md\`, \`disaster-recovery-guide.md\` | Backups and DR |
+| \`common/docs/RELEASE_NOTES.md\`, \`KNOWN_LIMITATIONS.md\`, \`UPGRADE_MATRIX.md\` | What's in this release |
+| \`common/docs/VERSION_REPORT.md\`, \`DEPENDENCY_REPORT.md\` | Exact versions bundled in this build |
+| \`MANIFEST.txt\`, \`CHECKSUMS.sha256\` | Verify this kit hasn't been tampered with |
+EOF
+
 cat > "$KIT/common/branding/README.md" <<'EOF'
 Reserved for customer-supplied branding assets (logo, favicon). These are
 applied at runtime through the Setup Wizard's Organization/Branding tab, not

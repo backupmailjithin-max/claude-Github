@@ -429,6 +429,82 @@ function Show-HealthValidation {
   Write-Host ""
 }
 
+function Show-Summary {
+  $ip = $null
+  try {
+    $ip = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
+      Where-Object { $_.InterfaceAlias -notmatch 'Loopback' -and $_.IPAddress -notlike '169.254.*' } |
+      Select-Object -First 1 -ExpandProperty IPAddress)
+  } catch { }
+  if (-not $ip) { $ip = "<this-server-ip>" }
+
+  # Re-read the installed .env so this is accurate even on an upgrade/repair
+  # run where -Db*/-Port weren't re-passed and the parameter defaults don't
+  # reflect what's actually running.
+  $envPath = Join-Path $InstallDir "webapp\.env"
+  if (Test-Path $envPath) {
+    $envLines = Get-Content $envPath
+    function Get-EnvValue($name) {
+      $line = $envLines | Where-Object { $_ -match "^$name=(.*)$" } | Select-Object -First 1
+      if ($line -match "^$name=(.*)$") { return $matches[1] }
+      return $null
+    }
+    $v = Get-EnvValue "PORT"; if ($v) { $script:Port = [int]$v }
+    $v = Get-EnvValue "DB_HOST"; if ($v) { $script:DbHost = $v }
+    $v = Get-EnvValue "DB_PORT"; if ($v) { $script:DbPort = [int]$v }
+    $v = Get-EnvValue "DB_USER"; if ($v) { $script:DbUser = $v }
+    $v = Get-EnvValue "DB_NAME"; if ($v) { $script:DbName = $v }
+    $v = Get-EnvValue "DB_PASSWORD"; $script:DbPassword = $v
+    $v = Get-EnvValue "CSP_MODE"; if ($v) { $script:CspMode = $v }
+    $v = Get-EnvValue "AUDIT_RETENTION_DAYS"; if ($v) { $script:AuditRetentionDays = [int]$v }
+  }
+  if (Test-Path (Join-Path $InstallDir "mariadb\data")) { $script:EmbeddedDb = $true }
+
+  $dbDesc = if ($EmbeddedDb) { "Embedded (bundled private MariaDB)" } else { "External MySQL/MariaDB" }
+  if ($AdminUser -or $AdminPassword) {
+    $adminUserShown = if ($AdminUser) { $AdminUser } else { "admin" }
+    $adminPassShown = "(the password you provided)"
+  } else {
+    $adminUserShown = "admin"
+    $adminPassShown = "admin   <- you MUST change this on first sign-in"
+  }
+
+  $lines = @(
+    ""
+    "======================================================================"
+    " DCIM Installation Summary - SAVE THIS INFORMATION"
+    "======================================================================"
+    " Web UI (from this machine): http://localhost:$Port/"
+    " Web UI (from the network):  http://${ip}:$Port/"
+    ""
+    " Administrator account:"
+    "   Username: $adminUserShown"
+    "   Password: $adminPassShown"
+    ""
+    " Database ($dbDesc):"
+    "   Host:Port: ${DbHost}:${DbPort}"
+    "   Database:  $DbName"
+    "   DB user:   $DbUser"
+  )
+  if ($EmbeddedDb) {
+    $lines += "   DB password: $DbPassword   (auto-generated; also saved in $envPath)"
+  }
+  $lines += ""
+  $lines += " Security: CSP mode=$CspMode, audit log retention=${AuditRetentionDays}d (0=forever)"
+  $lines += ""
+  $lines += " Install directory: $InstallDir"
+  $lines += " Config file:        $envPath"
+  $lines += " Service:            Get-Service $ServiceName"
+  $lines += "======================================================================"
+  $lines += ""
+
+  $lines | ForEach-Object { Write-Host $_ }
+  try {
+    $lines | Set-Content -Path (Join-Path $InstallDir "INSTALL-SUMMARY.txt") -Encoding UTF8
+    Log "This summary was also saved to $InstallDir\INSTALL-SUMMARY.txt"
+  } catch { }
+}
+
 function Invoke-Install {
   Invoke-Validations
   Sync-Payload
@@ -439,11 +515,8 @@ function Invoke-Install {
   Wait-ForHealth
   Set-AdminAccount
   Show-HealthValidation
-  if ($AdminUser -or $AdminPassword) {
-    Log "DCIM installed. Sign in with the admin credentials you provided."
-  } else {
-    Log "DCIM installed. Sign in as admin / admin and change the password immediately."
-  }
+  Log "DCIM installed."
+  Show-Summary
 }
 
 function Invoke-Upgrade {
@@ -456,6 +529,7 @@ function Invoke-Upgrade {
   Wait-ForHealth
   Show-HealthValidation
   Log "DCIM upgraded in place. Previous config snapshot kept under C:\ProgramData\dcim-backups\."
+  Show-Summary
 }
 
 function Invoke-Repair {
@@ -496,6 +570,7 @@ function Invoke-Repair {
   Wait-ForHealth
   Show-HealthValidation
   Log "DCIM repaired (files and service re-applied; your .env and data were preserved)."
+  Show-Summary
 }
 
 Select-Mode

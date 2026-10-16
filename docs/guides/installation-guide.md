@@ -126,7 +126,32 @@ The Windows service is registered via NSSM under the name `DCIM` (embedded
 database, if used, runs as a separate `DCIMMariaDB` service with a
 Windows Service Control Manager dependency on it).
 
-## 5. First sign-in
+## 5. Finding your configuration after install
+
+Install, Upgrade, and Repair all end by printing a **Configuration Summary**
+with everything you need to actually reach and manage the site: the Web UI
+URL (both `localhost` and the server's network address), the administrator
+account (or a reminder that `admin`/`admin` needs to be changed), the
+database connection details (including the auto-generated password when
+you chose the embedded database - that password is shown here and nowhere
+else except `.env` itself), the CSP/audit security settings, and where the
+install directory, config file, and service name are.
+
+**Write this down before closing the terminal** - the embedded database
+password in particular isn't recoverable from anywhere else.
+
+- **Linux**: printed directly to the terminal at the end of
+  `install`/`dcim-setup`/`dcim-upgrade`/`dcim-repair`.
+- **Windows (console)**: printed directly to the terminal at the end of
+  `install.ps1`/the Upgrade/Repair utilities (which stay open after
+  finishing, specifically so you can read this).
+- **Windows (`DCIM-Setup.exe` GUI)**: since the installer's own progress
+  window closes as soon as it finishes, the same summary is also saved to
+  `INSTALL-SUMMARY.txt` in the install directory - tick "View installation
+  summary" on the Finish page to open it immediately, or find the file
+  there any time afterward.
+
+## 6. First sign-in
 
 1. Browse to `http://<server>:<port>/` (default port `8974`).
 2. Sign in with the admin account you configured (or `admin`/`admin` if you
@@ -140,7 +165,7 @@ Windows Service Control Manager dependency on it).
    any time at `/api/health/validate` while signed in as an Admin, or via
    the dashboard.
 
-## 6. Verifying the install
+## 7. Verifying the install
 
 ```bash
 # Linux
