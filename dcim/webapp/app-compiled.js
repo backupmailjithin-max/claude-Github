@@ -538,7 +538,7 @@ function ThemedSelect({ value, onChange, className, style, disabled, title, chil
             }))), document.body);
     return React.createElement(React.Fragment, null, trig, pop);
 }
-const SITES = ["Chennai", "Manesar"];
+const SITES = ["Sample Site A", "Sample Site B"];
 const ZONES = ["AZ-1", "AZ-2"];
 const HARDWARE_TYPES = ["DellServer", "HPServer", "Storage", "Backup", "Switch", "Firewall", "LoadBalancer", "HSM", "Tape Library", "PDU", "Rack", "ATS", "Others"];
 const RACK_TYPES = ["COMP-1", "COMP-2", "COMP-3", "COMP-4", "COMP-5", "COMP-6", "COMP-7", "Storage", "Network", "Object-Storage", "MGMT", "PAAS-1", "PAAS-2", "BACKUP", "SAN-1", "SAN-2", "TapeLibrary"];
@@ -705,16 +705,11 @@ function firstComponentHardwareTypeName(hwTypesList) {
     const g = hardwareTypeOptionGroups(hwTypesList);
     return g.components[0] || g.devices[0];
 }
-// Short site code for compact per-site+zone labels (e.g. "CHN-AZ-1"), reusing
-// the same codes already used for ticket numbers (CHN/MAN) so the same site
-// always reads the same short label everywhere in the app. Any site beyond
-// the two named ones falls back to its own first 3 letters, uppercased.
+// Short site code for compact per-site+zone labels (e.g. "ABC-AZ-1"):
+// deterministically derived from the site's own first 3 letters, uppercased,
+// so the same site always reads the same short label everywhere in the app.
 function siteAbbr(site) {
     const s = String(site || "").trim();
-    if (s.toLowerCase() === "chennai")
-        return "CHN";
-    if (s.toLowerCase() === "manesar")
-        return "MAN";
     return s.replace(/[^A-Za-z]/g, "").slice(0, 3).toUpperCase() || "SITE";
 }
 // Shared site → color assignment for the Asset Inventory quick-view tiles
@@ -725,8 +720,7 @@ const SITE_COLOR_PAL = ["#2563EB", "#F43F5E", "#F59E0B", "#DB2777", "#0EA5E9", "
 function siteColorMap(allowedSitesList) {
     const map = {};
     (allowedSitesList || []).forEach((s, i) => {
-        const key = String(s || "").trim().toLowerCase().replace(/[\s_-]+/g, "");
-        map[s] = SITE_COLOR_PAL[(key === "chennai" ? 0 : key === "manesar" ? 1 : i) % SITE_COLOR_PAL.length];
+        map[s] = SITE_COLOR_PAL[i % SITE_COLOR_PAL.length];
     });
     return map;
 }
@@ -2189,17 +2183,20 @@ function LoginBackground({ variant }) {
         React.createElement("div", { "aria-hidden": "true", style: { ...layer, pointerEvents: "none", background: "radial-gradient(ellipse at center, rgba(4,10,22,.62) 0%, rgba(4,10,22,.30) 62%, rgba(4,10,22,.48) 100%)" } }));
 }
 /* ===== LOGIN ===== */
-function LoginScreen({ onLogin, error, loading }) {
+function LoginScreen({ onLogin, error, loading, orgBrand }) {
     const [u, setU] = useState("");
     const [p, setP] = useState("");
     const submit = (e) => { e.preventDefault(); onLogin(u, p); };
+    const brand = orgBrand || {};
     return React.createElement("div", { style: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "Inter", background: "transparent", position: "relative" } },
         React.createElement(LoginBackground, { variant: LOGIN_BG_STYLE }),
         React.createElement("div", { className: "neu-card anim-in d1", style: { width: 420, maxWidth: "90vw", padding: 44, position: "relative", zIndex: 1, boxShadow: "0 24px 60px rgba(0,0,0,.45), 0 2px 0 rgba(255,255,255,.6) inset" } },
             React.createElement("div", { style: { textAlign: "center", marginBottom: 36 } },
-                React.createElement("div", { className: "floating-icon indigo", style: { width: 64, height: 64, borderRadius: 20, margin: "0 auto 18px" } },
-                    React.createElement(Shield, { s: 28, c: "#6366F1" })),
-                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 26, fontWeight: 700, color: "#020617" } }, "Datacenter Operation B2B"),
+                brand.logoUrl
+                    ? React.createElement("img", { src: brand.logoUrl, alt: brand.companyName || "Logo", style: { maxWidth: 160, maxHeight: 64, margin: "0 auto 18px", display: "block" } })
+                    : React.createElement("div", { className: "floating-icon indigo", style: { width: 64, height: 64, borderRadius: 20, margin: "0 auto 18px" } },
+                        React.createElement(Shield, { s: 28, c: "#6366F1" })),
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 26, fontWeight: 700, color: "#020617" } }, brand.appName || "DCIM Dashboard"),
                 React.createElement("div", { style: { fontSize: 14, color: "#64748B", marginTop: 8 } }, "Sign in to the Data Center Console")),
             React.createElement("form", { onSubmit: submit },
                 React.createElement(Field, { label: "Username", style: { marginBottom: 18 } },
@@ -2212,7 +2209,7 @@ function LoginScreen({ onLogin, error, loading }) {
                         React.createElement("input", { type: "password", value: p, onChange: (e) => setP(e.target.value), placeholder: "\u2022\u2022\u2022\u2022\u2022\u2022", style: { background: "transparent", border: "none", outline: "none", color: "#1E293B", fontFamily: "Inter", fontSize: 14, width: "100%" } }))),
                 error && React.createElement("div", { style: { fontSize: 13, color: "#DC2626", marginBottom: 16, textAlign: "center", background: "rgba(220,38,38,0.08)", padding: "10px 14px", borderRadius: 12 } }, error),
                 React.createElement("button", { type: "submit", disabled: loading || !u || !p, className: "neu-btn-primary", style: { width: "100%", padding: "14px 0", fontSize: 15, opacity: u && p ? 1 : 0.5, cursor: u && p ? "pointer" : "not-allowed" } }, loading ? "Signing in…" : "Sign In"),
-                React.createElement("div", { style: { textAlign: "center", marginTop: 22, fontFamily: "Inter", fontSize: 11, color: "#475569", letterSpacing: 0.2 } }, "Internal Official Use Only · Built in-house by DCOPS Team"))));
+                brand.footerText && React.createElement("div", { style: { textAlign: "center", marginTop: 22, fontFamily: "Inter", fontSize: 11, color: "#475569", letterSpacing: 0.2 } }, brand.footerText))));
 }
 /* ===== ISSUE ROW ===== */
 function IssueRow({ issue, index, onUpdate, onDelete, expanded, onToggle, canEdit, zones, selectedIds, onSelectId }) {
@@ -3998,7 +3995,7 @@ function NewAssetModal({ onClose, onCreate, onUpdate, initial, assets, rackCompo
                         React.createElement("option", { value: "In Store" }, "In Store \u2014 receive and hold before installation"))),
                 isStoreReceive ? React.createElement(React.Fragment, null,
                     React.createElement(Field, { label: "Store / custody location" },
-                        React.createElement("input", { value: form.custodyLocation || "", onChange: (e) => set("custodyLocation", e.target.value), placeholder: "Chennai DC Store / Spares Room", className: "neu-input" })),
+                        React.createElement("input", { value: form.custodyLocation || "", onChange: (e) => set("custodyLocation", e.target.value), placeholder: "Main DC Store / Spares Room", className: "neu-input" })),
                     React.createElement(Field, { label: "Received date" },
                         React.createElement("input", { type: "date", value: form.movementDate || localDateStr(today), onChange: (e) => set("movementDate", e.target.value), className: "neu-input" })),
                     React.createElement("div", { style: { gridColumn: "1 / -1", fontFamily: "Inter", fontSize: 10.5, color: "#64748B", marginTop: -2 } }, "No rack, U position or installation date is recorded until the asset is physically installed.")) : React.createElement(React.Fragment, null,
@@ -8880,7 +8877,7 @@ function DeleteLocationModal({ onClose, onArchive, onRestore, onDelete, location
 /* ===== PASSWORD CHANGE MODAL ===== */
 /* ===== ADD ZONE MODAL (DC Capacity — future expansion planning) ===== */
 function AddZoneModal({ onClose, onCreate, allowedSites }) {
-    const [form, setForm] = useState({ site: allowedSites[0] || "Chennai", zoneName: "" });
+    const [form, setForm] = useState({ site: allowedSites[0] || "Sample Site A", zoneName: "" });
     const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
     const canSave = form.site && form.zoneName.trim();
     return React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(14,18,28,0.35)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }, onClick: onClose },
@@ -8908,7 +8905,7 @@ const RACK_SIZE_PRESETS = [
     { label: "Custom", wMm: 0, dMm: 0, wTiles: 0, hTiles: 0 },
 ];
 function AddRackModal({ onClose, onCreate, allowedSites, zones, rackTypes, onCreateType, initial }) {
-    const [form, setForm] = useState({ site: allowedSites[0] || "Chennai", zone: "", rackNo: "", rackType: rackTypeNames(rackTypes)[0], uSize: 42, rackSizePreset: "600 × 1200 mm (Standard)", wMm: 600, dMm: 1200, wTiles: 1, hTiles: 2, ...(initial || {}) });
+    const [form, setForm] = useState({ site: allowedSites[0] || "Sample Site A", zone: "", rackNo: "", rackType: rackTypeNames(rackTypes)[0], uSize: 42, rackSizePreset: "600 × 1200 mm (Standard)", wMm: 600, dMm: 1200, wTiles: 1, hTiles: 2, ...(initial || {}) });
     const [addingType, setAddingType] = useState(false);
     const [newTypeName, setNewTypeName] = useState("");
     const [typeError, setTypeError] = useState("");
@@ -10830,9 +10827,9 @@ function AssetLifecycleActionModal({ asset, allowedSites, zones, racks, rackType
                             React.createElement("option", null, "Branch Office"),
                             React.createElement("option", null, "Other Location"))),
                     React.createElement(Field, { label: "Destination name" },
-                        React.createElement("input", { value: form.destinationName, onChange: e => set("destinationName", e.target.value), className: "neu-input", placeholder: "Chennai Central Warehouse" }))),
+                        React.createElement("input", { value: form.destinationName, onChange: e => set("destinationName", e.target.value), className: "neu-input", placeholder: "Central Warehouse" }))),
                 (action === "Store" || action === "Accept & Move To Store") && React.createElement(Field, { label: "Store / custody location" },
-                    React.createElement("input", { value: form.custodyLocation, onChange: e => set("custodyLocation", e.target.value), className: "neu-input", placeholder: action === "Accept & Move To Store" ? asset.site + " Store (optional)" : "Chennai Store / Spares Room" })),
+                    React.createElement("input", { value: form.custodyLocation, onChange: e => set("custodyLocation", e.target.value), className: "neu-input", placeholder: action === "Accept & Move To Store" ? asset.site + " Store (optional)" : "Main Store / Spares Room" })),
                 action === "RMA / OEM" && React.createElement(Field, { label: "OEM / custody location" },
                     React.createElement("input", { value: form.custodyLocation, onChange: e => set("custodyLocation", e.target.value), className: "neu-input", placeholder: "Dell OEM / HPE Service Center" })),
                 React.createElement(Field, { label: "Reference no." },
@@ -12633,6 +12630,15 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
 }
 /* ===== MAIN APP ===== */
 function DataCenterDashboard() {
+    // Organization/Branding settings (company name, app name, logo, footer
+    // text) are configured per deployment via Settings -> Organization &
+    // Branding, and served here so the login screen and app header/footer
+    // reflect the customer's own branding instead of a hardcoded default.
+    const [orgBrand, setOrgBrand] = useState({ companyName: "DCIM Dashboard", appName: "DCIM Dashboard", logoUrl: "", footerText: "" });
+    useEffect(() => {
+        fetch('/api/setup/status').then(r => r.ok ? r.json() : null).then(s => { if (s)
+            setOrgBrand({ companyName: s.companyName || "DCIM Dashboard", appName: s.appName || "DCIM Dashboard", logoUrl: s.logoUrl || "", footerText: s.footerText || "" }); }).catch(() => { });
+    }, []);
     const [auth, setAuth] = useState(() => { const user = getUser(); return user ? { user, loading: false } : null; });
     const [loginError, setLoginError] = useState(() => { try {
         const n = localStorage.getItem('dc_notice');
@@ -12728,7 +12734,7 @@ function DataCenterDashboard() {
     const showToast = (type, message) => setToast({ type, message, key: Date.now() });
     const [pwdModalOpen, setPwdModalOpen] = useState(false);
     const [rackModal, setRackModal] = useState(null);
-    const [capacitySite, setCapacitySite] = useState("Chennai");
+    const [capacitySite, setCapacitySite] = useState("Sample Site A");
     const [activities, setActivities] = useState([]);
     const [activityModalOpen, setActivityModalOpen] = useState(false);
     const [editingActivity, setEditingActivity] = useState(null);
@@ -13858,18 +13864,21 @@ function DataCenterDashboard() {
     const statusOptions = ["all", "Active", "Open", "In progress", "Awaiting part", "Part received", "Scheduled", "Overdue", "Completed", "Faulty part in store", "Returned to OEM", "Closed"];
     const isGlobalAdmin = !!isAdmin && !!currentUser && (currentUser.location_access === "All" || currentUser.location_access === "Both");
     if (!currentUser)
-        return React.createElement(LoginScreen, { onLogin: handleLogin, error: loginError, loading: loginLoading });
+        return React.createElement(LoginScreen, { onLogin: handleLogin, error: loginError, loading: loginLoading, orgBrand });
     if (currentUser.mustChangePassword)
         return React.createElement(ForcedPasswordChange, { user: currentUser, onLogout: handleLogout });
     return React.createElement("div", { className: "dcim-app-shell", style: { background: "transparent", minHeight: "100vh", padding: "28px 32px 54px", fontFamily: "Inter" } },
-        React.createElement("div", { className: "dcim-official-use-footer", style: { position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 500, textAlign: "center", fontFamily: "Inter", fontSize: 11, color: "#475569", letterSpacing: 0.2, background: "rgba(248,250,252,0.92)", backdropFilter: "blur(4px)", padding: "4px 12px", borderTop: "1px solid rgba(148,163,184,0.25)", pointerEvents: "none" } }, "Internal Official Use Only · Built in-house by DCOPS Team"),
+        orgBrand.footerText && React.createElement("div", { className: "dcim-official-use-footer", style: { position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 500, textAlign: "center", fontFamily: "Inter", fontSize: 11, color: "#475569", letterSpacing: 0.2, background: "rgba(248,250,252,0.92)", backdropFilter: "blur(4px)", padding: "4px 12px", borderTop: "1px solid rgba(148,163,184,0.25)", pointerEvents: "none" } }, orgBrand.footerText),
         React.createElement(FirmwareJobAlerts, { currentUser, onRunning: setFwRunning, onOpen: () => { window.__dcimOpenFwJobs = true; setTab("monitoring"); setTimeout(() => window.dispatchEvent(new Event("dcim-open-fwjobs")), 50); } }),
         React.createElement("div", { className: "dcim-app-header", style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 32, flexWrap: "wrap", gap: 16 } },
             React.createElement("div", { className: "dcim-brand-area" },
-                React.createElement("div", { className: "airtel-brand-wrap", title: "Airtel" },
-                    React.createElement("div", { className: "airtel-logo-stage airtel-reference-logo", "aria-label": "Airtel" },
-                        React.createElement("img", { className: "airtel-reference-logo-img", alt: "Airtel", src: "data:image/png;base64,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" }),
-                        React.createElement("span", { className: "airtel-reference-sheen", "aria-hidden": "true" }))),
+                orgBrand.logoUrl
+                    ? React.createElement("div", { className: "brand-logo-wrap", title: orgBrand.companyName },
+                        React.createElement("div", { className: "brand-logo-stage brand-reference-logo", "aria-label": orgBrand.companyName },
+                            React.createElement("img", { className: "brand-reference-logo-img", alt: orgBrand.companyName, src: orgBrand.logoUrl }),
+                            React.createElement("span", { className: "brand-reference-sheen", "aria-hidden": "true" })))
+                    : React.createElement("div", { className: "floating-icon indigo", style: { width: 56, height: 56, borderRadius: 18 } },
+                        React.createElement(Shield, { s: 24, c: "#6366F1" })),
                 React.createElement("div", { className: "dcim-brand-copy" },
                     React.createElement("div", { className: "dcim-ops-line" },
                         "DATA CENTER OPERATIONS \u00B7 ",

@@ -70,7 +70,7 @@ support case rather than hand-collecting logs.
 
 - **Users**: Admin/Operator/Viewer roles, per-location access scoping.
 - **Default accounts**: the seeded `admin`/`admin` (and demo
-  `chennai-op`/`manesar-op`) accounts are automatically flagged
+  `site-a-op`/`site-b-op`) accounts are automatically flagged
   `mustChangePassword` on first login against the known default - they
   cannot be used to do anything else until changed.
 - **Password policy**: configurable minimum length (default 8, up to 128)

@@ -80,6 +80,7 @@ module.exports = function registerSetupRoutes(app, deps) {
         appName: org.appName || 'DCIM Dashboard',
         logoUrl: org.logoPath || '',
         faviconUrl: org.faviconPath || '',
+        footerText: org.footerText || '',
       });
     } catch (e) { sendErr(res, e); }
   });

@@ -694,7 +694,7 @@ async function initDB() {
         password_hash VARCHAR(255) NOT NULL,
         name VARCHAR(100) NOT NULL,
         role ENUM('Admin','Operator','Viewer') DEFAULT 'Viewer',
-        location_access ENUM('Both','Chennai Only','Manesar Only') DEFAULT 'Both',
+        location_access VARCHAR(50) DEFAULT 'All',
         status ENUM('Active','Inactive') DEFAULT 'Active',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
@@ -834,8 +834,9 @@ async function initDB() {
     await createIndexIfNotExists(conn, 'idx_movements_date', 'material_movements', 'movement_date');
 
     // Locations (DCs): the sites the whole app operates across. Seeded with
-    // the two the app always shipped with; new ones can be added later via
-    // DC Capacity → "Add Location" without any further schema change.
+    // two generic sample locations as a starting point; rename, remove, or
+    // add new ones later via DC Capacity → "Add Location" without any
+    // further schema change.
     await conn.query(`
       CREATE TABLE IF NOT EXISTS locations (
         id VARCHAR(50) PRIMARY KEY,
@@ -849,8 +850,8 @@ async function initDB() {
     `);
     const [locRows] = await conn.query('SELECT COUNT(*) as cnt FROM locations');
     if (locRows[0].cnt === 0) {
-      await conn.query('INSERT IGNORE INTO locations (id, name, created_by) VALUES (?,?,?)', ['LOC-CHENNAI', 'Chennai', 'System']);
-      await conn.query('INSERT IGNORE INTO locations (id, name, created_by) VALUES (?,?,?)', ['LOC-MANESAR', 'Manesar', 'System']);
+      await conn.query('INSERT IGNORE INTO locations (id, name, created_by) VALUES (?,?,?)', ['LOC-SITE-A', 'Sample Site A', 'System']);
+      await conn.query('INSERT IGNORE INTO locations (id, name, created_by) VALUES (?,?,?)', ['LOC-SITE-B', 'Sample Site B', 'System']);
     }
 
     // Rack types: the catalog used everywhere a rack-type dropdown appears
@@ -1483,11 +1484,11 @@ async function initDB() {
       const hash2 = await bcrypt.hash('pass', 10);
       await conn.query(
         'INSERT INTO users (username, password_hash, name, role, location_access, status) VALUES (?,?,?,?,?,?)',
-        ['chennai-op', hash2, 'Chennai Operator', 'Operator', 'Chennai', 'Active']
+        ['site-a-op', hash2, 'Site A Operator', 'Operator', 'Sample Site A', 'Active']
       );
       await conn.query(
         'INSERT INTO users (username, password_hash, name, role, location_access, status) VALUES (?,?,?,?,?,?)',
-        ['manesar-op', hash2, 'Manesar Operator', 'Operator', 'Manesar', 'Active']
+        ['site-b-op', hash2, 'Site B Operator', 'Operator', 'Sample Site B', 'Active']
       );
       log.info('✓ Users seeded');
     }
@@ -1497,15 +1498,15 @@ async function initDB() {
     if (freshInstall && assetRows[0].cnt === 0) {
       log.info('Seeding sample assets...');
       const seedAssets = [
-        ['AST-0001','Chennai','AZ-1','42U Standard','A04','U12','DellServer','1U','Dell','PowerEdge R660','SRV0231SN882','2024-03-11','SRV-0231','10.12.4.31','iDRAC 6.10.00.00','app-web-031'],
-        ['AST-0002','Chennai','AZ-1','42U Standard','A06','U22','HPServer','1U','HPE','ProLiant DL380 Gen11','SRV0247SN117','2024-05-02','SRV-0247','10.12.4.47','iLO 6 v1.55','app-db-047'],
-        ['AST-0003','Chennai','AZ-2','Storage Rack','C09','U18','Storage Array','4U','NetApp','FAS8300','STG0114SN220','2023-08-14','STG-0114','10.12.6.14','ONTAP 9.13.1','storage-nas-114'],
-        ['AST-0004','Chennai','AZ-1','Network Rack','B02','U40','Network Switch','1U','Cisco','Nexus 9336C-FX2','SW0087SN903','2022-09-30','SW-0087','10.12.1.87','NX-OS 10.3(4a)','tor-switch-087'],
-        ['AST-0005','Chennai','AZ-2','Open Frame','MR2','Floor','CRAC / Cooling','n/a','Liebert','DSE Precision Cooling','CRAC003SN019','2020-12-01','CRAC-003','10.12.9.3','n/a','crac-mr2-003'],
-        ['AST-0006','Manesar','AZ-1','42U Standard','A11','U05','HPServer','2U','HPE','ProLiant DL560 Gen10','SRV0198SN552','2023-11-20','SRV-0198','10.20.4.98','iLO 5 v3.05','app-cache-198'],
-        ['AST-0007','Manesar','AZ-1','Network Rack','B03','U38','Network Switch','1U','Arista','7050X3','SW0065SN441','2022-06-18','SW-0065','10.20.1.65','EOS 4.30.2','tor-switch-065'],
-        ['AST-0008','Manesar','AZ-2','42U Standard','A04','PDU-B','PDU','0U','Vertiv','Geist rPDU','PDU0022SN008','2021-04-05','PDU-0022','10.20.9.22','n/a','pdu-a04-b'],
-        ['AST-0009','Manesar','AZ-2','Storage Rack','C02','U10','Storage Array','4U','Dell EMC','PowerStore 1000T','STG0210SN441','2024-01-09','STG-0210','10.20.6.10','PowerStoreOS 3.5','storage-nas-210']
+        ['AST-0001','Sample Site A','AZ-1','42U Standard','A04','U12','DellServer','1U','Dell','PowerEdge R660','SRV0231SN882','2024-03-11','SRV-0231','10.12.4.31','iDRAC 6.10.00.00','app-web-031'],
+        ['AST-0002','Sample Site A','AZ-1','42U Standard','A06','U22','HPServer','1U','HPE','ProLiant DL380 Gen11','SRV0247SN117','2024-05-02','SRV-0247','10.12.4.47','iLO 6 v1.55','app-db-047'],
+        ['AST-0003','Sample Site A','AZ-2','Storage Rack','C09','U18','Storage Array','4U','NetApp','FAS8300','STG0114SN220','2023-08-14','STG-0114','10.12.6.14','ONTAP 9.13.1','storage-nas-114'],
+        ['AST-0004','Sample Site A','AZ-1','Network Rack','B02','U40','Network Switch','1U','Cisco','Nexus 9336C-FX2','SW0087SN903','2022-09-30','SW-0087','10.12.1.87','NX-OS 10.3(4a)','tor-switch-087'],
+        ['AST-0005','Sample Site A','AZ-2','Open Frame','MR2','Floor','CRAC / Cooling','n/a','Liebert','DSE Precision Cooling','CRAC003SN019','2020-12-01','CRAC-003','10.12.9.3','n/a','crac-mr2-003'],
+        ['AST-0006','Sample Site B','AZ-1','42U Standard','A11','U05','HPServer','2U','HPE','ProLiant DL560 Gen10','SRV0198SN552','2023-11-20','SRV-0198','10.20.4.98','iLO 5 v3.05','app-cache-198'],
+        ['AST-0007','Sample Site B','AZ-1','Network Rack','B03','U38','Network Switch','1U','Arista','7050X3','SW0065SN441','2022-06-18','SW-0065','10.20.1.65','EOS 4.30.2','tor-switch-065'],
+        ['AST-0008','Sample Site B','AZ-2','42U Standard','A04','PDU-B','PDU','0U','Vertiv','Geist rPDU','PDU0022SN008','2021-04-05','PDU-0022','10.20.9.22','n/a','pdu-a04-b'],
+        ['AST-0009','Sample Site B','AZ-2','Storage Rack','C02','U10','Storage Array','4U','Dell EMC','PowerStore 1000T','STG0210SN441','2024-01-09','STG-0210','10.20.6.10','PowerStoreOS 3.5','storage-nas-210']
       ];
       for (const a of seedAssets) {
         await conn.query(
@@ -1522,14 +1523,14 @@ async function initDB() {
     if (freshInstall && issueRows[0].cnt === 0) {
       log.info('Seeding sample issues...');
       const seedIssues = [
-        ['INC-1042','TCK-88401','SRV0231SN882','server','Chennai','AZ-1','A04','U12','','Predictive failure on boot drive','SMART reallocated-sector count crossed threshold on the primary boot SSD. Drive still online but flagged for replacement before failure.','critical',true,'960GB NVMe boot SSD','2026-07-10','2026-07-10','2026-07-16','2026-07-27',null,'Customer maintenance window confirmed for the 27th, 10pm-2am IST.'],
-        ['INC-1039','TCK-88377','SW0087SN903','network','Chennai','AZ-1','B02','U40','','Uplink port flapping','Port 24 on the top-of-rack switch is flapping intermittently, causing brief link loss to the aggregation layer.','warning',true,'48-port ToR switch module','2026-07-18','2026-07-18',null,null,null,'OEM case #OEM-88213 open. Awaiting the replacement module to reach site.'],
-        ['INC-1031','TCK-87920','PDU0022SN008','power','Manesar','AZ-2','A04','','PDU bank B','Breaker tripped on PDU bank B','Overcurrent trip on bank B, believed caused by a transient load spike. Reset and monitored, no recurrence.','info',false,null,'2026-07-05','2026-07-05',null,null,'2026-07-06','No part needed. Load rebalanced across banks A and B.'],
-        ['INC-1024','TCK-87654','STG0210SN441','storage','Manesar','AZ-2','C02','U10','','RAID controller reporting faults','Storage array controller is throwing correctable ECC errors at an increasing rate. Vendor confirms replacement is required.','critical',true,'RAID controller card','2026-06-28','2026-06-28','2026-07-05','2026-07-18',null,'Scheduled window missed due to change-freeze extension. Needs re-scheduling.'],
-        ['INC-1052','TCK-87301','CRAC003SN019','cooling','Chennai','AZ-2','MR2','Floor','Mechanical Room 2','Return-air sensor fault','CRAC unit 3 return-air temperature sensor was reading erratic values, tripping false high-temp alarms.','warning',true,'Return-air temperature sensor','2026-06-30','2026-06-30','2026-07-06','2026-07-08','2026-07-08','Sensor swapped during scheduled PM window. Unit back to normal readings.'],
-        ['INC-1058','TCK-88512','SRV0247SN117','server','Chennai','AZ-1','A06','U22','','DIMM ECC errors climbing','BMC log shows correctable ECC errors on DIMM slot 4 increasing over the past 48 hours.','warning',true,'32GB DDR5 RDIMM','2026-07-21','2026-07-22',null,null,null,'Part requested from OEM; watching error rate in the meantime.'],
-        ['INC-1046','TCK-88110','SRV0198SN552','server','Manesar','AZ-1','A11','U05','','PSU redundancy lost','PSU 2 of 2 failed, node running on single power supply. Redundancy lost but node still up.','critical',true,'1600W redundant PSU','2026-07-14','2026-07-14','2026-07-19',null,null,'Part on site in spares cage, awaiting a maintenance window to be scheduled.'],
-        ['INC-1017','TCK-86980','SW0065SN441','network','Manesar','AZ-1','B03','U38','','Firmware bug causing packet drops','Known firmware issue causing occasional packet drops under high throughput. Vendor patch applied.','info',false,null,'2026-06-20','2026-06-21',null,null,'2026-06-24','Firmware upgraded to 14.2.3, packet drops resolved.']
+        ['INC-1042','TCK-88401','SRV0231SN882','server','Sample Site A','AZ-1','A04','U12','','Predictive failure on boot drive','SMART reallocated-sector count crossed threshold on the primary boot SSD. Drive still online but flagged for replacement before failure.','critical',true,'960GB NVMe boot SSD','2026-07-10','2026-07-10','2026-07-16','2026-07-27',null,'Customer maintenance window confirmed for the 27th, 10pm-2am local time.'],
+        ['INC-1039','TCK-88377','SW0087SN903','network','Sample Site A','AZ-1','B02','U40','','Uplink port flapping','Port 24 on the top-of-rack switch is flapping intermittently, causing brief link loss to the aggregation layer.','warning',true,'48-port ToR switch module','2026-07-18','2026-07-18',null,null,null,'OEM case #OEM-88213 open. Awaiting the replacement module to reach site.'],
+        ['INC-1031','TCK-87920','PDU0022SN008','power','Sample Site B','AZ-2','A04','','PDU bank B','Breaker tripped on PDU bank B','Overcurrent trip on bank B, believed caused by a transient load spike. Reset and monitored, no recurrence.','info',false,null,'2026-07-05','2026-07-05',null,null,'2026-07-06','No part needed. Load rebalanced across banks A and B.'],
+        ['INC-1024','TCK-87654','STG0210SN441','storage','Sample Site B','AZ-2','C02','U10','','RAID controller reporting faults','Storage array controller is throwing correctable ECC errors at an increasing rate. Vendor confirms replacement is required.','critical',true,'RAID controller card','2026-06-28','2026-06-28','2026-07-05','2026-07-18',null,'Scheduled window missed due to change-freeze extension. Needs re-scheduling.'],
+        ['INC-1052','TCK-87301','CRAC003SN019','cooling','Sample Site A','AZ-2','MR2','Floor','Mechanical Room 2','Return-air sensor fault','CRAC unit 3 return-air temperature sensor was reading erratic values, tripping false high-temp alarms.','warning',true,'Return-air temperature sensor','2026-06-30','2026-06-30','2026-07-06','2026-07-08','2026-07-08','Sensor swapped during scheduled PM window. Unit back to normal readings.'],
+        ['INC-1058','TCK-88512','SRV0247SN117','server','Sample Site A','AZ-1','A06','U22','','DIMM ECC errors climbing','BMC log shows correctable ECC errors on DIMM slot 4 increasing over the past 48 hours.','warning',true,'32GB DDR5 RDIMM','2026-07-21','2026-07-22',null,null,null,'Part requested from OEM; watching error rate in the meantime.'],
+        ['INC-1046','TCK-88110','SRV0198SN552','server','Sample Site B','AZ-1','A11','U05','','PSU redundancy lost','PSU 2 of 2 failed, node running on single power supply. Redundancy lost but node still up.','critical',true,'1600W redundant PSU','2026-07-14','2026-07-14','2026-07-19',null,null,'Part on site in spares cage, awaiting a maintenance window to be scheduled.'],
+        ['INC-1017','TCK-86980','SW0065SN441','network','Sample Site B','AZ-1','B03','U38','','Firmware bug causing packet drops','Known firmware issue causing occasional packet drops under high throughput. Vendor patch applied.','info',false,null,'2026-06-20','2026-06-21',null,null,'2026-06-24','Firmware upgraded to 14.2.3, packet drops resolved.']
       ];
       for (const i of seedIssues) {
         await conn.query(
@@ -1546,10 +1547,10 @@ async function initDB() {
     if (freshInstall && actRows[0].cnt === 0) {
       log.info('Seeding sample DC activities...');
       const seedActivities = [
-        ['ACT-0001','Chennai','AZ-1','DellServer','Rack/Stacking','Racked and stacked 4x Dell PowerEdge R660 in row A as part of COMP-1 expansion.','2026-07-06','2026-07-07','System Administrator'],
-        ['ACT-0002','Chennai','AZ-2','Switch','Cabling Work','Structured cabling for new ToR uplinks in zone AZ-2, 24x OM4 fiber runs dressed and labeled.','2026-07-12','2026-07-14','System Administrator'],
-        ['ACT-0003','Manesar','AZ-1','PDU','UPS Drill','Quarterly UPS load-bank drill and battery runtime verification for Manesar AZ-1.','2026-07-19','2026-07-19','System Administrator'],
-        ['ACT-0004','Manesar','AZ-2','Storage','Firmware Update','PowerStoreOS 3.5 to 3.6 firmware upgrade on storage-nas-210 during approved window.','2026-07-26',null,'System Administrator']
+        ['ACT-0001','Sample Site A','AZ-1','DellServer','Rack/Stacking','Racked and stacked 4x Dell PowerEdge R660 in row A as part of COMP-1 expansion.','2026-07-06','2026-07-07','System Administrator'],
+        ['ACT-0002','Sample Site A','AZ-2','Switch','Cabling Work','Structured cabling for new ToR uplinks in zone AZ-2, 24x OM4 fiber runs dressed and labeled.','2026-07-12','2026-07-14','System Administrator'],
+        ['ACT-0003','Sample Site B','AZ-1','PDU','UPS Drill','Quarterly UPS load-bank drill and battery runtime verification for Sample Site B AZ-1.','2026-07-19','2026-07-19','System Administrator'],
+        ['ACT-0004','Sample Site B','AZ-2','Storage','Firmware Update','PowerStoreOS 3.5 to 3.6 firmware upgrade on storage-nas-210 during approved window.','2026-07-26',null,'System Administrator']
       ];
       for (const a of seedActivities) {
         await conn.query(
@@ -1566,10 +1567,10 @@ async function initDB() {
     if (freshInstall && movRows[0].cnt === 0) {
       log.info('Seeding sample material movements...');
       const seedMovements = [
-        ['MAT-0001','Inward','Chennai','AZ-1','32GB DDR5 RDIMM','Replacement DIMM received from Dell for INC-1058','4','Nos','Karthik Subramaniam','Dell India Logistics','DC-88512','2026-07-22','Delivered to site security, verified against PO before handover.'],
-        ['MAT-0002','Outward','Chennai','AZ-1','960GB NVMe boot SSD (faulty)','Faulty drive from INC-1042 returned to OEM for RMA','1','Nos','Dell Service Center','Karthik Subramaniam','RMA-22019','2026-07-28','Packed with anti-static wrap, courier POD collected.'],
-        ['MAT-0003','Inward','Manesar','AZ-1','1600W redundant PSU','Spare PSU received for INC-1046','2','Nos','Priya Ramesh','HPE Parts Depot','INV-55231','2026-07-15','Stored in spares cage rack A11.'],
-        ['MAT-0004','Outward','Manesar','AZ-2','RAID controller card (faulty)','Faulty controller from INC-1024 sent back to vendor','1','Nos','Dell EMC Service Center','Priya Ramesh','RMA-19832','2026-07-10','Awaiting pickup confirmation from courier.']
+        ['MAT-0001','Inward','Sample Site A','AZ-1','32GB DDR5 RDIMM','Replacement DIMM received from Dell for INC-1058','4','Nos','Site Technician','Dell Logistics','DC-88512','2026-07-22','Delivered to site security, verified against PO before handover.'],
+        ['MAT-0002','Outward','Sample Site A','AZ-1','960GB NVMe boot SSD (faulty)','Faulty drive from INC-1042 returned to OEM for RMA','1','Nos','Dell Service Center','Site Technician','RMA-22019','2026-07-28','Packed with anti-static wrap, courier POD collected.'],
+        ['MAT-0003','Inward','Sample Site B','AZ-1','1600W redundant PSU','Spare PSU received for INC-1046','2','Nos','Site Technician','HPE Parts Depot','INV-55231','2026-07-15','Stored in spares cage rack A11.'],
+        ['MAT-0004','Outward','Sample Site B','AZ-2','RAID controller card (faulty)','Faulty controller from INC-1024 sent back to vendor','1','Nos','Dell EMC Service Center','Site Technician','RMA-19832','2026-07-10','Awaiting pickup confirmation from courier.']
       ];
       for (const m of seedMovements) {
         await conn.query(
@@ -1948,11 +1949,12 @@ async function normalizeHardwareType(conn, rawName, createdBy, info) {
   return name;
 }
 
-// Auto-generate ticket number: CHN260801 or MAN260801 (new locations get a
-// deterministic 3-letter prefix derived from their name).
+// Auto-generate ticket number: SSA260801 or SSB260801 for the two sample
+// sites seeded on install (new/renamed locations get a deterministic
+// 3-letter prefix derived from their own name instead).
 function ticketPrefix(site) {
-  if (site === 'Chennai') return 'CHN';
-  if (site === 'Manesar') return 'MAN';
+  if (site === 'Sample Site A') return 'SSA';
+  if (site === 'Sample Site B') return 'SSB';
   const letters = String(site || 'TCK').replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase();
   return letters || 'TCK';
 }
@@ -2053,7 +2055,7 @@ function mustChangeBlocked(req, res) {
   res.status(403).json({ error: 'You must change your default password before continuing.', code: 'PASSWORD_CHANGE_REQUIRED' });
   return true;
 }
-const DEFAULT_ACCOUNT_PASSWORDS = { admin: 'admin', 'chennai-op': 'pass', 'manesar-op': 'pass' };
+const DEFAULT_ACCOUNT_PASSWORDS = { admin: 'admin', 'site-a-op': 'pass', 'site-b-op': 'pass' };
 // Flags seeded accounts whose password is still the shipped default. Never touches accounts that already changed it (password_changed_at set) or whose password differs.
 async function flagDefaultPasswordAccounts() {
   try {
