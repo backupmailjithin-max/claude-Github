@@ -7,3 +7,11 @@ packaging/windows/Output/
 # with a leading slash so it does NOT also match node_modules/*/dist/, which
 # bypassed bcryptjs's required ./dist/bcrypt.js and broke every real install
 /dist/
+
+# licensing (see docs/LICENSING.md): the signing PRIVATE key must never be
+# committed, and issued customer license files have no reason to be in the
+# repo either. The PUBLIC key lives in code (dcim/webapp/lib/license-public-key.js)
+# and is fine to commit.
+license-private-key*.pem
+*.lic
+dcim/webapp/license.lic

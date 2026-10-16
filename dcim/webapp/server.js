@@ -9,6 +9,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const zlib = require('zlib'); // also used by BACKUP & RESTORE further down
+const license = require('./lib/license');
 
 const app = express();
 // Do not disclose the Express implementation/version in response headers.
@@ -18,6 +19,10 @@ const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || (IS_PRODUCTION ? '' : 'dc-dashboard-secret-key-change-in-production');
 if (IS_PRODUCTION && !JWT_SECRET) throw new Error('JWT_SECRET is required when NODE_ENV=production. Set a long random secret in .env before starting the server.');
 if (!process.env.JWT_SECRET) log.warn('WARNING: JWT_SECRET is not set in .env - using the development-only built-in default. Set JWT_SECRET before production use.');
+// Inert unless lib/license-public-key.js has a real public key configured -
+// see docs/LICENSING.md. LICENSE_FILE lets an install point at a license
+// dropped somewhere other than its default location next to .env.
+const LICENSE_FILE = process.env.LICENSE_FILE || path.join(__dirname, 'license.lic');
 
 // =====================================================================
 // PHASE-1 HARDENING - shared infrastructure
@@ -2055,6 +2060,18 @@ function mustChangeBlocked(req, res) {
   res.status(403).json({ error: 'You must change your default password before continuing.', code: 'PASSWORD_CHANGE_REQUIRED' });
   return true;
 }
+// Checked before mustChangeBlocked so even a forced-default-password account
+// can only reach license-management routes on an unlicensed/expired install -
+// same allow-list pattern as MUST_CHANGE_ALLOWED above. A no-op (never
+// blocks) until lib/license-public-key.js has a real key configured.
+const LICENSE_ALLOWED = new Set(['POST /api/auth/logout', 'POST /api/auth/heartbeat', 'GET /api/auth/me', 'GET /api/license/status', 'GET /api/license/fingerprint', 'POST /api/license/activate']);
+function licenseBlocked(req, res) {
+  const status = license.getLicenseStatus(LICENSE_FILE);
+  if (!status.enforced || status.valid) return false;
+  if (LICENSE_ALLOWED.has(`${req.method} ${String(req.originalUrl || '').split('?')[0]}`)) return false;
+  res.status(402).json({ error: `License required: ${status.reason}`, code: 'LICENSE_REQUIRED' });
+  return true;
+}
 const DEFAULT_ACCOUNT_PASSWORDS = { admin: 'admin', 'site-a-op': 'pass', 'site-b-op': 'pass' };
 // Flags seeded accounts whose password is still the shipped default. Never touches accounts that already changed it (password_changed_at set) or whose password differs.
 async function flagDefaultPasswordAccounts() {
@@ -2076,6 +2093,7 @@ function authenticateToken(req, res, next) {
   const cached = authUserCache.get(token);
   if (cached && cached.expires > Date.now()) {
     req.user = cached.row;
+    if (licenseBlocked(req, res)) return;
     if (mustChangeBlocked(req, res)) return;
     return next();
   }
@@ -2103,6 +2121,7 @@ function authenticateToken(req, res, next) {
       }
       req.user = rows[0];
       authUserCache.set(token, { row: rows[0], expires: Date.now() + AUTH_CACHE_TTL_MS });
+      if (licenseBlocked(req, res)) return;
       if (mustChangeBlocked(req, res)) return;
       next();
     } catch (dbErr) {
@@ -2134,6 +2153,50 @@ function requireRole(roles) {
     next();
   };
 }
+
+// ============================================================================
+// LICENSING — see lib/license.js and docs/LICENSING.md. Inert (status always
+// reports enforced:false) until lib/license-public-key.js has a real key.
+// ============================================================================
+
+// Allowed even on an unlicensed/expired install (see LICENSE_ALLOWED) so an
+// Admin signed in with an expired/missing license can still see why and fix
+// it, without needing filesystem access on the server.
+app.get('/api/license/status', authenticateToken, (req, res) => {
+  res.json(license.getLicenseStatus(LICENSE_FILE));
+});
+
+// Global-Admin only, same as other install-affecting settings - the machine
+// ID itself isn't secret, but who's allowed to see/change license state is.
+app.get('/api/license/fingerprint', authenticateToken, requireGlobalAdmin, (req, res) => {
+  res.json({ fingerprint: license.formatFingerprint(license.computeMachineFingerprint()) });
+});
+
+const licenseUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 16 * 1024 }, // a .lic file is a small JSON blob
+});
+app.post('/api/license/activate', authenticateToken, requireGlobalAdmin, licenseUpload.single('license'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Upload a .lic license file.' });
+    let parsed;
+    try { parsed = JSON.parse(req.file.buffer.toString('utf8')); } catch (e) { return res.status(400).json({ error: 'That file is not a valid license (not JSON).' }); }
+    if (!parsed || parsed.alg !== 'Ed25519' || typeof parsed.payloadJson !== 'string' || typeof parsed.signature !== 'string') {
+      return res.status(400).json({ error: 'That file is not a recognized license.' });
+    }
+    await fs.promises.writeFile(LICENSE_FILE, req.file.buffer);
+    const status = license.getLicenseStatus(LICENSE_FILE);
+    if (!status.valid) {
+      // Keep the file either way (so the admin/support can see exactly what
+      // was uploaded and why it failed), just report the real reason.
+      return res.status(400).json({ error: `License file saved, but is not valid: ${status.reason}`, status });
+    }
+    auditLog(req, 'LICENSE_ACTIVATE', { entity: 'license', details: { licenseId: status.license && status.license.licenseId, customer: status.license && status.license.customer } });
+    res.json({ success: true, status });
+  } catch (e) {
+    sendErr(res, e);
+  }
+});
 
 // ============================================================================
 // HARDWARE MONITORING INTEGRATION — Dell OME + HPE OneView (per site + zone)
@@ -4866,6 +4929,13 @@ app.post('/api/users', authenticateToken, requireGlobalAdmin, async (req, res) =
     if (location_access !== 'All' && !validLocs.includes(location_access)) return res.status(400).json({ error: `Location access must be "All" or one of: ${validLocs.join(', ')}` });
     const pwErr = passwordPolicyError(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
+    const licStatus = license.getLicenseStatus(LICENSE_FILE);
+    if (licStatus.enforced && licStatus.valid && licStatus.license && licStatus.license.maxUsers) {
+      const [[{ cnt }]] = await pool.query("SELECT COUNT(*) as cnt FROM users WHERE status = 'Active'");
+      if (cnt >= licStatus.license.maxUsers) {
+        return res.status(402).json({ error: `This license allows up to ${licStatus.license.maxUsers} active user(s); that limit has been reached. Deactivate an existing user or contact your vendor to raise the limit.`, code: 'LICENSE_SEAT_LIMIT' });
+      }
+    }
     const hash = await bcrypt.hash(password, 10);
     const [result] = await pool.query(
       'INSERT INTO users (username, password_hash, name, role, location_access, status) VALUES (?,?,?,?,?,?)',
