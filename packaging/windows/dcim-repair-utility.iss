@@ -49,7 +49,7 @@ Name: "{app}\webapp\logs"
 
 [Run]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install.ps1"" -InstallDir ""{app}"" -Mode repair -Yes"; \
-  StatusMsg: "Repairing DCIM (files, service, and permissions - .env and data are preserved)..."; Flags: runascurrentuser waituntilterminated
+  StatusMsg: "Repairing DCIM (files, service, and permissions - .env and data are preserved)..."; Flags: waituntilterminated
 
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\uninstall.ps1"" -InstallDir ""{app}"""; \

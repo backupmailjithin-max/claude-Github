@@ -58,7 +58,7 @@ Name: "{app}\webapp\logs"
 
 [Run]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install.ps1"" -InstallDir ""{app}"" -Mode upgrade -Yes"; \
-  StatusMsg: "Upgrading DCIM in place (backup is taken automatically before any files change)..."; Flags: runascurrentuser waituntilterminated
+  StatusMsg: "Upgrading DCIM in place (backup is taken automatically before any files change)..."; Flags: waituntilterminated
 
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\uninstall.ps1"" -InstallDir ""{app}"""; \
