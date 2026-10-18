@@ -15,3 +15,6 @@ packaging/windows/Output/
 license-private-key*.pem
 *.lic
 dcim/webapp/license.lic
+
+# runtime output, not source - dcim/webapp/logs/.gitkeep keeps the folder
+dcim/webapp/logs/*.log
