@@ -18,7 +18,6 @@ const IS_PRODUCTION = String(process.env.NODE_ENV || '').toLowerCase() === 'prod
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || (IS_PRODUCTION ? '' : 'dc-dashboard-secret-key-change-in-production');
 if (IS_PRODUCTION && !JWT_SECRET) throw new Error('JWT_SECRET is required when NODE_ENV=production. Set a long random secret in .env before starting the server.');
-if (!process.env.JWT_SECRET) log.warn('WARNING: JWT_SECRET is not set in .env - using the development-only built-in default. Set JWT_SECRET before production use.');
 // Inert unless lib/license-public-key.js has a real public key configured -
 // see docs/LICENSING.md. LICENSE_FILE lets an install point at a license
 // dropped somewhere other than its default location next to .env.
@@ -65,6 +64,7 @@ const log = {
   error: (...a) => writeLog('ERROR', a),
   audit: (...a) => writeLog('AUDIT', a),
 };
+if (!process.env.JWT_SECRET) log.warn('WARNING: JWT_SECRET is not set in .env - using the development-only built-in default. Set JWT_SECRET before production use.');
 function pruneOldLogs() {
   try {
     const cutoff = Date.now() - LOG_RETENTION_DAYS * 86400000;
