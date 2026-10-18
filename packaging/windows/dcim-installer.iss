@@ -54,8 +54,6 @@ Name: "{group}\DCIM Deployment Dashboard"; Filename: "{code:GetAppUrl}deployment
 Name: "{group}\Uninstall DCIM"; Filename: "{uninstallexe}"
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install.ps1"" -InstallDir ""{app}"" -Yes {code:GetInstallParams}"; \
-  StatusMsg: "Configuring and starting the DCIM service..."; Flags: waituntilterminated
 Filename: "{code:GetAppUrl}"; Description: "Open DCIM in your browser now"; Flags: postinstall shellexec skipifsilent
 Filename: "notepad.exe"; Parameters: """{app}\INSTALL-SUMMARY.txt"""; Description: "View installation summary (admin account, port, database, config)"; Flags: postinstall skipifsilent unchecked
 
@@ -196,4 +194,35 @@ end;
 function GetAppUrl(Param: String): String;
 begin
   Result := 'http://localhost:' + Trim(AppSettingsPage.Values[0]) + '/';
+end;
+
+{ install.ps1 is launched here (rather than as a plain [Run] entry) so a
+  failure can actually be shown to the user. A [Run] entry's exit code isn't
+  checked by Setup by default - found via a real install where install.ps1
+  failed partway through (before writing .env or INSTALL-SUMMARY.txt) and
+  Setup still sailed through to a Finish page that looked like a success. }
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
+  Params: String;
+begin
+  if CurStep = ssPostInstall then
+  begin
+    Params := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}') +
+      '\install.ps1" -InstallDir "' + ExpandConstant('{app}') + '" -Yes ' + GetInstallParams('');
+    if not Exec('powershell.exe', Params, '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
+    begin
+      MsgBox('Could not launch install.ps1. DCIM''s files have been copied to ' + ExpandConstant('{app}') +
+        ' but are not yet configured - no database, no service, no .env. ' +
+        'Re-run install.ps1 manually from an elevated PowerShell prompt in that folder to see the full error.',
+        mbError, MB_OK);
+    end
+    else if ResultCode <> 0 then
+    begin
+      MsgBox('DCIM setup did not finish successfully (install.ps1 exited with code ' + IntToStr(ResultCode) +
+        '). .env, the database, and the Windows services may not be fully configured. ' +
+        'Re-run install.ps1 manually from an elevated PowerShell prompt in ' + ExpandConstant('{app}') +
+        ' to see the full error and retry.', mbError, MB_OK);
+    end;
+  end;
 end;

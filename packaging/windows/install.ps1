@@ -259,12 +259,18 @@ function Setup-EmbeddedDb {
   $mysqladminExe = Join-Path $engineDir "bin\mysqladmin.exe"
   $mysqlExe = Join-Path $engineDir "bin\mysql.exe"
   $up = $false
-  for ($i = 0; $i -lt 30; $i++) {
+  # 90s, not 30s: a first-ever start right after mariadb-install-db.exe has to
+  # initialize the data directory, and on a real machine (antivirus scanning
+  # every new file, a slower disk than a CI runner) that can take well over
+  # 30s even though the service does come up fine - found via a real install
+  # on real hardware timing out here while the service kept starting in the
+  # background anyway (NSSM's AppExit Default Restart) and came up seconds later.
+  for ($i = 0; $i -lt 90; $i++) {
     & $mysqladminExe -h 127.0.0.1 -P $EmbeddedDbPort -u root ping 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) { $up = $true; break }
     Start-Sleep -Seconds 1
   }
-  if (-not $up) { Die "Embedded MariaDB did not start within 30s. Check: Get-Service $EmbeddedDbServiceName" }
+  if (-not $up) { Die "Embedded MariaDB did not start within 90s. Check: Get-Service $EmbeddedDbServiceName" }
 
   if ($firstInit) {
     $chars = (48..57) + (65..90) + (97..122)

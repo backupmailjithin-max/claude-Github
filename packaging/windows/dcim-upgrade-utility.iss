@@ -56,10 +56,34 @@ Name: "{app}\webapp\uploads"
 Name: "{app}\webapp\backups"
 Name: "{app}\webapp\logs"
 
-[Run]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install.ps1"" -InstallDir ""{app}"" -Mode upgrade -Yes"; \
-  StatusMsg: "Upgrading DCIM in place (backup is taken automatically before any files change)..."; Flags: waituntilterminated
-
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\uninstall.ps1"" -InstallDir ""{app}"""; \
   RunOnceId: "DcimServiceRemove"; Flags: waituntilterminated
+
+[Code]
+{ install.ps1 is launched here (rather than as a plain [Run] entry) so a
+  failure can actually be shown to the user - see the matching comment in
+  dcim-installer.iss's [Code] section for the full story. }
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
+  Params: String;
+begin
+  if CurStep = ssPostInstall then
+  begin
+    Params := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}') +
+      '\install.ps1" -InstallDir "' + ExpandConstant('{app}') + '" -Mode upgrade -Yes';
+    if not Exec('powershell.exe', Params, '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
+    begin
+      MsgBox('Could not launch install.ps1. The new files have been copied to ' + ExpandConstant('{app}') +
+        ' but the upgrade did not run. Re-run install.ps1 -Mode upgrade manually from an elevated ' +
+        'PowerShell prompt in that folder to see the full error.', mbError, MB_OK);
+    end
+    else if ResultCode <> 0 then
+    begin
+      MsgBox('The upgrade did not finish successfully (install.ps1 exited with code ' + IntToStr(ResultCode) +
+        '). Re-run install.ps1 -Mode upgrade manually from an elevated PowerShell prompt in ' +
+        ExpandConstant('{app}') + ' to see the full error and retry.', mbError, MB_OK);
+    end;
+  end;
+end;

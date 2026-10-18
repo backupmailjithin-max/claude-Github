@@ -470,12 +470,16 @@ setup_embedded_db() {
 
   log "Waiting for embedded MariaDB to become available..."
   local i
-  for i in $(seq 1 30); do
+  # 90s, not 30s: a first-ever start right after mariadb-install-db has to
+  # initialize the data directory, which can take well over 30s on real
+  # hardware (slower disk, other load) even though the service comes up
+  # fine - see the matching comment in packaging/windows/install.ps1.
+  for i in $(seq 1 90); do
     "$engine_dir/bin/mysqladmin" --no-defaults --socket="$socket_path" -u root ping >/dev/null 2>&1 && break
     sleep 1
   done
   "$engine_dir/bin/mysqladmin" --no-defaults --socket="$socket_path" -u root ping >/dev/null 2>&1 \
-    || die "Embedded MariaDB did not start within 30s. Check: journalctl -u $EMBEDDED_DB_SERVICE -n 100"
+    || die "Embedded MariaDB did not start within 90s. Check: journalctl -u $EMBEDDED_DB_SERVICE -n 100"
 
   if [ "$first_init" -eq 1 ]; then
     DB_PASSWORD="$(random_secret | head -c 32)"
