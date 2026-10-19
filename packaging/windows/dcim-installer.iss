@@ -263,6 +263,21 @@ begin
   Result := 'http://localhost:' + Trim(AppSettingsPage.Values[0]) + '/';
 end;
 
+{ MsgBox is NOT suppressed by /SILENT, /VERYSILENT or /SUPPRESSMSGBOXES -
+  those only cover Setup's own built-in dialogs, never a custom MsgBox call
+  from [Code]. Found the hard way: a silent/unattended run (CI, or a real
+  customer deploying via SCCM/Intune) that hits an install.ps1 failure would
+  show this dialog and then hang forever waiting for a click that will never
+  come, turning a reportable failure into an indefinite stall. Log() always
+  writes to the install log (visible with /LOG=, or in "Show Details" after
+  an interactive run); MsgBox only pops up when there's actually someone
+  there to see it. }
+procedure ReportInstallFailure(const S: String);
+begin
+  Log(S);
+  if not WizardSilent then MsgBox(S, mbError, MB_OK);
+end;
+
 { install.ps1 is launched here (rather than as a plain [Run] entry) so a
   failure can actually be shown to the user. A [Run] entry's exit code isn't
   checked by Setup by default - found via a real install where install.ps1
@@ -279,17 +294,16 @@ begin
       '\install.ps1" -InstallDir "' + ExpandConstant('{app}') + '" -Yes ' + GetInstallParams('');
     if not Exec('powershell.exe', Params, '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
     begin
-      MsgBox('Could not launch install.ps1. DCIM''s files have been copied to ' + ExpandConstant('{app}') +
+      ReportInstallFailure('Could not launch install.ps1. DCIM''s files have been copied to ' + ExpandConstant('{app}') +
         ' but are not yet configured - no database, no service, no .env. ' +
-        'Re-run install.ps1 manually from an elevated PowerShell prompt in that folder to see the full error.',
-        mbError, MB_OK);
+        'Re-run install.ps1 manually from an elevated PowerShell prompt in that folder to see the full error.');
     end
     else if ResultCode <> 0 then
     begin
-      MsgBox('DCIM setup did not finish successfully (install.ps1 exited with code ' + IntToStr(ResultCode) +
+      ReportInstallFailure('DCIM setup did not finish successfully (install.ps1 exited with code ' + IntToStr(ResultCode) +
         '). .env, the database, and the Windows services may not be fully configured. ' +
         'Re-run install.ps1 manually from an elevated PowerShell prompt in ' + ExpandConstant('{app}') +
-        ' to see the full error and retry.', mbError, MB_OK);
+        ' to see the full error and retry.');
     end;
   end;
 end;

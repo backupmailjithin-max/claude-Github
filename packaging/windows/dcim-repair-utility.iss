@@ -52,6 +52,16 @@ Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Fil
   RunOnceId: "DcimServiceRemove"; Flags: waituntilterminated
 
 [Code]
+{ MsgBox is NOT suppressed by /SILENT, /VERYSILENT or /SUPPRESSMSGBOXES - see
+  the matching comment in dcim-installer.iss's [Code] section for the full
+  story (a silent/unattended run that hits a failure would otherwise hang
+  forever waiting for a click that never comes). }
+procedure ReportInstallFailure(const S: String);
+begin
+  Log(S);
+  if not WizardSilent then MsgBox(S, mbError, MB_OK);
+end;
+
 { install.ps1 is launched here (rather than as a plain [Run] entry) so a
   failure can actually be shown to the user - see the matching comment in
   dcim-installer.iss's [Code] section for the full story. }
@@ -66,15 +76,15 @@ begin
       '\install.ps1" -InstallDir "' + ExpandConstant('{app}') + '" -Mode repair -Yes';
     if not Exec('powershell.exe', Params, '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
     begin
-      MsgBox('Could not launch install.ps1. The repair did not run. Re-run install.ps1 -Mode repair ' +
+      ReportInstallFailure('Could not launch install.ps1. The repair did not run. Re-run install.ps1 -Mode repair ' +
         'manually from an elevated PowerShell prompt in ' + ExpandConstant('{app}') +
-        ' to see the full error.', mbError, MB_OK);
+        ' to see the full error.');
     end
     else if ResultCode <> 0 then
     begin
-      MsgBox('The repair did not finish successfully (install.ps1 exited with code ' + IntToStr(ResultCode) +
+      ReportInstallFailure('The repair did not finish successfully (install.ps1 exited with code ' + IntToStr(ResultCode) +
         '). Re-run install.ps1 -Mode repair manually from an elevated PowerShell prompt in ' +
-        ExpandConstant('{app}') + ' to see the full error and retry.', mbError, MB_OK);
+        ExpandConstant('{app}') + ' to see the full error and retry.');
     end;
   end;
 end;
