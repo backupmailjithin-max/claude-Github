@@ -414,3 +414,78 @@ jobs:
           $locs = Invoke-RestMethod -Uri "http://127.0.0.1:18976/api/locations" -Headers @{ Authorization = "Bearer $($login.token)" }
           if (-not ($locs.name -contains "CiEmbeddedDC")) { throw "Test location did not survive Repair" }
           Write-Host "Embedded MariaDB verified across install, upgrade, and repair on Windows."
+
+  # Every job above calls install.ps1 directly - which never exercises the
+  # compiled .exe's own Pascal Script ([Code] section) at all: the wizard's
+  # page logic, ShouldSkipPage/NextButtonClick validation, GetInstallParams'
+  # string-building, and the CurStepChanged/Exec() launch of install.ps1
+  # itself. That gap is exactly how the "runas" flag typo made it past CI
+  # once already - ISCC caught it, but only because it happened to be a
+  # compile-time error; a Pascal Script RUNTIME bug (wrong page ID, a typo
+  # in a .Values[] index, GetInstallParams building a malformed string) would
+  # not be. This job actually runs the real, compiled dcim-setup-*.exe in
+  # silent mode - not interactive (no GitHub-hosted Windows runner can show a
+  # GUI to click through; see docs/guides for why only a real human on a real
+  # desktop can do that), but /VERYSILENT still executes every line of the
+  # installer's own [Code] exactly as an interactive run would, just using
+  # the wizard pages' default values instead of someone typing into them.
+  test-windows-compiled-installer:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage bundled Node.js runtime
+        shell: pwsh
+        run: packaging\windows\fetch-node-runtime.ps1
+
+      - name: Stage NSSM service wrapper
+        shell: pwsh
+        run: packaging\windows\fetch-nssm.ps1
+
+      - name: Stage bundled MariaDB runtime
+        shell: pwsh
+        run: packaging\windows\fetch-mariadb-runtime.ps1
+
+      - name: Compile the real installer with Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "Inno Setup (ISCC.exe) not found on this runner image." }
+          & $iscc packaging\windows\dcim-installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed compiling dcim-installer.iss (exit $LASTEXITCODE)" }
+
+      - name: Run the compiled installer silently (default wizard values - bundled DB, port 8974)
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "packaging\windows\Output\dcim-setup-*.exe" | Select-Object -First 1
+          if (-not $exe) { throw "No dcim-setup-*.exe found in packaging\windows\Output" }
+          Start-Process -FilePath $exe.FullName -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=D:\inno-install-log.txt" -Wait
+
+      - name: Inno Setup's own log (always, even on success - this is the real [Code] execution trace)
+        if: always()
+        shell: pwsh
+        run: if (Test-Path D:\inno-install-log.txt) { Get-Content D:\inno-install-log.txt }
+
+      - name: Diagnostics (always, even on failure)
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "--- Get-Service DCIMMariaDB ---"
+          Get-Service DCIMMariaDB -ErrorAction SilentlyContinue | Format-List *
+          Write-Host "--- Get-Service DCIM ---"
+          Get-Service DCIM -ErrorAction SilentlyContinue | Format-List *
+          Write-Host "--- C:\DCIM\webapp\.env (redacted) ---"
+          if (Test-Path C:\DCIM\webapp\.env) { (Get-Content C:\DCIM\webapp\.env) -replace '(PASSWORD|SECRET)=.*', '$1=[redacted]' } else { Write-Host "MISSING" }
+          Write-Host "--- C:\DCIM\INSTALL-SUMMARY.txt ---"
+          if (Test-Path C:\DCIM\INSTALL-SUMMARY.txt) { Get-Content C:\DCIM\INSTALL-SUMMARY.txt } else { Write-Host "MISSING" }
+
+      - name: Verify the installer actually configured everything (not just a successful-looking exit code)
+        shell: pwsh
+        run: |
+          if (-not (Test-Path C:\DCIM\webapp\.env)) { throw ".env was not created - the compiled installer did not really configure the app." }
+          if (-not (Test-Path C:\DCIM\INSTALL-SUMMARY.txt)) { throw "INSTALL-SUMMARY.txt was not created." }
+          if ((Get-Service DCIMMariaDB).Status -ne "Running") { throw "DCIMMariaDB is not running after a silent run of the real installer." }
+          if ((Get-Service DCIM).Status -ne "Running") { throw "DCIM is not running after a silent run of the real installer." }
+          $h = Invoke-RestMethod -Uri "http://127.0.0.1:8974/api/health"
+          if ($h.status -ne "ok") { throw "Health check failed after a silent run of the real installer." }
+          Write-Host "The compiled installer, run exactly as a customer's double-click would (just non-interactively), produced a fully working install."
