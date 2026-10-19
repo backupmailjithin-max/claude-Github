@@ -8,5 +8,8 @@
 // before. Generate a real keypair with tools/license-keygen.js and paste
 // the printed public key below to turn enforcement on.
 module.exports = {
-  LICENSE_PUBLIC_KEY_PEM: null,
+  LICENSE_PUBLIC_KEY_PEM: `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAIdp5YuQVI0Si7LtK/116XuTui9D6d0NGwdIwIla+jQI=
+-----END PUBLIC KEY-----
+`,
 };
