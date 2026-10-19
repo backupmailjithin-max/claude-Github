@@ -1,6 +1,6 @@
 @echo off
 cd /d "%~dp0"
-license-generator-wizard-win.exe
+dcim-license-generator-v2.exe
 echo.
 echo =================================================
 echo Press any key to close this window...
