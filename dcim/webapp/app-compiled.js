@@ -13069,7 +13069,7 @@ function PduPage({ allowedSites = [], canEdit = false }) {
     }), [racks]);
     const filteredRacks = racksAugmented.filter((row) => PDU_RACK_COLUMNS.every((col) => listColumnFilterMatches(columnFilters[col.key], col, row)));
     const optionRowsForColumn = (key) => racksAugmented.filter((row) => PDU_RACK_COLUMNS.every((col) => col.key === key || listColumnFilterMatches(columnFilters[col.key], col, row)));
-    const topLoadedRacks = useMemo(() => racksAugmented.filter((r) => r.totalKw > 0).slice().sort((a, b) => b.totalKw - a.totalKw).slice(0, 5), [racksAugmented]);
+    const highestLoadRack = useMemo(() => racksAugmented.reduce((top, r) => (!top || r.usedPct > top.usedPct) ? r : top, null), [racksAugmented]);
     const runSync = async () => {
         setSyncing(true); setSyncMsg(null);
         try { const r = await api.syncAllPdus(); setSyncMsg(`Synced ${r.synced} PDU(s) — ${r.online} online.`); await load(); }
@@ -13092,11 +13092,12 @@ function PduPage({ allowedSites = [], canEdit = false }) {
         error && React.createElement("div", { className: "neu-card anim-in d1", style: { background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)", padding: "14px 18px", marginBottom: 20, color: "#DC2626", fontFamily: "Inter", fontSize: 13 } }, "API Error: ", error, " ", React.createElement("button", { onClick: load, style: { marginLeft: 12, background: "transparent", border: "none", color: "#DC2626", textDecoration: "underline", cursor: "pointer", fontWeight: 600 } }, "Retry")),
         loading && React.createElement("div", { style: { textAlign: "center", padding: "40px 0", color: "#64748B", fontFamily: "Inter" } }, "Loading PDU data…"),
         !loading && React.createElement(React.Fragment, null,
-            React.createElement("div", { className: "issue-summary-grid", style: { display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 12, marginBottom: 18 } },
+            React.createElement("div", { className: "issue-summary-grid", style: { display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 12, marginBottom: 18 } },
                 [["Racks Monitored", String(racks.length), racks.reduce((s, r) => s + r.feeds.length, 0) + " PDU units total", null],
                     ["Fully Redundant", String(redundantCount), "both A & B online", "#059669"],
                     ["Degraded / Alert", String(degradedCount), "one feed down", "#DC2626"],
                     ["Total Load / Capacity", overall.totalKw.toFixed(1) + " / " + overall.ratedKw.toFixed(1) + "kW", usedPctOverall + "% of rated capacity used", null],
+                    ["Highest Rack Load", highestLoadRack ? highestLoadRack.usedPct + "%" : "—", highestLoadRack ? "Rack-" + highestLoadRack.rackNo + " — " + (highestLoadRack.usedPct >= 85 ? "nearing max" : highestLoadRack.usedPct >= 70 ? "high load" : "within capacity") : "no data yet", highestLoadRack ? pduLoadColor(highestLoadRack.usedPct) : null],
                     ["Online PDUs", overall.onlineCount + " / " + overall.pduCount, "currently reporting", null]].map(([label, val, sub, color]) => React.createElement("div", { key: label, className: "sample-kpi", style: { display: "flex", flexDirection: "column", gap: 4, padding: "14px 16px" } },
                     React.createElement("small", { style: { fontFamily: "Inter", fontSize: 9, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: "#64748B" } }, label),
                     React.createElement("b", { style: { fontFamily: "'Space Grotesk'", fontSize: 21, fontWeight: 800, color: color || "#17345D" } }, val),
@@ -13107,20 +13108,6 @@ function PduPage({ allowedSites = [], canEdit = false }) {
                     React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginTop: 3 } }, "Last 30 days across all your locations — click to customize the date range")),
                 React.createElement("div", { ref: sparkRef, style: { flex: "0 0 220px", height: 56 } }),
                 React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, fontWeight: 700, color: "#244DE5", background: "rgba(49,87,238,.08)", padding: "9px 14px", borderRadius: 20 } }, "View & Customize ›")),
-            React.createElement("div", { className: "neu-card anim-in d1", style: { padding: "18px 20px", marginBottom: 18 } },
-                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#17345D", marginBottom: 3 } }, "🔺 Highest Rack Power Load"),
-                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 14 } }, "Top racks by current load across your locations — click a row to jump to it in the table below."),
-                topLoadedRacks.length === 0 ? React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#94A3B8", padding: "6px 0" } }, "No PDU readings yet — add a PDU and set its Power OID to see rack load rankings here.") :
-                    React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, topLoadedRacks.map((r, idx) => React.createElement("div", { key: r.key, onClick: () => setOpenRack(r.key), style: { display: "flex", alignItems: "center", gap: 12, padding: "9px 12px", borderRadius: 11, background: "rgba(248,250,252,.75)", cursor: "pointer" } },
-                        React.createElement("div", { style: { width: 24, height: 24, borderRadius: 8, background: idx === 0 ? "#FEE2E2" : "rgba(148,163,184,.15)", color: idx === 0 ? "#DC2626" : "#64748B", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Space Grotesk'", fontWeight: 800, fontSize: 11, flexShrink: 0 } }, "#" + (idx + 1)),
-                        React.createElement("div", { style: { flex: 1, minWidth: 0 } },
-                            React.createElement("div", { style: { fontWeight: 700, fontSize: 12.5, color: "#17345D", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, r.site + " · " + r.zone + " · Rack " + r.rackNo),
-                            React.createElement("div", { style: { fontSize: 10.5, color: "#94A3B8" } }, r.rackType || "—")),
-                        React.createElement("div", { style: { flex: "0 0 130px", display: "flex", alignItems: "center", gap: 7 } },
-                            React.createElement("div", { style: { flex: 1, height: 6, borderRadius: 5, background: "rgba(148,163,184,.25)", overflow: "hidden" } }, React.createElement("div", { style: { width: r.usedPct + "%", height: "100%", borderRadius: 5, background: pduLoadColor(r.usedPct) } })),
-                            React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontWeight: 800, fontSize: 11.5 } }, r.usedPct, "%")),
-                        React.createElement("div", { style: { flex: "0 0 90px", textAlign: "right", fontFamily: "'Space Grotesk'", fontWeight: 800, fontSize: 13, color: "#17345D" } }, r.totalKw.toFixed(2), " kW")))),
-            ),
             React.createElement("div", { className: "neu-card", style: { overflow: "hidden" } },
                 React.createElement("div", { style: { overflowX: "auto" } },
                     React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 13, fontFamily: "Inter" } },
