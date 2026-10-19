@@ -45,9 +45,17 @@ Name: "{app}\webapp\backups"
 Name: "{app}\webapp\logs"
 
 [Icons]
-Name: "{group}\DCIM Setup"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install.ps1"" -InstallDir ""{app}"""
-Name: "{group}\DCIM Upgrade Utility"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\dcim-upgrade.ps1"" -InstallDir ""{app}"""
-Name: "{group}\DCIM Repair Utility"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\dcim-repair.ps1"" -InstallDir ""{app}"""
+; install.ps1/dcim-upgrade.ps1/dcim-repair.ps1 all start with
+; #Requires -RunAsAdministrator, so a double-click of these shortcuts needs
+; "Flags: runas" to actually elevate (Windows then shows the UAC prompt) -
+; without it, PowerShell rejects the script instantly, and without -NoExit
+; the console window closes before that rejection is even visible. Found via
+; review after the same root issue (a non-elevated launch of an
+; admin-required script) had already caused one silent "looks successful but
+; did nothing" failure in the installer's own [Run] step (commit 0250bac).
+Name: "{group}\DCIM Setup"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\install.ps1"" -InstallDir ""{app}"""; Flags: runas
+Name: "{group}\DCIM Upgrade Utility"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\dcim-upgrade.ps1"" -InstallDir ""{app}"""; Flags: runas
+Name: "{group}\DCIM Repair Utility"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\dcim-repair.ps1"" -InstallDir ""{app}"""; Flags: runas
 Name: "{group}\DCIM Service Status"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\dcim-service.ps1"" -Action status"
 Name: "{group}\DCIM Configuration Wizard"; Filename: "{code:GetAppUrl}setup-wizard.html"
 Name: "{group}\DCIM Deployment Dashboard"; Filename: "{code:GetAppUrl}deployment-dashboard.html"
@@ -155,6 +163,17 @@ begin
     begin
       MsgBox('Please enter at least a host and username for your database server.', mbError, MB_OK);
       Result := False;
+      Exit;
+    end;
+    { Unvalidated, this reached install.ps1 as -DbPort <empty-or-garbage>,
+      which PowerShell's parameter binder rejects with a raw .NET error
+      after files were already copied - instead of this friendly message
+      before anything has been touched. }
+    PortNum := StrToIntDef(Trim(DbConnectionPage.Values[1]), -1);
+    if (PortNum < 1) or (PortNum > 65535) then
+    begin
+      MsgBox('Please enter a valid database port (1-65535).', mbError, MB_OK);
+      Result := False;
     end;
   end
   else if CurPageID = AppSettingsPage.ID then
@@ -190,10 +209,15 @@ function EscapeForPowerShell(const S: String): String;
 var
   R: String;
 begin
-  { A password containing a double-quote would otherwise terminate the
-    quoted argument early and corrupt the command line. }
+  { This string ends up inside a double-quoted argument on the raw Win32
+    command line that Exec() hands to CreateProcess, parsed by powershell.exe
+    via the standard CommandLineToArgvW rules - NOT PowerShell's own script
+    syntax. Those rules escape an embedded quote with a backslash (\"), not
+    a backtick; a backtick is literal to CommandLineToArgvW and would close
+    the quoted argument early, corrupting everything after it on the line
+    (every later -DbName/-DbUser/-AdminUser/... would merge or be dropped). }
   R := S;
-  StringChangeEx(R, '"', '`"', True);
+  StringChangeEx(R, '"', '\"', True);
   Result := R;
 end;
 

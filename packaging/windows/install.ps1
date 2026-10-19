@@ -26,6 +26,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ServiceName = "DCIM"
+# Which parameters the caller actually passed on the command line, captured
+# before any function runs - lets Upgrade/Repair tell "-Port was really
+# given" apart from "-Port is just sitting at its default value".
+$script:ExplicitParams = $PSBoundParameters.Keys
 $MinNodeMajor = 18
 $MinFreeMB = 500
 
@@ -175,6 +179,15 @@ function Sync-Payload {
   New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
   $dest = Join-Path $InstallDir "webapp"
   robocopy $PayloadWebapp $dest /MIR /XD uploads backups logs /XF .env /NFL /NDL /NJH /NJS | Out-Null
+  # robocopy's exit codes are a bitmask, not a plain success/failure flag:
+  # 0-7 all mean success (0 = nothing to do, 1 = files copied, etc., combined
+  # by addition); only 8 and above indicate a real failure (e.g. a file
+  # locked by antivirus or a stale process). $ErrorActionPreference = "Stop"
+  # does not make a non-zero exit from a native command terminate the
+  # script, so this was previously never checked at all - a failed copy here
+  # left Install-WindowsService/Wait-ForHealth proceeding as if the (possibly
+  # stale or partial) webapp files were correct.
+  if ($LASTEXITCODE -ge 8) { Die "robocopy failed copying the application files to $dest (exit $LASTEXITCODE)." }
   foreach ($d in "uploads", "backups", "logs") {
     New-Item -ItemType Directory -Force -Path (Join-Path $dest $d) | Out-Null
   }
@@ -182,7 +195,22 @@ function Sync-Payload {
     $rtDest = Join-Path $InstallDir "runtime\node"
     New-Item -ItemType Directory -Force -Path (Split-Path $rtDest) | Out-Null
     robocopy $PayloadRuntime $rtDest /MIR /NFL /NDL /NJH /NJS | Out-Null
+    if ($LASTEXITCODE -ge 8) { Die "robocopy failed copying the Node.js runtime to $rtDest (exit $LASTEXITCODE)." }
   }
+}
+
+function Invoke-Nssm {
+  # Every other native-command call in this file that matters (mariadb-
+  # install-db.exe, mysql.exe, robocopy) checks $LASTEXITCODE; the nssm
+  # "install"/"set" calls that configure the Windows service didn't, found
+  # via review. A failed "set AppDirectory"/"set DependOnService"/etc. would
+  # otherwise go unnoticed - the service still gets created and started, just
+  # missing the config that made it actually work (wrong working directory,
+  # no dependency ordering on the embedded DB, ...).
+  param($NssmPath)
+  $rest = $args
+  & $NssmPath @rest | Out-Null
+  if ($LASTEXITCODE -ne 0) { Die "nssm $($rest -join ' ') failed (exit $LASTEXITCODE)." }
 }
 
 function Ensure-NssmBinary {
@@ -250,9 +278,9 @@ function Setup-EmbeddedDb {
     & $nssm stop $EmbeddedDbServiceName | Out-Null
     & $nssm remove $EmbeddedDbServiceName confirm | Out-Null
   }
-  & $nssm install $EmbeddedDbServiceName $mariadbdExe "--datadir=""$dataDir"" --port=$EmbeddedDbPort --bind-address=127.0.0.1" | Out-Null
-  & $nssm set $EmbeddedDbServiceName Start SERVICE_AUTO_START | Out-Null
-  & $nssm set $EmbeddedDbServiceName AppExit Default Restart | Out-Null
+  Invoke-Nssm $nssm install $EmbeddedDbServiceName $mariadbdExe "--datadir=""$dataDir"" --port=$EmbeddedDbPort --bind-address=127.0.0.1"
+  Invoke-Nssm $nssm set $EmbeddedDbServiceName Start SERVICE_AUTO_START
+  Invoke-Nssm $nssm set $EmbeddedDbServiceName AppExit Default Restart
   Start-Service -Name $EmbeddedDbServiceName
 
   Log "Waiting for embedded MariaDB to become available..."
@@ -280,7 +308,18 @@ function Setup-EmbeddedDb {
     if ($DbPassword) { $script:DbPassword = $DbPassword }
     else { $script:DbPassword = -join ((1..32) | ForEach-Object { [char](Get-Random -InputObject $chars) }) }
     $rootPw = -join ((1..32) | ForEach-Object { [char](Get-Random -InputObject $chars) })
-    $sql = "ALTER USER 'root'@'localhost' IDENTIFIED BY '$rootPw';`nCREATE DATABASE IF NOT EXISTS ``$DbName`` CHARACTER SET utf8mb4;`nCREATE USER IF NOT EXISTS '$DbUser'@'127.0.0.1' IDENTIFIED BY '$($script:DbPassword)';`nGRANT ALL PRIVILEGES ON ``$DbName``.* TO '$DbUser'@'127.0.0.1';`nFLUSH PRIVILEGES;`n"
+    # SQL-escape anything that can now come from the wizard (DbName/DbUser/
+    # DbPassword) rather than always being a random alphanumeric string -
+    # an unescaped apostrophe (a common, even recommended, password
+    # character) would otherwise close the SQL string literal early and
+    # fail with a syntax error that gives a non-technical admin no clue
+    # what actually went wrong.
+    $sqlEsc = { param($s) $s -replace "'", "''" }
+    $escDbName = & $sqlEsc $DbName
+    $escDbUser = & $sqlEsc $DbUser
+    $escDbPw = & $sqlEsc $script:DbPassword
+    $escRootPw = & $sqlEsc $rootPw
+    $sql = "ALTER USER 'root'@'localhost' IDENTIFIED BY '$escRootPw';`nCREATE DATABASE IF NOT EXISTS ``$escDbName`` CHARACTER SET utf8mb4;`nCREATE USER IF NOT EXISTS '$escDbUser'@'127.0.0.1' IDENTIFIED BY '$escDbPw';`nGRANT ALL PRIVILEGES ON ``$escDbName``.* TO '$escDbUser'@'127.0.0.1';`nFLUSH PRIVILEGES;`n"
     $sql | & $mysqlExe -h 127.0.0.1 -P $EmbeddedDbPort -u root
     if ($LASTEXITCODE -ne 0) { Die "Could not create the embedded database/user (mysql exited $LASTEXITCODE)." }
     Set-Content -Path (Join-Path $dbDir ".root-password") -Value $rootPw
@@ -312,21 +351,44 @@ function Install-WindowsService {
     & $nssm stop $ServiceName | Out-Null
     & $nssm remove $ServiceName confirm | Out-Null
   }
-  & $nssm install $ServiceName $nodeBin "server.js" | Out-Null
-  & $nssm set $ServiceName AppDirectory $appDir | Out-Null
-  & $nssm set $ServiceName AppStdout (Join-Path $appDir "logs\service-stdout.log") | Out-Null
-  & $nssm set $ServiceName AppStderr (Join-Path $appDir "logs\service-stderr.log") | Out-Null
-  & $nssm set $ServiceName AppRotateFiles 1 | Out-Null
-  & $nssm set $ServiceName Start SERVICE_AUTO_START | Out-Null
-  & $nssm set $ServiceName AppExit Default Restart | Out-Null
+  Invoke-Nssm $nssm install $ServiceName $nodeBin "server.js"
+  Invoke-Nssm $nssm set $ServiceName AppDirectory $appDir
+  Invoke-Nssm $nssm set $ServiceName AppStdout (Join-Path $appDir "logs\service-stdout.log")
+  Invoke-Nssm $nssm set $ServiceName AppStderr (Join-Path $appDir "logs\service-stderr.log")
+  Invoke-Nssm $nssm set $ServiceName AppRotateFiles 1
+  Invoke-Nssm $nssm set $ServiceName Start SERVICE_AUTO_START
+  Invoke-Nssm $nssm set $ServiceName AppExit Default Restart
   # If an embedded MariaDB instance is in use (auto-detected, same as the
   # Linux systemd Requires= wiring), tell the Windows Service Control Manager
   # to start it before DCIM, via NSSM's DependOnService.
   if (Test-Path (Join-Path $InstallDir "mariadb\data")) {
-    & $nssm set $ServiceName DependOnService $EmbeddedDbServiceName | Out-Null
+    Invoke-Nssm $nssm set $ServiceName DependOnService $EmbeddedDbServiceName
   }
   Start-Service -Name $ServiceName
   Log "Installed Windows service '$ServiceName' (auto-start on boot)."
+}
+
+function Sync-PortsFromEnv {
+  # On Upgrade/Repair, the caller frequently doesn't know or re-pass -Port /
+  # -EmbeddedDbPort - the Start Menu "DCIM Upgrade Utility" / "DCIM Repair
+  # Utility" shortcuts and the standalone DCIM-Upgrade/DCIM-Repair installers
+  # never do. Found via real review: Wait-ForHealth and Set-AdminAccount
+  # would then silently poll the wrong (default 8974) port for any install
+  # that used a different one, reporting a false "did not report healthy"
+  # failure even though the app was running fine - and Setup-EmbeddedDb
+  # would re-register the embedded DB's Windows service pointing at the
+  # wrong (default 3307) port too, breaking a non-default one entirely.
+  $envPath = Join-Path $InstallDir "webapp\.env"
+  if (-not (Test-Path $envPath)) { return }
+  $envLines = Get-Content $envPath
+  if ($script:ExplicitParams -notcontains 'Port') {
+    $line = $envLines | Where-Object { $_ -match '^PORT=(.+)$' } | Select-Object -First 1
+    if ($line -match '^PORT=(.+)$') { $script:Port = [int]$matches[1] }
+  }
+  if ($script:ExplicitParams -notcontains 'EmbeddedDbPort') {
+    $line = $envLines | Where-Object { $_ -match '^DB_PORT=(.+)$' } | Select-Object -First 1
+    if ($line -match '^DB_PORT=(.+)$') { $script:EmbeddedDbPort = [int]$matches[1] }
+  }
 }
 
 function Backup-BeforeChange {
@@ -532,6 +594,7 @@ function Invoke-Install {
 function Invoke-Upgrade {
   if (-not (Test-ExistingInstall)) { Die "No existing installation found at $InstallDir; use -Mode install instead." }
   Invoke-Validations
+  Sync-PortsFromEnv
   Backup-BeforeChange
   Stop-Service -Name $ServiceName -ErrorAction SilentlyContinue
   Sync-Payload
@@ -566,6 +629,7 @@ function Invoke-Repair {
       Die "No .env found at $envPath and no prior backup contains one; repair cannot recover the configuration. Restore it manually (e.g. from an external backup) or reinstall with -Mode install."
     }
   }
+  Sync-PortsFromEnv
   # Found via real execution (test-lifecycle.yml): without stopping the
   # service first, Sync-Payload's Copy-Item of tools\nssm.exe fails with
   # "The process cannot access the file ... because it is being used by
