@@ -57,7 +57,12 @@ function isElevated() {
 
 function findOnPath(exe) {
   try {
-    const out = execFileSync('where', [exe], { encoding: 'utf8' });
+    // stdio explicitly ignored on stdin/stderr: found via real execution -
+    // where.exe's "INFO: Could not find files for the given pattern(s)."
+    // leaked straight into the installer's own console even though nothing
+    // here prints it, on a miss (the expected, harmless case whenever
+    // mysql.exe/mysqldump.exe aren't on PATH). Looked like a real error.
+    const out = execFileSync('where', [exe], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
     const first = out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)[0];
     return first || null;
   } catch { return null; }
@@ -447,6 +452,19 @@ async function setupEmbeddedDb(opts, paths) {
     const sql = `ALTER USER 'root'@'localhost' IDENTIFIED BY '${esc(rootPw)}';\n` +
       `CREATE DATABASE IF NOT EXISTS \`${esc(opts.DbName)}\` CHARACTER SET utf8mb4;\n` +
       `CREATE USER IF NOT EXISTS '${esc(opts.DbUser)}'@'127.0.0.1' IDENTIFIED BY '${esc(opts.DbPassword)}';\n` +
+      // CREATE USER IF NOT EXISTS is a no-op when the account already
+      // exists - which it reliably does for a name like "root"
+      // (mariadb-install-db's own bootstrap pre-creates 'root'@'127.0.0.1'
+      // with no password on Windows), silently leaving that account's REAL
+      // password unrelated to the one just generated and written to .env.
+      // The app then fails every DB connection with Access Denied, and
+      // since server.js waits on a working DB connection before it starts
+      // listening, the whole site comes back ERR_CONNECTION_REFUSED with no
+      // error visible anywhere install.js itself prints - found via a real
+      // install that chose "root" as the embedded DB username. Force the
+      // password unconditionally so .env is always correct, whether the
+      // account is brand new or pre-existing.
+      `ALTER USER '${esc(opts.DbUser)}'@'127.0.0.1' IDENTIFIED BY '${esc(opts.DbPassword)}';\n` +
       `GRANT ALL PRIVILEGES ON \`${esc(opts.DbName)}\`.* TO '${esc(opts.DbUser)}'@'127.0.0.1';\n` +
       'FLUSH PRIVILEGES;\n';
     const res = spawnSync(mysqlExe, ['-h', '127.0.0.1', '-P', String(opts.EmbeddedDbPort), '-u', 'root'], { input: sql, encoding: 'utf8' });

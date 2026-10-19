@@ -494,10 +494,23 @@ setup_embedded_db() {
     root_pw="$(random_secret | head -c 32)"
     esc_db_pw="$(printf '%s' "$DB_PASSWORD" | sed "s/'/''/g")"
     esc_root_pw="$(printf '%s' "$root_pw" | sed "s/'/''/g")"
+    # CREATE USER IF NOT EXISTS is a no-op when the account already exists -
+    # which it reliably does for a name like "root" (mariadb-install-db's
+    # own bootstrap pre-creates 'root'@'127.0.0.1' with no password),
+    # silently leaving that account's REAL password unrelated to the one
+    # just generated and written to .env. The app then fails every DB
+    # connection with Access Denied, and since server.js waits on a working
+    # DB connection before it starts listening, the whole site comes back
+    # connection-refused with no error visible anywhere this script itself
+    # prints - found via a real Windows install that chose "root" as the
+    # embedded DB username (same bootstrap logic as here). The follow-up
+    # ALTER USER forces the password unconditionally so .env is always
+    # correct, whether the account is brand new or pre-existing.
     "$engine_dir/bin/mysql" --no-defaults --socket="$socket_path" -u root <<SQL
 ALTER USER 'root'@'localhost' IDENTIFIED BY '$esc_root_pw';
 CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4;
 CREATE USER IF NOT EXISTS '$DB_USER'@'127.0.0.1' IDENTIFIED BY '$esc_db_pw';
+ALTER USER '$DB_USER'@'127.0.0.1' IDENTIFIED BY '$esc_db_pw';
 GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'127.0.0.1';
 FLUSH PRIVILEGES;
 SQL

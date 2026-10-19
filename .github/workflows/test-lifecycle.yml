@@ -285,8 +285,15 @@ jobs:
 
       - name: Install (fresh, --embedded-db, no external MySQL/MariaDB present)
         run: |
+          # --db-user root deliberately: this is the exact collision that
+          # caused a real bug - mariadb-install-db's own bootstrap already
+          # creates 'root'@'127.0.0.1', so CREATE USER IF NOT EXISTS silently
+          # no-ops and the real account keeps its original (blank) password,
+          # unrelated to whatever got written to .env. Exercising it here so
+          # a regression shows up as a failed health check, not a real
+          # customer hitting ERR_CONNECTION_REFUSED with no visible error.
           sudo bash packaging/linux/install.sh --mode install --yes --embedded-db --port 18975 \
-            --admin-user ciadmin --admin-password 'CiAdminPass123!'
+            --db-user root --admin-user ciadmin --admin-password 'CiAdminPass123!'
 
       - name: Diagnostics (always, even on failure)
         if: always()
@@ -359,7 +366,15 @@ jobs:
 
       - name: Install (fresh, -EmbeddedDb, no external MySQL/MariaDB present)
         shell: pwsh
-        run: node packaging\windows\install.js -Mode install -Yes -EmbeddedDb -InstallDir C:\DCIM -Port 18976 -AdminUser ciadmin -AdminPassword 'CiAdminPass123!'
+        # -DbUser root deliberately: this is the exact collision that caused
+        # a real bug found via real execution - mariadb-install-db.exe's own
+        # bootstrap already creates 'root'@'127.0.0.1' on Windows, so CREATE
+        # USER IF NOT EXISTS silently no-ops and the real account keeps its
+        # original (blank) password, unrelated to whatever got written to
+        # .env. Exercising it here so a regression shows up as a failed
+        # health check, not a real customer hitting ERR_CONNECTION_REFUSED
+        # with no visible error anywhere.
+        run: node packaging\windows\install.js -Mode install -Yes -EmbeddedDb -InstallDir C:\DCIM -Port 18976 -DbUser root -AdminUser ciadmin -AdminPassword 'CiAdminPass123!'
 
       - name: Diagnostics (always, even on failure)
         if: always()
