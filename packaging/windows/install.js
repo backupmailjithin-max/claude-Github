@@ -176,7 +176,14 @@ function testPortAvailable(port, mode) {
 
 function testWritePermission(installDir) {
   const parent = path.dirname(path.resolve(installDir));
-  try { fs.mkdirSync(parent, { recursive: true }); } catch { die(`No write permission under ${parent}.`); }
+  // Only create it when it doesn't already exist: Windows' CreateDirectory
+  // throws (EPERM) on a drive root like "C:\" even with recursive:true,
+  // since there's nothing to actually create - unconditionally calling
+  // mkdirSync here regressed this exact case (installDir "C:\DCIM" ->
+  // parent "C:\", which obviously already exists).
+  if (!fs.existsSync(parent)) {
+    try { fs.mkdirSync(parent, { recursive: true }); } catch { die(`No write permission under ${parent}.`); }
+  }
   const probe = path.join(parent, `.dcim-install-write-test-${crypto.randomUUID()}`);
   try { fs.writeFileSync(probe, 'x'); fs.rmSync(probe); } catch { die(`No write permission under ${parent}.`); }
   log(`Write permission check passed (${parent}).`);
