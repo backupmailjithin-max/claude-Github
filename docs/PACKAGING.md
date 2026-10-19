@@ -57,7 +57,7 @@ are closed now; two real bugs were also found and fixed along the way
   flag had no effect — it always connected on 3306. One-line fix
   (`port: Number(process.env.DB_PORT) || 3306`); default behavior unchanged.
 - **Bug fix: schema import used the wrong database.** `install.sh`'s /
-  `install.ps1`'s schema-import step piped `schema.sql` straight into
+  `install.js`'s schema-import step piped `schema.sql` straight into
   `mysql -D <configured db>`, but `schema.sql` itself starts with its own
   `CREATE DATABASE datacenter_db; USE datacenter_db;` — overriding whatever
   database the installer actually configured and failing with Access Denied
@@ -160,9 +160,9 @@ silently stall every future run.
 **Windows Upgrade/Repair utilities**: `dcim-upgrade-utility.iss` /
 `dcim-repair-utility.iss` are two more Inno Setup scripts sharing
 `dcim-installer.iss`'s payload and AppId, differing only in forcing
-`install.ps1 -Mode upgrade` / `-Mode repair` instead of auto-detecting. This
+`install.js -Mode upgrade` / `-Mode repair` instead of auto-detecting. This
 fixed a real, previously-undetected gap: the existing "DCIM Upgrade Utility"
-Start Menu shortcut re-syncs `install.ps1`'s own already-installed webapp
+Start Menu shortcut re-syncs `install.js`'s own already-installed webapp
 folder over itself, so it never actually carries a newer version — it was
 only ever equivalent to Repair. The kit's `DCIM-Upgrade.exe` carries the new
 payload with it, the same way running a newer `DCIM-Setup.exe` already does,
@@ -246,7 +246,7 @@ fixed:
   component — Service, Database, OCR, API Health, Version Endpoint, Upload
   Engine, Backup Engine, SMTP, Dell OME, HPE OneView — composing the same
   checks `/api/health/full` already uses (kept untouched). `install.sh` /
-  `install.ps1` sign in and print this automatically after install/
+  `install.js` sign in and print this automatically after install/
   upgrade/repair.
 - `POST /api/support/bundle` (Admin) downloads a `.zip` (system info, the
   health report, a performance snapshot, redacted `.env`, last 500 log
@@ -275,10 +275,12 @@ admin can already do with any standard unzip tool.
 
 ### Two more real bugs found via CI (Windows-specific)
 
-- `rollback.ps1`'s confirmation prompt (`Read-Host`) is not satisfied by
-  `echo y | rollback.ps1` the way a POSIX shell's `read` is — PowerShell
-  pipeline input and console stdin are different things. Added a real
-  `-Yes` switch.
+- The original `rollback.ps1`'s confirmation prompt (`Read-Host`) was not
+  satisfied by `echo y | rollback.ps1` the way a POSIX shell's `read` is —
+  PowerShell pipeline input and console stdin are different things. Added a
+  real `-Yes` switch (carried over unchanged into `rollback.js` when the
+  Windows installer was later rewritten from PowerShell to Node.js — see
+  "PowerShell retirement" below).
 - The database restore step used `cmd /c "mysql ... < file"` without
   checking its exit code, so a failed import was silently logged as
   "Database restored" — replaced with `System.Diagnostics.Process`/
@@ -366,7 +368,7 @@ drives the already-shipped HTTP API of a real running instance.
 | 10 | Offline Appliance (real network isolation via `iptables`, not a code-review claim) | BLOCK RELEASE | `release-gate.yml` → `offline-validation` |
 
 **Gate 7 note:** `test-lifecycle.yml`'s own jobs already delete test data,
-run `rollback.sh`/`rollback.ps1`, and verify the record came back, as part
+run `rollback.sh`/`rollback.js`, and verify the record came back, as part
 of their single combined install/upgrade/repair/rollback run — that is the
 real rollback test. `rollback-validation` is a thin reporting alias (`needs:
 install-validation`) so the aggregator and the promotion rules below have a
@@ -432,9 +434,9 @@ out of sync with what actually ran.
 | 3 — Infrastructure configuration (OME/OneView/SMTP) | **Built here** — OME/OneView *hardware pulling* already existed and was env-only; this adds a DB-backed, UI-driven config layer with real Test Connection/Test Email | `setup-routes.js`, `lib/smtp-client.js` |
 | 4 — Initial DC setup wizard | **Mostly already existed** (full CRUD for locations/zones/hardware/rack types); only the one-click "seed standard defaults" step was missing | `setup-routes.js` (`/api/setup/seed-defaults`) |
 | 5 — Health verification engine | **Already had `/api/health`**; this adds a deeper `/api/health/full` (DB write test, OCR, backup folder, live OME/OneView reachability, SMTP) | `setup-routes.js` |
-| 6 — Upgrade manager | **Already existed at the app level** (full DB backup/restore with checksums); this phase adds a real `mysqldump` snapshot + rollback script around Upgrade/Repair specifically | `install.sh` / `install.ps1` `backup_before_change`, `rollback.sh` / `rollback.ps1` |
+| 6 — Upgrade manager | **Already existed at the app level** (full DB backup/restore with checksums); this phase adds a real `mysqldump` snapshot + rollback script around Upgrade/Repair specifically | `install.sh` / `install.js` `backup_before_change`, `rollback.sh` / `rollback.js` |
 | 7 — Offline enterprise appliance | **Built here** — one self-extracting file, no internet needed | `packaging/appliance/build-appliance.sh` |
-| 8 — Enterprise deployment features | **Mostly already existed** (CSP mode, log/audit retention, JWT secret enforcement were already env-driven); this adds service-control convenience wrappers | `dcim-service.sh` / `dcim-service.ps1` |
+| 8 — Enterprise deployment features | **Mostly already existed** (CSP mode, log/audit retention, JWT secret enforcement were already env-driven); this adds service-control convenience wrappers | `dcim-service.sh` / `dcim-service.js` |
 | 9 — Deployment dashboard | **Built here** | `deployment-dashboard.html`, `/api/deployment/status` |
 | 10 — Future enterprise features (multi-tenant, licensing, HA) | **Not implemented**, per the roadmap's own instruction ("not for initial packaging") | — |
 | Config Export/Import wizard | **Built here** (the item explicitly called out as commonly missed) | `setup-routes.js` (`/api/setup/export` / `/api/setup/import`) |
@@ -530,14 +532,15 @@ packaging/linux/
   debian/, rpm/                Control files / spec used by the two build scripts.
 
 packaging/windows/
-  install.ps1                 Install / Upgrade / Repair, registers a Windows Service via NSSM,
-                               supports -EmbeddedDb.
-  uninstall.ps1                Removes the service (and optionally the files).
-  rollback.ps1                 Restores .env/database from an Upgrade/Repair's pre-change snapshot.
-  dcim-service.ps1             `dcim-service.ps1 -Action {start|stop|restart|status}` convenience wrapper.
-  dcim-upgrade.ps1 / dcim-repair.ps1
-                               Thin wrappers over install.ps1 -Mode upgrade/repair.
-  fetch-node-runtime.ps1       Build-time helper: downloads a Node runtime to bundle.
+  install.js                  Install / Upgrade / Repair, registers a Windows Service via NSSM,
+                               supports -EmbeddedDb. Runs under the bundled node.exe, not
+                               PowerShell - see "PowerShell retirement" below.
+  uninstall.js                 Removes the service (and optionally the files).
+  rollback.js                  Restores .env/database from an Upgrade/Repair's pre-change snapshot.
+  dcim-service.js              `node dcim-service.js {start|stop|restart|status}` convenience wrapper.
+  fetch-node-runtime.ps1       Build-time helper: downloads a Node runtime to bundle (still
+                               PowerShell - it only runs once, on the CI build machine, never
+                               shipped to or run by a customer).
   fetch-nssm.ps1               Build-time helper: downloads nssm.exe (service wrapper).
   fetch-mariadb-runtime.ps1    Build-time helper: downloads a MariaDB server to bundle (-EmbeddedDb).
   dcim-installer.iss           Inno Setup script -> compiled to dcim-setup-<version>.exe.
@@ -653,7 +656,7 @@ Matches the Phase 1 spec:
 ## Upgrade/Repair now take a real rollback point
 
 `backup_before_change` (shared by Upgrade and Repair in both `install.sh` and
-`install.ps1`) now runs `mysqldump` (if present) in addition to the config/
+`install.js`) now runs `mysqldump` (if present) in addition to the config/
 file snapshot it always took, and records the snapshot's path. If an upgrade
 goes wrong:
 
@@ -663,8 +666,8 @@ sudo packaging/linux/rollback.sh /var/backups/dcim/20260101-120000  # a specific
 ```
 
 ```powershell
-packaging\windows\rollback.ps1                  # uses the most recent snapshot
-packaging\windows\rollback.ps1 -SnapshotDir 'C:\ProgramData\dcim-backups\20260101-120000'
+node packaging\windows\rollback.js                  # uses the most recent snapshot
+node packaging\windows\rollback.js -SnapshotDir 'C:\ProgramData\dcim-backups\20260101-120000'
 ```
 
 This stops the service, restores `.env` and application files, restores the
@@ -678,7 +681,7 @@ remains the right tool for routine, scheduled backups.
 dcim-service {start|stop|restart|status|logs}      # Linux, installed by the .deb/.rpm
 ```
 ```powershell
-packaging\windows\dcim-service.ps1 -Action {start|stop|restart|status}
+node packaging\windows\dcim-service.js {start|stop|restart|status}
 ```
 
 ## Offline Enterprise Appliance (Phase 7)

@@ -110,8 +110,8 @@ Detects your Windows edition and launches the bundled `DCIM-Setup.exe`.
 ### 4b. Direct install with options
 ```powershell
 .\DCIM-Setup.exe
-# or, for scripted/unattended install:
-packaging\windows\install.ps1 -Mode install -Yes -InstallDir C:\DCIM -Port 8974 `
+# or, for scripted/unattended install (runs under the bundled node.exe, not PowerShell):
+node packaging\windows\install.js -Mode install -Yes -InstallDir C:\DCIM -Port 8974 `
   -DbUser dcim -DbPassword 'YourPassword' -DbName dcim `
   -AdminUser myadmin -AdminPassword 'YourAdminPassword'
 ```
@@ -143,7 +143,7 @@ password in particular isn't recoverable from anywhere else.
 - **Linux**: printed directly to the terminal at the end of
   `install`/`dcim-setup`/`dcim-upgrade`/`dcim-repair`.
 - **Windows (console)**: printed directly to the terminal at the end of
-  `install.ps1`/the Upgrade/Repair utilities (which stay open after
+  `install.js`/the Upgrade/Repair utilities (which stay open after
   finishing, specifically so you can read this).
 - **Windows (`DCIM-Setup.exe` GUI)**: since the installer's own progress
   window closes as soon as it finishes, the same summary is also saved to

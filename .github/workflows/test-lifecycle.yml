@@ -66,7 +66,7 @@ jobs:
       - name: Install (fresh)
         shell: pwsh
         run: |
-          packaging\windows\install.ps1 -Mode install -Yes -InstallDir C:\DCIM -Port 18974 `
+          node packaging\windows\install.js -Mode install -Yes -InstallDir C:\DCIM -Port 18974 `
             -DbUser dcim -DbPassword 'TestPass123!' -DbName dcim_test `
             -AdminUser ciadmin -AdminPassword 'CiAdminPass123!'
 
@@ -105,7 +105,7 @@ jobs:
 
       - name: Upgrade
         shell: pwsh
-        run: packaging\windows\install.ps1 -Mode upgrade -Yes -InstallDir C:\DCIM -Port 18974 -DbUser dcim -DbPassword 'TestPass123!' -DbName dcim_test
+        run: node packaging\windows\install.js -Mode upgrade -Yes -InstallDir C:\DCIM -Port 18974 -DbUser dcim -DbPassword 'TestPass123!' -DbName dcim_test
 
       - name: Verify data survived Upgrade + service still healthy
         shell: pwsh
@@ -120,7 +120,7 @@ jobs:
 
       - name: Repair
         shell: pwsh
-        run: packaging\windows\install.ps1 -Mode repair -Yes -InstallDir C:\DCIM -Port 18974 -DbUser dcim -DbPassword 'TestPass123!' -DbName dcim_test
+        run: node packaging\windows\install.js -Mode repair -Yes -InstallDir C:\DCIM -Port 18974 -DbUser dcim -DbPassword 'TestPass123!' -DbName dcim_test
 
       - name: Verify data survived Repair + service still healthy
         shell: pwsh
@@ -142,7 +142,7 @@ jobs:
           Get-ChildItem C:\ProgramData\dcim-backups -Recurse -Filter "mysqldump.err" -ErrorAction SilentlyContinue | ForEach-Object {
             Write-Host "=== $($_.FullName) ==="; Get-Content $_.FullName
           }
-          packaging\windows\rollback.ps1 -InstallDir C:\DCIM -Yes
+          node packaging\windows\rollback.js -InstallDir C:\DCIM -Yes
           Start-Sleep -Seconds 3
           $login = Invoke-RestMethod -Uri "http://127.0.0.1:18974/api/auth/login" -Method Post -ContentType "application/json" -Body (@{username="ciadmin";password="CiAdminPass123!"} | ConvertTo-Json)
           $locs = Invoke-RestMethod -Uri "http://127.0.0.1:18974/api/locations" -Headers @{ Authorization = "Bearer $($login.token)" }
@@ -359,7 +359,7 @@ jobs:
 
       - name: Install (fresh, -EmbeddedDb, no external MySQL/MariaDB present)
         shell: pwsh
-        run: packaging\windows\install.ps1 -Mode install -Yes -EmbeddedDb -InstallDir C:\DCIM -Port 18976 -AdminUser ciadmin -AdminPassword 'CiAdminPass123!'
+        run: node packaging\windows\install.js -Mode install -Yes -EmbeddedDb -InstallDir C:\DCIM -Port 18976 -AdminUser ciadmin -AdminPassword 'CiAdminPass123!'
 
       - name: Diagnostics (always, even on failure)
         if: always()
@@ -388,7 +388,7 @@ jobs:
 
       - name: Upgrade (embedded DB must survive and stay usable)
         shell: pwsh
-        run: packaging\windows\install.ps1 -Mode upgrade -Yes -InstallDir C:\DCIM -Port 18976
+        run: node packaging\windows\install.js -Mode upgrade -Yes -InstallDir C:\DCIM -Port 18976
 
       - name: Verify data survived Upgrade
         shell: pwsh
@@ -402,7 +402,7 @@ jobs:
 
       - name: Repair (must re-detect embedded mode without -EmbeddedDb being re-passed)
         shell: pwsh
-        run: packaging\windows\install.ps1 -Mode repair -Yes -InstallDir C:\DCIM -Port 18976
+        run: node packaging\windows\install.js -Mode repair -Yes -InstallDir C:\DCIM -Port 18976
 
       - name: Verify embedded DB and data survived Repair
         shell: pwsh
@@ -415,10 +415,10 @@ jobs:
           if (-not ($locs.name -contains "CiEmbeddedDC")) { throw "Test location did not survive Repair" }
           Write-Host "Embedded MariaDB verified across install, upgrade, and repair on Windows."
 
-  # Every job above calls install.ps1 directly - which never exercises the
+  # Every job above calls install.js directly - which never exercises the
   # compiled .exe's own Pascal Script ([Code] section) at all: the wizard's
   # page logic, ShouldSkipPage/NextButtonClick validation, GetInstallParams'
-  # string-building, and the CurStepChanged/Exec() launch of install.ps1
+  # string-building, and the CurStepChanged/Exec() launch of install.js
   # itself. That gap is exactly how the "runas" flag typo made it past CI
   # once already - ISCC caught it, but only because it happened to be a
   # compile-time error; a Pascal Script RUNTIME bug (wrong page ID, a typo
@@ -478,7 +478,7 @@ jobs:
           if (Test-Path C:\DCIM\webapp\.env) { (Get-Content C:\DCIM\webapp\.env) -replace '(PASSWORD|SECRET)=.*', '$1=[redacted]' } else { Write-Host "MISSING" }
           Write-Host "--- C:\DCIM\INSTALL-SUMMARY.txt ---"
           if (Test-Path C:\DCIM\INSTALL-SUMMARY.txt) { Get-Content C:\DCIM\INSTALL-SUMMARY.txt } else { Write-Host "MISSING" }
-          Write-Host "--- C:\DCIM\install.log (install.ps1's own transcript - Exec() from [Code] doesn't capture console output, so this is the only place its real error ever shows up) ---"
+          Write-Host "--- C:\DCIM\install.log (install.js's own transcript - Exec() from [Code] doesn't capture console output, so this is the only place its real error ever shows up) ---"
           if (Test-Path C:\DCIM\install.log) { Get-Content C:\DCIM\install.log } else { Write-Host "MISSING" }
 
       - name: Verify the installer actually configured everything (not just a successful-looking exit code)

@@ -28,12 +28,17 @@ PrivilegesRequired=admin
 WizardStyle=modern
 
 [Files]
-Source: "install.ps1"; DestDir: "{app}"; Flags: ignoreversion
-Source: "uninstall.ps1"; DestDir: "{app}"; Flags: ignoreversion
-Source: "rollback.ps1"; DestDir: "{app}"; Flags: ignoreversion
-Source: "dcim-service.ps1"; DestDir: "{app}"; Flags: ignoreversion
-Source: "dcim-upgrade.ps1"; DestDir: "{app}"; Flags: ignoreversion
-Source: "dcim-repair.ps1"; DestDir: "{app}"; Flags: ignoreversion
+; Node.js, not PowerShell: real execution kept surfacing PowerShell-
+; environment problems unrelated to this project's own logic (an escaping
+; mismatch, MsgBox hanging under /SILENT, robocopy refusing to mirror a
+; directory onto itself, and finally Windows PowerShell 5.1's own module
+; auto-loading breaking Get-FileHash itself). Node is already a required
+; bundled runtime dependency of this app, so install.js runs under the
+; exact same node.exe instead of shelling out to a second, fragile shell.
+Source: "install.js"; DestDir: "{app}"; Flags: ignoreversion
+Source: "uninstall.js"; DestDir: "{app}"; Flags: ignoreversion
+Source: "rollback.js"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dcim-service.js"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\dcim\webapp\*"; DestDir: "{app}\webapp"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: ".env,uploads\*,backups\*,logs\*"
 Source: "runtime\node\*"; DestDir: "{app}\runtime\node"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "runtime\mariadb\*"; DestDir: "{app}\runtime\mariadb"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
@@ -45,24 +50,16 @@ Name: "{app}\webapp\backups"
 Name: "{app}\webapp\logs"
 
 [Icons]
-; install.ps1/dcim-upgrade.ps1/dcim-repair.ps1 all start with
-; #Requires -RunAsAdministrator. Inno Setup's [Icons] section has no "run
-; elevated" flag ("runas" is not valid here - confirmed by ISCC rejecting it
-; outright; that flag only exists in a different sense for [Run] entries),
-; and the correct way to make a .lnk request elevation (patching a specific
-; bit in the shortcut file after SHCreateShellLink creates it) is its own
-; untested bit of Pascal Script, not worth adding sight-unseen right now.
-; What IS fixed here: without -NoExit, a rejection from #Requires was
-; invisible - the console flashed and closed before anyone could read it,
-; which is the exact same "looks successful but did nothing" symptom as a
-; prior silent failure (commit 0250bac). Now the window stays open and the
-; real PowerShell error ("this script requires administrator privileges")
-; is readable, telling you to right-click the shortcut -> "Run as
-; administrator" instead of looking like nothing happened at all.
-Name: "{group}\DCIM Setup"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\install.ps1"" -InstallDir ""{app}"""
-Name: "{group}\DCIM Upgrade Utility"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\dcim-upgrade.ps1"" -InstallDir ""{app}"""
-Name: "{group}\DCIM Repair Utility"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\dcim-repair.ps1"" -InstallDir ""{app}"""
-Name: "{group}\DCIM Service Status"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\dcim-service.ps1"" -Action status"
+; install.js checks for administrator privileges itself (the "net session"
+; trick) and exits with a clear error if it isn't elevated - run via
+; node.exe, there is no #Requires-style annotation to reject it up front,
+; so -NoExit on cmd.exe is what keeps that error on screen long enough to
+; read instead of flashing closed, telling you to right-click the shortcut
+; -> "Run as administrator" instead of looking like nothing happened.
+Name: "{group}\DCIM Setup"; Filename: "cmd.exe"; Parameters: "/K ""{app}\runtime\node\node.exe"" ""{app}\install.js"" -InstallDir ""{app}"""
+Name: "{group}\DCIM Upgrade Utility"; Filename: "cmd.exe"; Parameters: "/K ""{app}\runtime\node\node.exe"" ""{app}\install.js"" -Mode upgrade -InstallDir ""{app}"" -Yes"
+Name: "{group}\DCIM Repair Utility"; Filename: "cmd.exe"; Parameters: "/K ""{app}\runtime\node\node.exe"" ""{app}\install.js"" -Mode repair -InstallDir ""{app}"" -Yes"
+Name: "{group}\DCIM Service Status"; Filename: "cmd.exe"; Parameters: "/K ""{app}\runtime\node\node.exe"" ""{app}\dcim-service.js"" status"
 Name: "{group}\DCIM Configuration Wizard"; Filename: "{code:GetAppUrl}setup-wizard.html"
 Name: "{group}\DCIM Deployment Dashboard"; Filename: "{code:GetAppUrl}deployment-dashboard.html"
 Name: "{group}\Uninstall DCIM"; Filename: "{uninstallexe}"
@@ -72,7 +69,7 @@ Filename: "{code:GetAppUrl}"; Description: "Open DCIM in your browser now"; Flag
 Filename: "notepad.exe"; Parameters: """{app}\INSTALL-SUMMARY.txt"""; Description: "View installation summary (admin account, port, database, config)"; Flags: postinstall skipifsilent unchecked
 
 [UninstallRun]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\uninstall.ps1"" -InstallDir ""{app}"""; \
+Filename: "{app}\runtime\node\node.exe"; Parameters: """{app}\uninstall.js"" -InstallDir ""{app}"""; \
   RunOnceId: "DcimServiceRemove"; Flags: waituntilterminated
 
 [Code]
@@ -211,17 +208,14 @@ begin
   end;
 end;
 
-function EscapeForPowerShell(const S: String): String;
+function EscapeForArg(const S: String): String;
 var
   R: String;
 begin
   { This string ends up inside a double-quoted argument on the raw Win32
-    command line that Exec() hands to CreateProcess, parsed by powershell.exe
-    via the standard CommandLineToArgvW rules - NOT PowerShell's own script
-    syntax. Those rules escape an embedded quote with a backslash (\"), not
-    a backtick; a backtick is literal to CommandLineToArgvW and would close
-    the quoted argument early, corrupting everything after it on the line
-    (every later -DbName/-DbUser/-AdminUser/... would merge or be dropped). }
+    command line that Exec() hands to CreateProcess, parsed by node.exe via
+    the standard CommandLineToArgvW rules every ordinary Windows console app
+    uses. Those rules escape an embedded quote with a backslash (\"). }
   R := S;
   StringChangeEx(R, '"', '\"', True);
   Result := R;
@@ -237,23 +231,23 @@ begin
   if DbStrategyPage.SelectedValueIndex = 0 then
   begin
     P := P + ' -EmbeddedDb';
-    P := P + ' -DbName "' + EscapeForPowerShell(EmbeddedDbPage.Values[0]) + '"';
-    P := P + ' -DbUser "' + EscapeForPowerShell(EmbeddedDbPage.Values[1]) + '"';
+    P := P + ' -DbName "' + EscapeForArg(EmbeddedDbPage.Values[0]) + '"';
+    P := P + ' -DbUser "' + EscapeForArg(EmbeddedDbPage.Values[1]) + '"';
     if EmbeddedDbPage.Values[2] <> '' then
-      P := P + ' -DbPassword "' + EscapeForPowerShell(EmbeddedDbPage.Values[2]) + '"';
+      P := P + ' -DbPassword "' + EscapeForArg(EmbeddedDbPage.Values[2]) + '"';
   end
   else
   begin
-    P := P + ' -DbHost "' + EscapeForPowerShell(DbConnectionPage.Values[0]) + '"';
+    P := P + ' -DbHost "' + EscapeForArg(DbConnectionPage.Values[0]) + '"';
     P := P + ' -DbPort ' + Trim(DbConnectionPage.Values[1]);
-    P := P + ' -DbUser "' + EscapeForPowerShell(DbConnectionPage.Values[2]) + '"';
-    P := P + ' -DbPassword "' + EscapeForPowerShell(DbConnectionPage.Values[3]) + '"';
-    P := P + ' -DbName "' + EscapeForPowerShell(DbConnectionPage.Values[4]) + '"';
+    P := P + ' -DbUser "' + EscapeForArg(DbConnectionPage.Values[2]) + '"';
+    P := P + ' -DbPassword "' + EscapeForArg(DbConnectionPage.Values[3]) + '"';
+    P := P + ' -DbName "' + EscapeForArg(DbConnectionPage.Values[4]) + '"';
   end;
   if Trim(AppSettingsPage.Values[1]) <> '' then
   begin
-    P := P + ' -AdminUser "' + EscapeForPowerShell(AppSettingsPage.Values[1]) + '"';
-    P := P + ' -AdminPassword "' + EscapeForPowerShell(AppSettingsPage.Values[2]) + '"';
+    P := P + ' -AdminUser "' + EscapeForArg(AppSettingsPage.Values[1]) + '"';
+    P := P + ' -AdminPassword "' + EscapeForArg(AppSettingsPage.Values[2]) + '"';
   end;
   Result := P;
 end;
@@ -265,45 +259,49 @@ end;
 
 { MsgBox is NOT suppressed by /SILENT, /VERYSILENT or /SUPPRESSMSGBOXES -
   those only cover Setup's own built-in dialogs, never a custom MsgBox call
-  from [Code]. Found the hard way: a silent/unattended run (CI, or a real
-  customer deploying via SCCM/Intune) that hits an install.ps1 failure would
-  show this dialog and then hang forever waiting for a click that will never
-  come, turning a reportable failure into an indefinite stall. Log() always
-  writes to the install log (visible with /LOG=, or in "Show Details" after
-  an interactive run); MsgBox only pops up when there's actually someone
-  there to see it. }
+  from [Code]. A silent/unattended run (CI, or a real customer deploying via
+  SCCM/Intune) that hits an install.js failure would show this dialog and
+  then hang forever waiting for a click that will never come, turning a
+  reportable failure into an indefinite stall. Log() always writes to the
+  install log (visible with /LOG=, or in "Show Details" after an
+  interactive run); MsgBox only pops up when there's actually someone there
+  to see it. }
 procedure ReportInstallFailure(const S: String);
 begin
   Log(S);
   if not WizardSilent then MsgBox(S, mbError, MB_OK);
 end;
 
-{ install.ps1 is launched here (rather than as a plain [Run] entry) so a
+{ install.js is launched here (rather than as a plain [Run] entry) so a
   failure can actually be shown to the user. A [Run] entry's exit code isn't
-  checked by Setup by default - found via a real install where install.ps1
+  checked by Setup by default - found via a real install where the installer
   failed partway through (before writing .env or INSTALL-SUMMARY.txt) and
-  Setup still sailed through to a Finish page that looked like a success. }
+  Setup still sailed through to a Finish page that looked like a success.
+  Runs the bundled node.exe directly rather than relying on a system-wide
+  Node install - DCIM's installer is meant to be fully self-sufficient. }
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
-  Params: String;
+  NodeExe, Params: String;
 begin
   if CurStep = ssPostInstall then
   begin
-    Params := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}') +
-      '\install.ps1" -InstallDir "' + ExpandConstant('{app}') + '" -Yes ' + GetInstallParams('');
-    if not Exec('powershell.exe', Params, '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
+    NodeExe := ExpandConstant('{app}') + '\runtime\node\node.exe';
+    Params := '"' + ExpandConstant('{app}') + '\install.js" -InstallDir "' +
+      ExpandConstant('{app}') + '" -Yes ' + GetInstallParams('');
+    if not Exec(NodeExe, Params, '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
     begin
-      ReportInstallFailure('Could not launch install.ps1. DCIM''s files have been copied to ' + ExpandConstant('{app}') +
+      ReportInstallFailure('Could not launch install.js. DCIM''s files have been copied to ' + ExpandConstant('{app}') +
         ' but are not yet configured - no database, no service, no .env. ' +
-        'Re-run install.ps1 manually from an elevated PowerShell prompt in that folder to see the full error.');
+        'Re-run it manually from an elevated Command Prompt (' + NodeExe + ' "' + ExpandConstant('{app}') +
+        '\install.js" -InstallDir "' + ExpandConstant('{app}') + '") to see the full error.');
     end
     else if ResultCode <> 0 then
     begin
-      ReportInstallFailure('DCIM setup did not finish successfully (install.ps1 exited with code ' + IntToStr(ResultCode) +
+      ReportInstallFailure('DCIM setup did not finish successfully (install.js exited with code ' + IntToStr(ResultCode) +
         '). .env, the database, and the Windows services may not be fully configured. ' +
-        'See ' + ExpandConstant('{app}') + '\install.log for the full error, or re-run install.ps1 manually ' +
-        'from an elevated PowerShell prompt in ' + ExpandConstant('{app}') + ' to see it live and retry.');
+        'See ' + ExpandConstant('{app}') + '\install.log for the full error, or re-run it manually ' +
+        'from an elevated Command Prompt in ' + ExpandConstant('{app}') + ' to see it live and retry.');
     end;
   end;
 end;

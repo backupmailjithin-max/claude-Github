@@ -304,7 +304,7 @@ jobs:
 
   # ---------------------------------------------------------------- Gate 7 --
   # install-validation (test-lifecycle.yml) already deletes test data, rolls
-  # back via rollback.sh/rollback.ps1, and verifies restoration for real in
+  # back via rollback.sh/rollback.js, and verifies restoration for real in
   # every one of its jobs - this is a reporting alias so the aggregator and
   # the UAT/Production promotion rules (which list Rollback as its own named
   # requirement) have a dedicated signal, without re-running the same real
@@ -315,7 +315,7 @@ jobs:
     steps:
       - name: Report rollback verification status
         run: |
-          echo "Rollback verified for real as part of install-validation (test-lifecycle.yml): every install job there deletes test data, runs rollback.sh/rollback.ps1, and confirms the deleted record came back before reporting success."
+          echo "Rollback verified for real as part of install-validation (test-lifecycle.yml): every install job there deletes test data, runs rollback.sh/rollback.js, and confirms the deleted record came back before reporting success."
 
   # ---------------------------------------------------------------- Gate 8 --
   # HIGH SEVERITY / waivable. Reuses the structured health-validation endpoint

@@ -477,7 +477,7 @@ setup_embedded_db() {
   # 90s, not 30s: a first-ever start right after mariadb-install-db has to
   # initialize the data directory, which can take well over 30s on real
   # hardware (slower disk, other load) even though the service comes up
-  # fine - see the matching comment in packaging/windows/install.ps1.
+  # fine - see the matching comment in packaging/windows/install.js.
   for i in $(seq 1 90); do
     "$engine_dir/bin/mysqladmin" --no-defaults --socket="$socket_path" -u root ping >/dev/null 2>&1 && break
     sleep 1

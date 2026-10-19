@@ -1,6 +1,6 @@
 ; Inno Setup script for the standalone "DCIM Upgrade Utility" (DCIM-Upgrade-<version>.exe).
 ; This is NOT a new install engine - it reuses the exact same payload and the
-; exact same install.ps1 logic as dcim-installer.iss (dcim-installer.iss's own
+; exact same install.js logic as dcim-installer.iss (dcim-installer.iss's own
 ; "DCIM Upgrade Utility" Start Menu shortcut only re-applies the CURRENTLY
 ; installed files, since it runs from inside the existing install directory;
 ; it has no new version to apply). This utility instead carries the NEW
@@ -40,12 +40,12 @@ PrivilegesRequired=admin
 WizardStyle=modern
 
 [Files]
-Source: "install.ps1"; DestDir: "{app}"; Flags: ignoreversion
-Source: "uninstall.ps1"; DestDir: "{app}"; Flags: ignoreversion
-Source: "rollback.ps1"; DestDir: "{app}"; Flags: ignoreversion
-Source: "dcim-service.ps1"; DestDir: "{app}"; Flags: ignoreversion
-Source: "dcim-upgrade.ps1"; DestDir: "{app}"; Flags: ignoreversion
-Source: "dcim-repair.ps1"; DestDir: "{app}"; Flags: ignoreversion
+; Node.js, not PowerShell - see the matching [Files] comment in
+; dcim-installer.iss for why.
+Source: "install.js"; DestDir: "{app}"; Flags: ignoreversion
+Source: "uninstall.js"; DestDir: "{app}"; Flags: ignoreversion
+Source: "rollback.js"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dcim-service.js"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\dcim\webapp\*"; DestDir: "{app}\webapp"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: ".env,uploads\*,backups\*,logs\*"
 Source: "runtime\node\*"; DestDir: "{app}\runtime\node"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "runtime\mariadb\*"; DestDir: "{app}\runtime\mariadb"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
@@ -57,7 +57,7 @@ Name: "{app}\webapp\backups"
 Name: "{app}\webapp\logs"
 
 [UninstallRun]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\uninstall.ps1"" -InstallDir ""{app}"""; \
+Filename: "{app}\runtime\node\node.exe"; Parameters: """{app}\uninstall.js"" -InstallDir ""{app}"""; \
   RunOnceId: "DcimServiceRemove"; Flags: waituntilterminated
 
 [Code]
@@ -71,29 +71,33 @@ begin
   if not WizardSilent then MsgBox(S, mbError, MB_OK);
 end;
 
-{ install.ps1 is launched here (rather than as a plain [Run] entry) so a
+{ install.js is launched here (rather than as a plain [Run] entry) so a
   failure can actually be shown to the user - see the matching comment in
-  dcim-installer.iss's [Code] section for the full story. }
+  dcim-installer.iss's [Code] section for the full story. Runs the bundled
+  node.exe directly, not PowerShell - see the matching [Files] comment in
+  dcim-installer.iss. }
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
-  Params: String;
+  NodeExe, Params: String;
 begin
   if CurStep = ssPostInstall then
   begin
-    Params := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}') +
-      '\install.ps1" -InstallDir "' + ExpandConstant('{app}') + '" -Mode upgrade -Yes';
-    if not Exec('powershell.exe', Params, '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
+    NodeExe := ExpandConstant('{app}') + '\runtime\node\node.exe';
+    Params := '"' + ExpandConstant('{app}') + '\install.js" -InstallDir "' +
+      ExpandConstant('{app}') + '" -Mode upgrade -Yes';
+    if not Exec(NodeExe, Params, '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
     begin
-      ReportInstallFailure('Could not launch install.ps1. The new files have been copied to ' + ExpandConstant('{app}') +
-        ' but the upgrade did not run. Re-run install.ps1 -Mode upgrade manually from an elevated ' +
-        'PowerShell prompt in that folder to see the full error.');
+      ReportInstallFailure('Could not launch install.js. The new files have been copied to ' + ExpandConstant('{app}') +
+        ' but the upgrade did not run. Re-run it manually from an elevated Command Prompt (' + NodeExe +
+        ' "' + ExpandConstant('{app}') + '\install.js" -Mode upgrade -InstallDir "' + ExpandConstant('{app}') +
+        '" -Yes) to see the full error.');
     end
     else if ResultCode <> 0 then
     begin
-      ReportInstallFailure('The upgrade did not finish successfully (install.ps1 exited with code ' + IntToStr(ResultCode) +
-        '). See ' + ExpandConstant('{app}') + '\install.log for the full error, or re-run install.ps1 -Mode upgrade ' +
-        'manually from an elevated PowerShell prompt in ' + ExpandConstant('{app}') + ' to see it live and retry.');
+      ReportInstallFailure('The upgrade did not finish successfully (install.js exited with code ' + IntToStr(ResultCode) +
+        '). See ' + ExpandConstant('{app}') + '\install.log for the full error, or re-run it manually ' +
+        'from an elevated Command Prompt in ' + ExpandConstant('{app}') + ' to see it live and retry.');
     end;
   end;
 end;

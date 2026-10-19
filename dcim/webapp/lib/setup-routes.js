@@ -452,7 +452,7 @@ module.exports = function registerSetupRoutes(app, deps) {
   // ---------- structured health validation (PASS/WARNING/FAIL) ----------
   // Separate from /api/health/full above (kept untouched - it's already relied
   // on) rather than refactored to share code with it, so this new report can't
-  // regress that existing endpoint. Run automatically by install.sh/install.ps1
+  // regress that existing endpoint. Run automatically by install.sh/install.js
   // immediately after install/upgrade/repair, and shown in the deployment
   // dashboard.
 

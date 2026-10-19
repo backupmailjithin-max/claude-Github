@@ -91,9 +91,9 @@ jobs:
         run: packaging\windows\fetch-mariadb-runtime.ps1
 
       # All three share the same payload (webapp/runtime/nssm staged above) and
-      # the same AppId, differing only in which install.ps1 -Mode they force -
+      # the same AppId, differing only in which install.js -Mode they force -
       # not three separate install engines, just three entry points into the
-      # one already-tested install.ps1. Compiled as separate steps (not one
+      # one already-tested install.js. Compiled as separate steps (not one
       # combined step) so a failure in any single one fails the job loudly
       # with its own isolated log, instead of silently falling through to
       # "success" while missing its output file.

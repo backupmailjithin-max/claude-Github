@@ -45,8 +45,8 @@ bundled files automatically - this distinction doesn't apply there.
 
 ```powershell
 .\DCIM-Upgrade.exe
-# or, for scripted/unattended:
-packaging\windows\install.ps1 -Mode upgrade -Yes -InstallDir C:\DCIM -Port 8974
+# or, for scripted/unattended (runs under the bundled node.exe, not PowerShell):
+node packaging\windows\install.js -Mode upgrade -Yes -InstallDir C:\DCIM -Port 8974
 ```
 `DCIM-Upgrade.exe` carries its own full, current-version payload (it is
 built fresh for each release from the same source as `DCIM-Setup.exe`), so

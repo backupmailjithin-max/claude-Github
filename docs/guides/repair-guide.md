@@ -43,8 +43,8 @@ sudo dcim-repair --port 8974
 
 ```powershell
 .\DCIM-Repair.exe
-# or, for scripted/unattended:
-packaging\windows\install.ps1 -Mode repair -Yes -InstallDir C:\DCIM -Port 8974
+# or, for scripted/unattended (runs under the bundled node.exe, not PowerShell):
+node packaging\windows\install.js -Mode repair -Yes -InstallDir C:\DCIM -Port 8974
 ```
 
 ## What Repair cannot fix

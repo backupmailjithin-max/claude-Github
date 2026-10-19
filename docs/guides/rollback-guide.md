@@ -30,11 +30,11 @@ restored - this is destructive to whatever state exists right now.
 ## Windows
 
 ```powershell
-# Roll back to the most recent snapshot:
-.\rollback.ps1 -InstallDir C:\DCIM
+# Roll back to the most recent snapshot (runs under the bundled node.exe, not PowerShell):
+node rollback.js -InstallDir C:\DCIM
 
 # Or a specific one, non-interactively:
-.\rollback.ps1 -InstallDir C:\DCIM -SnapshotDir "C:\ProgramData\dcim-backups\20261015-213028" -Yes
+node rollback.js -InstallDir C:\DCIM -SnapshotDir "C:\ProgramData\dcim-backups\20261015-213028" -Yes
 ```
 `-Yes` skips the confirmation prompt - use it only in scripted/unattended
 contexts where you've already confirmed the right snapshot out-of-band.
