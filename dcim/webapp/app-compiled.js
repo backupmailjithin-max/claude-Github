@@ -357,6 +357,8 @@ const api = {
         q.set('to', params.to); return apiFetch('/pdus/trend' + (q.toString() ? '?' + q.toString() : '')); },
     getPduVendorPresets: () => apiFetch('/pdus/vendor-presets'),
     importPdus: (payload) => apiFetch('/pdus/import', { method: 'POST', body: JSON.stringify(payload), timeoutMs: 60000 }),
+    discoverPdus: () => apiFetch('/pdus/discover', { method: 'POST', timeoutMs: 90000 }),
+    applyPduDiscovery: (ids) => apiFetch('/pdus/discover/apply', { method: 'POST', body: JSON.stringify({ ids }), timeoutMs: 60000 }),
 };
 const { useState, useMemo, useRef, useEffect } = React;
 /* PERF (Phase-2): long lists draw the first LIST_PAGE rows and add more as the user scrolls (or presses "Show all").
@@ -12967,6 +12969,133 @@ function PduImportModal({ onClose, onDone }) {
                 React.createElement("button", { onClick: onClose, disabled: busy, className: "neu-btn-secondary" }, saved ? "Close" : "Cancel"),
                 !saved && React.createElement("button", { onClick: commit, disabled: busy || !c || !c.ready, className: "neu-btn-primary" }, c && c.ready ? `Import ${c.ready} PDU${c.ready === 1 ? "" : "s"}` : "Import")))), document.body);
 }
+// Scans the IP range(s) configured in .env (PDU_DISCOVERY_RANGES) via SNMP and reports what
+// it finds. Nothing is saved until the admin reviews and explicitly applies/adds - matches the
+// dry-run-then-commit shape every other PDU bulk action already uses. "Enrichable" = an existing
+// PDU missing vendor/model/serial/firmware that responded and can be filled in; "Unreachable" =
+// an existing PDU that didn't respond on this scan (informational only, nothing to apply);
+// "New found" = a device that answered SNMP at an IP with no matching PDU record yet - Rack No
+// has to be typed in per device (SNMP can't tell you that), then it's added via the same
+// bulk-import commit endpoint used by PduImportModal.
+function PduDiscoveryModal({ onClose, onDone }) {
+    const [loading, setLoading] = useState(true);
+    const [err, setErr] = useState("");
+    const [report, setReport] = useState(null);
+    const [selectedEnrich, setSelectedEnrich] = useState(() => new Set());
+    const [applying, setApplying] = useState(false);
+    const [applyMsg, setApplyMsg] = useState("");
+    const [newRows, setNewRows] = useState([]);
+    const [adding, setAdding] = useState(false);
+    const [addMsg, setAddMsg] = useState("");
+    const scan = async (opts = {}) => {
+        setLoading(true); setErr("");
+        if (!opts.keepMessages) { setApplyMsg(""); setAddMsg(""); }
+        try {
+            const r = await api.discoverPdus();
+            setReport(r);
+            setSelectedEnrich(new Set(r.enrichable.map((e) => e.id)));
+            setNewRows(r.newFound.map((n) => ({ ...n, rackNo: "", feedLabel: "Feed A", selected: false })));
+        }
+        catch (x) { setErr(x.message || String(x)); }
+        setLoading(false);
+    };
+    useEffect(() => { scan(); }, []);
+    const toggleEnrich = (id) => setSelectedEnrich((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+    const applyEnrich = async () => {
+        if (!selectedEnrich.size) return;
+        setApplying(true); setApplyMsg("");
+        try {
+            const r = await api.applyPduDiscovery(Array.from(selectedEnrich));
+            const ok = r.results.filter((x) => x.applied).length;
+            setApplyMsg(`Updated ${ok} of ${r.results.length} PDU(s).` + (ok < r.results.length ? " Some could not be reached again - try rescanning." : ""));
+            if (onDone) onDone();
+            await scan({ keepMessages: true });
+        }
+        catch (x) { setApplyMsg("Failed: " + (x.message || String(x))); }
+        setApplying(false);
+    };
+    const setNewRow = (idx, patch) => setNewRows((prev) => prev.map((r, i) => i === idx ? { ...r, ...patch } : r));
+    const addSelectedNew = async () => {
+        const rows = newRows.filter((r) => r.selected);
+        const missingRack = rows.find((r) => !r.rackNo.trim());
+        if (missingRack) { setAddMsg(`Enter a Rack No for ${missingRack.ipAddress} before adding.`); return; }
+        if (!rows.length) return;
+        setAdding(true); setAddMsg("");
+        try {
+            const payload = rows.map((r) => ({ site: r.site, zone: r.zone, rackNo: r.rackNo.trim(), feedLabel: r.feedLabel || "Feed A", ipAddress: r.ipAddress, vendor: r.detected.vendor, model: r.detected.model, serialNumber: r.detected.serialNumber, firmware: r.detected.firmware }));
+            const res = await api.importPdus({ dryRun: false, rows: payload });
+            setAddMsg(`Added ${res.counts.created} new PDU(s).`);
+            if (onDone) onDone();
+            await scan({ keepMessages: true });
+        }
+        catch (x) { setAddMsg("Failed: " + (x.message || String(x))); }
+        setAdding(false);
+    };
+    const c = report || { scanned: 0, enrichable: [], unreachable: [], newFound: [], alreadyComplete: 0, ranges: [] };
+    const stat = (label, value, color) => React.createElement("div", { key: label, style: { flex: "1 1 110px", background: "rgba(148,163,184,.12)", borderRadius: 10, padding: "8px 12px" } },
+        React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10, color: "#64748B", textTransform: "uppercase", letterSpacing: .4 } }, label),
+        React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 20, fontWeight: 800, color } }, value));
+    const th = (h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "7px 10px", fontSize: 10, color: "#64748B", textTransform: "uppercase", position: "sticky", top: 0, background: "#F8FAFC" } }, h);
+    return ReactDOM.createPortal(React.createElement("div", { className: "pdu-modal-backdrop", style: { position: "fixed", inset: 0, background: "rgba(14,18,28,0.5)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 90, padding: 20 }, onClick: onClose },
+        React.createElement("div", { onClick: (e) => e.stopPropagation(), className: "neu-card pdu-modal-pop", style: { width: 900, maxWidth: "96vw", maxHeight: "90vh", overflowY: "auto", padding: 26 } },
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 } },
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#1E293B" } }, "Discover PDUs"),
+                React.createElement("button", { onClick: () => scan(), disabled: loading, className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "7px 12px" } }, loading ? "Scanning…" : "↻ Rescan")),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#64748B", marginBottom: 14, lineHeight: 1.5 } }, c.ranges.length ? ("Scanning " + c.ranges.map((r) => `${r.startIp}–${r.endIp} (${r.site} · ${r.zone})`).join(", ") + " via SNMP - nothing is saved until you apply or add below.") : "Scans the IP range(s) your admin configured in PDU_DISCOVERY_RANGES (.env)."),
+            err && React.createElement("div", { style: { background: "#FEF2F2", border: "1px solid rgba(220,38,38,.3)", color: "#991B1B", borderRadius: 10, padding: "10px 12px", fontFamily: "Inter", fontSize: 12.5, marginBottom: 12 } }, err),
+            loading && !report && React.createElement("div", { style: { textAlign: "center", padding: "30px 0", color: "#64748B", fontFamily: "Inter" } }, "Scanning the configured range(s) — this can take a few seconds…"),
+            report && React.createElement(React.Fragment, null, [
+                React.createElement("div", { key: "stats", style: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 } },
+                    stat("Scanned", c.scanned, "#1E293B"), stat("Already complete", c.alreadyComplete, "#059669"),
+                    stat("Can enrich", c.enrichable.length, "#244DE5"), stat("Unreachable", c.unreachable.length, "#DC2626"),
+                    stat("New found", c.newFound.length, "#7C3AED")),
+                c.enrichable.length > 0 && React.createElement("div", { key: "enrich", style: { marginBottom: 18 } }, [
+                    React.createElement("div", { key: "h", style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 } }, [
+                        React.createElement("div", { key: "t", style: { fontFamily: "'Space Grotesk'", fontSize: 13.5, fontWeight: 800, color: "#17345D" } }, "Fill in missing Vendor / Model / Serial / Firmware"),
+                        React.createElement("button", { key: "b", onClick: applyEnrich, disabled: applying || !selectedEnrich.size, className: "neu-btn-primary", style: { fontSize: 11.5, padding: "7px 14px" } }, applying ? "Applying…" : `Apply to ${selectedEnrich.size}`),
+                    ]),
+                    applyMsg && React.createElement("div", { key: "msg", style: { fontFamily: "Inter", fontSize: 12, color: "#244DE5", marginBottom: 8 } }, applyMsg),
+                    React.createElement("div", { key: "tbl", style: { maxHeight: 220, overflow: "auto", border: "1px solid rgba(148,163,184,.3)", borderRadius: 10 } },
+                        React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontFamily: "Inter", fontSize: 12 } }, [
+                            React.createElement("thead", { key: "thead" }, React.createElement("tr", null, [th(""), th("IP"), th("Site / Rack"), th("Detected Vendor / Model"), th("Serial")])),
+                            React.createElement("tbody", { key: "tbody" }, c.enrichable.map((e) => React.createElement("tr", { key: e.id, style: { borderTop: "1px solid #F1F5F9" } }, [
+                                React.createElement("td", { key: "cb", style: { padding: "6px 10px" } }, React.createElement("input", { type: "checkbox", checked: selectedEnrich.has(e.id), onChange: () => toggleEnrich(e.id) })),
+                                React.createElement("td", { key: "ip", style: { padding: "6px 10px", fontFamily: "'JetBrains Mono'" } }, e.ipAddress),
+                                React.createElement("td", { key: "loc", style: { padding: "6px 10px" } }, e.site + " · Rack " + e.rackNo + " · " + e.feedLabel),
+                                React.createElement("td", { key: "vm", style: { padding: "6px 10px" } }, [e.detected.vendor, e.detected.model].filter(Boolean).join(" — ") || "—"),
+                                React.createElement("td", { key: "sn", style: { padding: "6px 10px", fontFamily: "'JetBrains Mono'" } }, e.detected.serialNumber || "—"),
+                            ]))),
+                        ])),
+                ]),
+                c.newFound.length > 0 && React.createElement("div", { key: "new", style: { marginBottom: 18 } }, [
+                    React.createElement("div", { key: "h", style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 } }, [
+                        React.createElement("div", { key: "t", style: { fontFamily: "'Space Grotesk'", fontSize: 13.5, fontWeight: 800, color: "#17345D" } }, "Found on the network, not in your PDU list yet"),
+                        React.createElement("button", { key: "b", onClick: addSelectedNew, disabled: adding || !newRows.some((r) => r.selected), className: "neu-btn-primary", style: { fontSize: 11.5, padding: "7px 14px" } }, adding ? "Adding…" : `Add ${newRows.filter((r) => r.selected).length} PDU(s)`),
+                    ]),
+                    React.createElement("div", { key: "hint", style: { fontFamily: "Inter", fontSize: 11.5, color: "#94A3B8", marginBottom: 8 } }, "Rack No is required per device - SNMP can't tell us which rack a device is physically in."),
+                    addMsg && React.createElement("div", { key: "msg", style: { fontFamily: "Inter", fontSize: 12, color: "#244DE5", marginBottom: 8 } }, addMsg),
+                    React.createElement("div", { key: "tbl", style: { maxHeight: 260, overflow: "auto", border: "1px solid rgba(148,163,184,.3)", borderRadius: 10 } },
+                        React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontFamily: "Inter", fontSize: 12 } }, [
+                            React.createElement("thead", { key: "thead" }, React.createElement("tr", null, [th(""), th("IP"), th("Site / Zone"), th("Detected"), th("Rack No *"), th("Feed Label")])),
+                            React.createElement("tbody", { key: "tbody" }, newRows.map((r, idx) => React.createElement("tr", { key: r.ipAddress, style: { borderTop: "1px solid #F1F5F9" } }, [
+                                React.createElement("td", { key: "cb", style: { padding: "6px 10px" } }, React.createElement("input", { type: "checkbox", checked: r.selected, onChange: () => setNewRow(idx, { selected: !r.selected }) })),
+                                React.createElement("td", { key: "ip", style: { padding: "6px 10px", fontFamily: "'JetBrains Mono'" } }, r.ipAddress),
+                                React.createElement("td", { key: "loc", style: { padding: "6px 10px" } }, r.site + " · " + r.zone),
+                                React.createElement("td", { key: "vm", style: { padding: "6px 10px" } }, [r.detected.vendor, r.detected.model].filter(Boolean).join(" — ") || "—"),
+                                React.createElement("td", { key: "rk", style: { padding: "6px 10px" } }, React.createElement("input", { className: "neu-input", style: { width: 80, padding: "4px 7px", fontSize: 12 }, value: r.rackNo, placeholder: "e.g. 12", onChange: (e) => setNewRow(idx, { rackNo: e.target.value, selected: true }) })),
+                                React.createElement("td", { key: "fl", style: { padding: "6px 10px" } }, React.createElement(ThemedSelect, { value: r.feedLabel, onChange: (e) => setNewRow(idx, { feedLabel: e.target.value }), className: "neu-input", style: { fontSize: 12, minWidth: 90 } }, ["Feed A", "Feed B"].map((f) => React.createElement("option", { key: f, value: f }, f)))),
+                            ]))),
+                        ])),
+                ]),
+                c.unreachable.length > 0 && React.createElement("div", { key: "unreach" }, [
+                    React.createElement("div", { key: "t", style: { fontFamily: "'Space Grotesk'", fontSize: 13.5, fontWeight: 800, color: "#17345D", marginBottom: 8 } }, "Existing PDUs that didn't respond this scan"),
+                    React.createElement("div", { key: "list", style: { display: "flex", flexWrap: "wrap", gap: 8 } }, c.unreachable.map((u) => React.createElement("div", { key: u.id, style: { fontFamily: "Inter", fontSize: 11.5, color: "#DC2626", background: "rgba(220,38,38,.08)", padding: "5px 10px", borderRadius: 8 } }, u.ipAddress + " (" + u.site + " · Rack " + u.rackNo + ")"))),
+                ]),
+                !c.enrichable.length && !c.newFound.length && !c.unreachable.length && React.createElement("div", { key: "empty", style: { textAlign: "center", padding: "20px 0", color: "#64748B", fontFamily: "Inter", fontSize: 13 } }, "Everything in range is already up to date."),
+            ]),
+            React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", marginTop: 16 } },
+                React.createElement("button", { onClick: onClose, className: "neu-btn-secondary" }, "Close")))), document.body);
+}
 function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
     const isNew = !pdu || !pdu.id;
     const [form, setForm] = useState(() => ({
@@ -13161,6 +13290,7 @@ function PduPage({ allowedSites = [], canEdit = false }) {
     const [editing, setEditing] = useState(null);
     const [trendOpen, setTrendOpen] = useState(false);
     const [importOpen, setImportOpen] = useState(false);
+    const [discoveryOpen, setDiscoveryOpen] = useState(false);
     const [deleteConfirm, setDeleteConfirm] = useState(null);
     const [deleting, setDeleting] = useState(false);
     const [syncing, setSyncing] = useState(false);
@@ -13214,6 +13344,7 @@ function PduPage({ allowedSites = [], canEdit = false }) {
             React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
                 React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 6 }, onClick: runExport, title: "Export every PDU, all columns" }, React.createElement(Download, { s: 13 }), " Export"),
                 canEdit && React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 6 }, onClick: () => setImportOpen(true) }, React.createElement(Upload, { s: 13 }), " Import"),
+                canEdit && React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 6 }, onClick: () => setDiscoveryOpen(true), title: "Scan an IP range (PDU_DISCOVERY_RANGES in .env) for PDUs" }, React.createElement(Search, { s: 13 }), " Discover"),
                 canEdit && React.createElement("button", { className: `neu-btn-secondary pdu-sync-btn${syncing ? " syncing" : ""}`, disabled: syncing, onClick: runSync, style: { fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 6 } }, React.createElement(RefreshCw, { s: 13 }), syncing ? "Syncing…" : "Sync All PDUs Now"),
                 canEdit && React.createElement("button", { className: "neu-btn-primary", style: { fontSize: 12.5, padding: "9px 18px" }, onClick: () => setEditing({}) }, "+ Add PDU"))),
         syncMsg && React.createElement("div", { style: { marginBottom: 14, padding: "10px 16px", borderRadius: 12, background: "rgba(49,87,238,.08)", color: "#244DE5", fontFamily: "Inter", fontSize: 12.5, fontWeight: 700 } }, syncMsg),
@@ -13275,6 +13406,7 @@ function PduPage({ allowedSites = [], canEdit = false }) {
         editing && React.createElement(PduEditModal, { pdu: editing.id ? editing : null, allowedSites: allowedSites, onClose: () => setEditing(null), onSaved: () => { setEditing(null); load(); } }),
         trendOpen && React.createElement(PduTrendModal, { site: "all", zone: "all", allowedSites: allowedSites, zonesForSite: zonesForSite, onClose: () => setTrendOpen(false) }),
         importOpen && React.createElement(PduImportModal, { onClose: () => setImportOpen(false), onDone: load }),
+        discoveryOpen && React.createElement(PduDiscoveryModal, { onClose: () => setDiscoveryOpen(false), onDone: load }),
         deleteConfirm && React.createElement("div", { className: "pdu-modal-backdrop", style: { position: "fixed", inset: 0, background: "rgba(14,18,28,.45)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, zIndex: 410 }, onClick: deleting ? undefined : () => setDeleteConfirm(null) },
             React.createElement("div", { className: "neu-card pdu-modal-pop", style: { width: 420, maxWidth: "92vw", padding: 24 }, onClick: (e) => e.stopPropagation() },
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 16, fontWeight: 800, color: "#17345D", marginBottom: 8 } }, "Delete this PDU?"),

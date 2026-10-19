@@ -24,6 +24,52 @@ const snmp = require('net-snmp');
 const OID_SYS_DESCR = '1.3.6.1.2.1.1.1.0';
 const OID_SYS_NAME = '1.3.6.1.2.1.1.5.0';
 const SNMP_TIMEOUT_MS = 2500;
+const DISCOVERY_TIMEOUT_MS = 1500; // shorter than SNMP_TIMEOUT_MS: a range scan hits mostly-empty IPs, so a slow per-host timeout multiplies into a very slow scan
+const DISCOVERY_CONCURRENCY = 20;
+const DISCOVERY_MAX_HOSTS = 1024; // hard cap across all configured ranges combined, so a misconfigured range (e.g. a /16 by mistake) can't turn one click into a multi-hour scan
+
+// IPv4 range auto-discovery, configured in .env (not the database - same pattern as the
+// OME_*/ONEVIEW_* monitoring config in .env.example). SNMP alone cannot tell you which
+// physical Site/Zone/Rack a responding IP belongs to, so the operator maps each IP range
+// to a Site+Zone up front; Rack No still has to be assigned by a human per device (see
+// PduDiscoveryModal on the frontend). Format, one or more ranges separated by ';':
+//   PDU_DISCOVERY_RANGES=10.20.4.100-10.20.4.160:Sample Site A:AZ-1;10.20.5.1-10.20.5.50:Sample Site B:AZ-1
+// PDU_DISCOVERY_COMMUNITY is the one SNMP v2c community string used for every scanned
+// host - the closest equivalent SNMP v2c has to a shared "username and password" across
+// a batch-deployed PDU fleet. There is no SNMPv3 (per-device auth/priv credentials) support.
+function ipToInt(ip) {
+  const m = String(ip || '').trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return null;
+  const parts = m.slice(1, 5).map(Number);
+  if (parts.some((n) => n < 0 || n > 255)) return null;
+  return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+}
+function intToIp(n) { return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.'); }
+function parseDiscoveryRanges() {
+  const raw = String(process.env.PDU_DISCOVERY_RANGES || '').trim();
+  if (!raw) return [];
+  const out = [];
+  raw.split(';').map((s) => s.trim()).filter(Boolean).forEach((entry) => {
+    const parts = entry.split(':');
+    if (parts.length !== 3) { log.warn(`[pdu-discovery] ignoring malformed PDU_DISCOVERY_RANGES entry (expected startIP-endIP:Site:Zone): "${entry}"`); return; }
+    const [ipRange, site, zone] = parts.map((s) => s.trim());
+    const [startIp, endIp] = ipRange.split('-').map((s) => s.trim());
+    const startInt = ipToInt(startIp), endInt = ipToInt(endIp || startIp);
+    if (startInt === null || endInt === null || !site) { log.warn(`[pdu-discovery] ignoring malformed PDU_DISCOVERY_RANGES entry: "${entry}"`); return; }
+    if (endInt < startInt) { log.warn(`[pdu-discovery] ignoring PDU_DISCOVERY_RANGES entry with end before start: "${entry}"`); return; }
+    out.push({ startIp, endIp: endIp || startIp, startInt, endInt, site, zone: zone || 'AZ-1' });
+  });
+  return out;
+}
+async function mapWithConcurrency(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) { const i = next++; out[i] = await fn(items[i], i); }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
 
 const VENDOR_HINTS = [
   ['vertiv', 'Vertiv'], ['geist', 'Vertiv'], ['liebert', 'Vertiv'],
@@ -349,6 +395,82 @@ module.exports = function registerPduRoutes(app, deps) {
     } catch (e) {
       res.json({ reachable: false, error: 'Could not reach ' + ipAddress + ' via SNMP (' + (e && e.message || 'timeout') + '). Check the IP, that SNMP is enabled on the device, and the community string.' });
     }
+  });
+
+  // ---- IP-range discovery: read-only scan + report, nothing is saved here (see /discover/apply and /import) ----
+  app.post('/api/pdus/discover', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+    try {
+      const allowed = await getAllowedSitesForUser(req.user);
+      const ranges = parseDiscoveryRanges().filter((r) => allowed.includes(r.site));
+      if (!ranges.length) return res.status(400).json({ error: 'No PDU_DISCOVERY_RANGES configured in .env for your site(s). Ask an admin to set it (see .env.example).' });
+      const community = process.env.PDU_DISCOVERY_COMMUNITY || 'public';
+      const hosts = []; // { ip, site, zone }
+      const seenIp = new Set();
+      for (const r of ranges) {
+        for (let n = r.startInt; n <= r.endInt && hosts.length < DISCOVERY_MAX_HOSTS; n++) {
+          const ip = intToIp(n);
+          if (seenIp.has(ip)) continue;
+          seenIp.add(ip);
+          hosts.push({ ip, site: r.site, zone: r.zone });
+        }
+        if (hosts.length >= DISCOVERY_MAX_HOSTS) { log.warn(`[pdu-discovery] stopped at DISCOVERY_MAX_HOSTS=${DISCOVERY_MAX_HOSTS} - narrow PDU_DISCOVERY_RANGES if you need to scan more`); break; }
+      }
+      const [existingRows] = await pool.query('SELECT * FROM pdus WHERE site IN (?)', [ranges.map((r) => r.site)]);
+      const byIp = new Map(existingRows.map((r) => [r.ip_address, r]));
+
+      const results = await mapWithConcurrency(hosts, DISCOVERY_CONCURRENCY, async (h) => {
+        try {
+          const out = await snmpGet(h.ip, community, [OID_SYS_DESCR, OID_SYS_NAME], DISCOVERY_TIMEOUT_MS);
+          const descr = out[OID_SYS_DESCR] != null ? String(out[OID_SYS_DESCR]) : '';
+          const name = out[OID_SYS_NAME] != null ? String(out[OID_SYS_NAME]) : '';
+          return { ...h, reachable: true, detected: { vendor: guessVendor(descr), model: descr || null, serialNumber: name || null, firmware: guessFirmware(descr) } };
+        } catch (e) { return { ...h, reachable: false }; }
+      });
+
+      const enrichable = [], unreachable = [], newFound = [];
+      let alreadyComplete = 0, scanned = results.length;
+      for (const r of results) {
+        const existing = byIp.get(r.ip);
+        if (existing) {
+          if (!r.reachable) { unreachable.push({ id: existing.id, ipAddress: r.ip, site: existing.site, zone: existing.zone, rackNo: existing.rack_no, feedLabel: existing.feed_label }); continue; }
+          const missing = !existing.vendor || !existing.model || !existing.serial_number || !existing.firmware;
+          if (missing) enrichable.push({ id: existing.id, ipAddress: r.ip, site: existing.site, zone: existing.zone, rackNo: existing.rack_no, feedLabel: existing.feed_label, current: { vendor: existing.vendor, model: existing.model, serialNumber: existing.serial_number, firmware: existing.firmware }, detected: r.detected });
+          else alreadyComplete++;
+        } else if (r.reachable) {
+          newFound.push({ ipAddress: r.ip, site: r.site, zone: r.zone, detected: r.detected });
+        }
+      }
+      res.json({ scanned, ranges: ranges.map((r) => ({ startIp: r.startIp, endIp: r.endIp, site: r.site, zone: r.zone })), enrichable, unreachable, newFound, alreadyComplete });
+    } catch (e) { sendErr(res, e); }
+  });
+
+  // ---- apply discovered identity to existing PDUs: only fills fields that are currently blank, never overwrites admin-entered data ----
+  app.post('/api/pdus/discover/apply', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+    try {
+      const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids.slice(0, 200) : [];
+      if (!ids.length) return res.status(400).json({ error: '"ids" (array) is required.' });
+      const community = process.env.PDU_DISCOVERY_COMMUNITY || 'public';
+      const results = await mapWithConcurrency(ids, DISCOVERY_CONCURRENCY, async (id) => {
+        try {
+          const [rows] = await pool.query('SELECT * FROM pdus WHERE id = ?', [id]);
+          if (!rows.length) return { id, applied: false, error: 'PDU not found' };
+          const pdu = rows[0];
+          await assertSiteAccess(req.user, pdu.site);
+          const out = await snmpGet(pdu.ip_address, pdu.snmp_community || community, [OID_SYS_DESCR, OID_SYS_NAME], DISCOVERY_TIMEOUT_MS);
+          const descr = out[OID_SYS_DESCR] != null ? String(out[OID_SYS_DESCR]) : '';
+          const name = out[OID_SYS_NAME] != null ? String(out[OID_SYS_NAME]) : '';
+          const detected = { vendor: guessVendor(descr), model: descr || null, serialNumber: name || null, firmware: guessFirmware(descr) };
+          await pool.query(
+            `UPDATE pdus SET vendor = COALESCE(NULLIF(vendor,''), ?), model = COALESCE(NULLIF(model,''), ?),
+               serial_number = COALESCE(NULLIF(serial_number,''), ?), firmware = COALESCE(NULLIF(firmware,''), ?) WHERE id = ?`,
+            [detected.vendor, detected.model, detected.serialNumber, detected.firmware, id]
+          );
+          auditLog(req, 'PDU_DISCOVER_APPLY', { entity: 'pdu', entityId: id, site: pdu.site });
+          return { id, applied: true };
+        } catch (e) { return { id, applied: false, error: e.message || 'Could not reach device' }; }
+      });
+      res.json({ results });
+    } catch (e) { sendErr(res, e); }
   });
 
   // ---- poll one PDU (reachability always; wattage only if power_oid is configured) ----
