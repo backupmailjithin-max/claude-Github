@@ -31,6 +31,57 @@ const VENDOR_HINTS = [
   ['raritan', 'Raritan'], ['server technology', 'Server Technology'], ['servertech', 'Server Technology'],
   ['eaton', 'Eaton'],
 ];
+
+// Preset "Power OID" catalog for the top worldwide rack-PDU brands (these are
+// also the dominant brands in Indian data centers - APC/Schneider, Vertiv,
+// Legrand/Raritan and Eaton are the same global players there; there isn't a
+// distinct "India-only" rack-PDU brand worth a separate list). Sourced from
+// each vendor's own published MIB / support documentation (links in
+// docs/PDU-SNMP-OIDS.md) - NOT guessed. Confidence varies by vendor/model
+// generation, which is why every entry carries an explicit caveat and the
+// Power OID field always stays manually editable in the UI, and "Other /
+// Not Listed" (no oid) is always available for anything not covered here.
+// `scale`: raw SNMP value x scale = Watts (vendors report in different
+// units - W, 0.01 kW, etc; getting this wrong silently corrupts every
+// reading, so it travels with the OID, not guessed per-poll).
+const VENDOR_OID_PRESETS = [
+  {
+    id: 'apc-rpdu2', vendor: 'APC / Schneider Electric', model: 'Rack PDU 2G (AP84xx/86xx/88xx/89xx)',
+    oid: '1.3.6.1.4.1.318.1.1.26.4.3.1.5.0', scale: 10, confidence: 'high',
+    note: 'rPDU2DeviceStatusPower, from APC\'s own PowerNet-MIB FAQ. Reports in hundredths of a kW, so this preset\'s x10 scale converts it to Watts automatically.',
+  },
+  {
+    id: 'apc-rpdu1', vendor: 'APC / Schneider Electric', model: 'Rack PDU 1G / Metered (older AP79xx/AP89xx)',
+    oid: '1.3.6.1.4.1.318.1.1.12.1.16.0', scale: 1, confidence: 'medium',
+    note: 'rPDUIdentDevicePowerWatts, in Watts directly. On non-metered ("Switched") units this is calculated from current x assumed voltage/power-factor, not truly measured - verify against a metered model if accuracy matters.',
+  },
+  {
+    id: 'eaton-epdu', vendor: 'Eaton', model: 'ePDU (all current families)',
+    oid: '1.3.6.1.4.1.534.6.6.4.1.1.2.3.0', scale: 1, confidence: 'high',
+    note: 'pduInputPower from EATON-PDU-MIB - present input power demand of the whole unit, in Watts, no index needed.',
+  },
+  {
+    id: 'servertech-sentry3', vendor: 'Server Technology (Legrand)', model: 'Sentry3 PDUs',
+    oid: '1.3.6.1.4.1.1718.3.2.2.1.12.1.1', scale: 1, confidence: 'medium',
+    note: 'infeedPower from Server Technology\'s own Sentry3 MIB, Watts. The trailing .1.1 selects infeed #1 - if your unit has more than one power infeed, you will need the correct infeed index from an snmpwalk.',
+  },
+  {
+    id: 'raritan-px', vendor: 'Raritan / Legrand', model: 'PX2 / PX3 / PX4',
+    oid: null, scale: 1, confidence: 'none',
+    note: 'No single confirmed OID across PX firmware versions - Raritan\'s PDU2-MIB exposes inletActivePower (and inletPoleActivePower per phase), but the usable object/index varies by model. Download the PDU2-MIB for your exact unit and confirm with snmpwalk, then enter the OID manually below.',
+  },
+  {
+    id: 'vertiv-geist', vendor: 'Vertiv / Geist', model: 'rPDU (all families)',
+    oid: null, scale: 1, confidence: 'none',
+    note: 'No confirmed public OID - Vertiv ships a model-specific MIB with every rPDU family (download from vertiv.com support for your exact model). Use snmptranslate/snmpwalk against it to find the active-power object, then enter the OID manually below.',
+  },
+  {
+    id: 'cyberpower', vendor: 'CyberPower', model: 'PDU (all families)',
+    oid: null, scale: 1, confidence: 'none',
+    note: 'No confirmed total-power OID - download the MIB from CyberPower\'s product support page for your exact model and confirm with snmpwalk, then enter the OID manually below.',
+  },
+  { id: 'other', vendor: '', model: 'Other / Not Listed', oid: null, scale: 1, confidence: 'none', note: 'Enter everything manually, or leave Power OID blank to monitor reachability only.' },
+];
 function guessVendor(descr) {
   const d = String(descr || '').toLowerCase();
   for (const [needle, label] of VENDOR_HINTS) if (d.includes(needle)) return label;
@@ -80,6 +131,7 @@ module.exports = function registerPduRoutes(app, deps) {
         max_load_kw DECIMAL(6,2) DEFAULT NULL,
         snmp_community VARCHAR(100) DEFAULT 'public',
         power_oid VARCHAR(100) DEFAULT NULL,
+        power_scale DECIMAL(10,4) NOT NULL DEFAULT 1,
         poll_interval_sec INT NOT NULL DEFAULT 900,
         status ENUM('online','offline','warning','unknown') NOT NULL DEFAULT 'unknown',
         last_power_kw DECIMAL(7,3) DEFAULT NULL,
@@ -108,6 +160,8 @@ module.exports = function registerPduRoutes(app, deps) {
         CONSTRAINT fk_power_readings_pdu FOREIGN KEY (pdu_id) REFERENCES pdus(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     `);
+    // Idempotent migration for a pdus table created before power_scale existed.
+    try { await pool.query('ALTER TABLE pdus ADD COLUMN power_scale DECIMAL(10,4) NOT NULL DEFAULT 1 AFTER power_oid'); } catch (e) { /* column already exists */ }
   }
 
   function mapPdu(r) {
@@ -115,11 +169,16 @@ module.exports = function registerPduRoutes(app, deps) {
       id: r.id, site: r.site, zone: r.zone, rackType: r.rack_type, rackNo: r.rack_no, feedLabel: r.feed_label,
       ipAddress: r.ip_address, vendor: r.vendor, model: r.model, serialNumber: r.serial_number, firmware: r.firmware,
       phase: r.phase, maxLoadKw: r.max_load_kw != null ? Number(r.max_load_kw) : null,
-      powerOid: r.power_oid, pollIntervalSec: r.poll_interval_sec, status: r.status,
+      powerOid: r.power_oid, powerScale: r.power_scale != null ? Number(r.power_scale) : 1, pollIntervalSec: r.poll_interval_sec, status: r.status,
       lastPowerKw: r.last_power_kw != null ? Number(r.last_power_kw) : null,
       lastReadingAt: r.last_reading_at, lastError: r.last_error,
     };
   }
+
+  // ---- vendor OID preset catalog (static reference data, served so the frontend never has to duplicate it) ----
+  app.get('/api/pdus/vendor-presets', authenticateToken, (req, res) => {
+    res.json(VENDOR_OID_PRESETS);
+  });
 
   // ---- list (grouped into racks client-side friendly shape) + create + edit + delete ----
   app.get('/api/pdus', authenticateToken, async (req, res) => {
@@ -150,11 +209,12 @@ module.exports = function registerPduRoutes(app, deps) {
       await assertSiteAccess(req.user, b.site);
       const id = genId('PDU');
       await pool.query(
-        `INSERT INTO pdus (id, site, zone, rack_type, rack_no, feed_label, ip_address, vendor, model, serial_number, firmware, phase, max_load_kw, snmp_community, power_oid)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO pdus (id, site, zone, rack_type, rack_no, feed_label, ip_address, vendor, model, serial_number, firmware, phase, max_load_kw, snmp_community, power_oid, power_scale)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [id, b.site, b.zone || 'AZ-1', b.rackType || null, b.rackNo, b.feedLabel, b.ipAddress, b.vendor || null, b.model || null,
           b.serialNumber || null, b.firmware || null, b.phase === '3-Phase' ? '3-Phase' : 'Single-Phase',
-          b.maxLoadKw != null && b.maxLoadKw !== '' ? Number(b.maxLoadKw) : null, b.snmpCommunity || 'public', b.powerOid || null]
+          b.maxLoadKw != null && b.maxLoadKw !== '' ? Number(b.maxLoadKw) : null, b.snmpCommunity || 'public', b.powerOid || null,
+          b.powerScale != null && b.powerScale !== '' ? Number(b.powerScale) : 1]
       );
       auditLog(req, 'PDU_CREATE', { entity: 'pdu', entityId: id, site: b.site });
       const [rows] = await pool.query('SELECT * FROM pdus WHERE id = ?', [id]);
@@ -174,7 +234,7 @@ module.exports = function registerPduRoutes(app, deps) {
       if (b.site) await assertSiteAccess(req.user, b.site);
       await pool.query(
         `UPDATE pdus SET site=?, zone=?, rack_type=?, rack_no=?, feed_label=?, ip_address=?, vendor=?, model=?, serial_number=?,
-           firmware=?, phase=?, max_load_kw=?, snmp_community=?, power_oid=? WHERE id = ?`,
+           firmware=?, phase=?, max_load_kw=?, snmp_community=?, power_oid=?, power_scale=? WHERE id = ?`,
         [b.site || existing[0].site, b.zone || existing[0].zone, b.rackType != null ? b.rackType : existing[0].rack_type,
           b.rackNo || existing[0].rack_no, b.feedLabel || existing[0].feed_label, b.ipAddress || existing[0].ip_address,
           b.vendor != null ? b.vendor : existing[0].vendor, b.model != null ? b.model : existing[0].model,
@@ -182,7 +242,8 @@ module.exports = function registerPduRoutes(app, deps) {
           b.phase === '3-Phase' ? '3-Phase' : (b.phase === 'Single-Phase' ? 'Single-Phase' : existing[0].phase),
           b.maxLoadKw != null && b.maxLoadKw !== '' ? Number(b.maxLoadKw) : (b.maxLoadKw === '' ? null : existing[0].max_load_kw),
           b.snmpCommunity != null ? b.snmpCommunity : existing[0].snmp_community,
-          b.powerOid != null ? b.powerOid : existing[0].power_oid, req.params.id]
+          b.powerOid != null ? b.powerOid : existing[0].power_oid,
+          b.powerScale != null && b.powerScale !== '' ? Number(b.powerScale) : existing[0].power_scale, req.params.id]
       );
       auditLog(req, 'PDU_UPDATE', { entity: 'pdu', entityId: req.params.id, site: b.site || existing[0].site });
       const [rows] = await pool.query('SELECT * FROM pdus WHERE id = ?', [req.params.id]);
@@ -234,9 +295,12 @@ module.exports = function registerPduRoutes(app, deps) {
         const raw = out[pdu.power_oid];
         const n = typeof raw === 'number' ? raw : parseFloat(raw);
         if (Number.isFinite(n)) {
-          // Most PDU MIBs report watts or deciwatts/deciamps as integers - heuristically
-          // normalize to kW: values over 100 are assumed to be watts, not kW.
-          powerKw = n > 100 ? n / 1000 : n;
+          // raw SNMP value x power_scale = Watts (set from the vendor preset, or
+          // manually) - never guessed per-poll, since vendors report in different
+          // units (W, hundredths of kW, etc) and a wrong guess silently corrupts
+          // every reading. power_scale defaults to 1 (raw value already in Watts).
+          const watts = n * Number(pdu.power_scale || 1);
+          powerKw = watts / 1000;
           if (pdu.max_load_kw && powerKw > Number(pdu.max_load_kw) * 1.5) {
             status = 'warning'; lastError = 'Reading far exceeds Max Load - verify the Power OID is correct for this model.';
           }

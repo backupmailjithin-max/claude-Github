@@ -355,6 +355,7 @@ const api = {
         q.set('zone', params.zone); if (params.from)
         q.set('from', params.from); if (params.to)
         q.set('to', params.to); return apiFetch('/pdus/trend' + (q.toString() ? '?' + q.toString() : '')); },
+    getPduVendorPresets: () => apiFetch('/pdus/vendor-presets'),
 };
 const { useState, useMemo, useRef, useEffect } = React;
 /* PERF (Phase-2): long lists draw the first LIST_PAGE rows and add more as the user scrolls (or presses "Show all").
@@ -12853,13 +12854,25 @@ function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
         model: (pdu && pdu.model) || "", serialNumber: (pdu && pdu.serialNumber) || "",
         firmware: (pdu && pdu.firmware) || "", phase: (pdu && pdu.phase) || "Single-Phase",
         maxLoadKw: pdu && pdu.maxLoadKw != null ? String(pdu.maxLoadKw) : "", powerOid: (pdu && pdu.powerOid) || "",
+        powerScale: pdu && pdu.powerScale != null ? String(pdu.powerScale) : "1",
     }));
     const [detecting, setDetecting] = useState(false);
     const [detectMsg, setDetectMsg] = useState(null);
     const [detectedFields, setDetectedFields] = useState({});
     const [saving, setSaving] = useState(false);
     const [err, setErr] = useState(null);
+    const [presets, setPresets] = useState([]);
+    const [presetId, setPresetId] = useState("");
+    const [presetNote, setPresetNote] = useState(null);
+    useEffect(() => { api.getPduVendorPresets().then(setPresets).catch(() => setPresets([])); }, []);
     const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+    const applyPreset = (id) => {
+        setPresetId(id);
+        const p = presets.find((x) => x.id === id);
+        if (!p) { setPresetNote(null); return; }
+        setForm((f) => ({ ...f, vendor: p.vendor || f.vendor, powerOid: p.oid || "", powerScale: String(p.scale || 1) }));
+        setPresetNote(p);
+    };
     const runDetect = async () => {
         if (!form.ipAddress) { setDetectMsg({ type: "error", text: "Enter an IP address first." }); return; }
         setDetecting(true); setDetectMsg(null);
@@ -12886,7 +12899,7 @@ function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
         if (!form.site || !form.rackNo || !form.feedLabel || !form.ipAddress) { setErr("Site, Rack No, Feed Label and IP Address are required."); return; }
         setSaving(true); setErr(null);
         try {
-            const body = { ...form, maxLoadKw: form.maxLoadKw === "" ? null : Number(form.maxLoadKw) };
+            const body = { ...form, maxLoadKw: form.maxLoadKw === "" ? null : Number(form.maxLoadKw), powerScale: form.powerScale === "" ? 1 : Number(form.powerScale) };
             if (isNew)
                 await api.createPdu(body);
             else
@@ -12919,7 +12932,16 @@ function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
                 React.createElement("div", { style: { flex: 1 } }, field("IP Address", "ipAddress")),
                 React.createElement("button", { className: "neu-btn-secondary", disabled: detecting, onClick: runDetect, style: { whiteSpace: "nowrap" } }, detecting ? "Detecting…" : "🔍 Test & Auto-Detect")),
             detectMsg && React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, margin: "4px 0 14px", padding: "9px 12px", borderRadius: 11, fontFamily: "Inter", fontSize: 12, fontWeight: 700, background: detectMsg.type === "success" ? "rgba(5,150,105,.1)" : "rgba(220,38,38,.1)", color: detectMsg.type === "success" ? "#059669" : "#DC2626" } }, detectMsg.text),
-            React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 12 } }, field("SNMP Community", "snmpCommunity"), field("Power OID (optional)", "powerOid", { placeholder: "from this model's vendor MIB" })),
+            React.createElement("div", { style: { marginBottom: 6 } },
+                React.createElement("label", { style: PDU_LABEL_STYLE }, "Vendor Preset (Power OID lookup)"),
+                React.createElement(ThemedSelect, { value: presetId, onChange: (e) => applyPreset(e.target.value), className: "neu-input", style: { width: "100%" } }, [
+                    React.createElement("option", { key: "", value: "" }, "— Other / Not Listed (enter manually below) —"),
+                    ...presets.map((p) => React.createElement("option", { key: p.id, value: p.id }, p.vendor + " — " + p.model + (p.oid ? "" : " (no public OID — manual)"))),
+                ])),
+            presetNote && React.createElement("div", { style: { margin: "4px 0 14px", padding: "9px 12px", borderRadius: 11, fontFamily: "Inter", fontSize: 11.5, fontWeight: 600, lineHeight: 1.45, background: presetNote.oid ? "rgba(49,87,238,.08)" : "rgba(217,119,6,.1)", color: presetNote.oid ? "#244DE5" : "#B45309" } },
+                presetNote.oid ? ("OID & scale filled in below (source confidence: " + presetNote.confidence + "). ") : "", presetNote.note),
+            !presetNote && React.createElement("div", { style: { margin: "0 0 14px", fontFamily: "Inter", fontSize: 11, color: "#94A3B8" } }, "No preset selected — all fields below are entered/edited manually."),
+            React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 12 } }, field("SNMP Community", "snmpCommunity"), field("Power OID (optional)", "powerOid", { placeholder: "from this model's vendor MIB" }), field("Power Scale (raw × this = Watts)", "powerScale", { placeholder: "1" })),
             React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 12 } }, field("Vendor", "vendor"), field("Model", "model")),
             React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 12 } }, field("Serial Number", "serialNumber"), field("Firmware", "firmware")),
             React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 18 } },
