@@ -262,6 +262,74 @@ module.exports = function registerPduRoutes(app, deps) {
     } catch (e) { sendErr(res, e); }
   });
 
+  // ---- bulk import: same dry-run-then-commit shape as /api/connectivity/import ----
+  // Matched by IP address (the pdus table's one unique key): a row whose IP already
+  // exists is treated as an update to that PDU, not a duplicate to reject - this lets
+  // the same sheet be used both to add new PDUs and to bulk-correct existing ones.
+  app.post('/api/pdus/import', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+    try {
+      const dryRun = req.body.dryRun !== false;
+      const rows = Array.isArray(req.body.rows) ? req.body.rows : null;
+      if (!rows) return res.status(400).json({ error: 'rows[] is required' });
+      if (rows.length > 2000) return res.status(400).json({ error: 'Too many rows (max 2000 per import)' });
+      const allowed = await getAllowedSitesForUser(req.user);
+      const clean = (v, max) => String(v == null ? '' : v).trim().slice(0, max || 255);
+      const counts = { total: rows.length, ready: 0, invalid: 0, deniedSite: 0, duplicateInFile: 0, created: 0, updated: 0 };
+      const issues = [];
+      const seenIp = new Set();
+      const toSave = [];
+      rows.forEach((r, idx) => {
+        const rowNo = (r && Number(r.rowNo)) || idx + 2;
+        const site = clean(r && r.site, 50), rackNo = clean(r && r.rackNo, 20), ip = clean(r && r.ipAddress, 100);
+        const feedLabel = clean(r && r.feedLabel, 20) || 'Feed A';
+        if (!site || !rackNo || !ip) { counts.invalid++; if (issues.length < 1000) issues.push({ row: rowNo, ip, status: 'invalid', message: 'Site, Rack No and IP Address are required - row skipped' }); return; }
+        if (!allowed.includes(site)) { counts.deniedSite++; if (issues.length < 1000) issues.push({ row: rowNo, ip, status: 'denied', message: `Access denied for site "${site}" - row skipped` }); return; }
+        const ipKey = ip.toLowerCase();
+        if (seenIp.has(ipKey)) { counts.duplicateInFile++; if (issues.length < 1000) issues.push({ row: rowNo, ip, status: 'duplicate_in_file', message: 'Same IP appears again in the sheet - only the first row is used' }); return; }
+        seenIp.add(ipKey);
+        counts.ready++;
+        toSave.push({
+          site, zone: clean(r.zone, 20) || 'AZ-1', rackType: clean(r.rackType, 50) || null, rackNo, feedLabel, ipAddress: ip,
+          vendor: clean(r.vendor, 50) || null, model: clean(r.model, 150) || null, serialNumber: clean(r.serialNumber, 150) || null,
+          firmware: clean(r.firmware, 100) || null, phase: String(r.phase || '').trim() === '3-Phase' ? '3-Phase' : 'Single-Phase',
+          maxLoadKw: r.maxLoadKw !== undefined && r.maxLoadKw !== '' && !isNaN(Number(r.maxLoadKw)) ? Number(r.maxLoadKw) : null,
+          snmpCommunity: clean(r.snmpCommunity, 100) || 'public', powerOid: clean(r.powerOid, 100) || null,
+          powerScale: r.powerScale !== undefined && r.powerScale !== '' && !isNaN(Number(r.powerScale)) ? Number(r.powerScale) : 1,
+        });
+      });
+      if (dryRun) return res.json({ dryRun: true, counts, issues });
+      if (!toSave.length) return res.json({ dryRun: false, counts, issues });
+      const conn = await pool.getConnection();
+      try {
+        await conn.beginTransaction();
+        for (const row of toSave) {
+          const [existing] = await conn.query('SELECT id FROM pdus WHERE ip_address = ?', [row.ipAddress]);
+          if (existing.length) {
+            await conn.query(
+              `UPDATE pdus SET site=?, zone=?, rack_type=?, rack_no=?, feed_label=?, vendor=?, model=?, serial_number=?,
+                 firmware=?, phase=?, max_load_kw=?, snmp_community=?, power_oid=?, power_scale=? WHERE ip_address=?`,
+              [row.site, row.zone, row.rackType, row.rackNo, row.feedLabel, row.vendor, row.model, row.serialNumber,
+                row.firmware, row.phase, row.maxLoadKw, row.snmpCommunity, row.powerOid, row.powerScale, row.ipAddress]
+            );
+            counts.updated++;
+          } else {
+            await conn.query(
+              `INSERT INTO pdus (id, site, zone, rack_type, rack_no, feed_label, ip_address, vendor, model, serial_number, firmware, phase, max_load_kw, snmp_community, power_oid, power_scale)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+              [genId('PDU'), row.site, row.zone, row.rackType, row.rackNo, row.feedLabel, row.ipAddress, row.vendor, row.model,
+                row.serialNumber, row.firmware, row.phase, row.maxLoadKw, row.snmpCommunity, row.powerOid, row.powerScale]
+            );
+            counts.created++;
+          }
+        }
+        await conn.commit();
+      } catch (e) { try { await conn.rollback(); } catch (e2) { /* ignore */ } throw e; }
+      finally { conn.release(); }
+      auditLog(req, 'PDU_IMPORT', { entity: 'pdu', created: counts.created, updated: counts.updated });
+      res.json({ dryRun: false, counts, issues });
+    } catch (e) { sendErr(res, e); }
+  });
+
   // ---- auto-detect: probe a not-yet-saved IP via SNMP, return best-effort identity fields ----
   app.post('/api/pdus/detect', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
     const { ipAddress, snmpCommunity } = req.body || {};

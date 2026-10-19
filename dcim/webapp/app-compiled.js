@@ -356,6 +356,7 @@ const api = {
         q.set('from', params.from); if (params.to)
         q.set('to', params.to); return apiFetch('/pdus/trend' + (q.toString() ? '?' + q.toString() : '')); },
     getPduVendorPresets: () => apiFetch('/pdus/vendor-presets'),
+    importPdus: (payload) => apiFetch('/pdus/import', { method: 'POST', body: JSON.stringify(payload), timeoutMs: 60000 }),
 };
 const { useState, useMemo, useRef, useEffect } = React;
 /* PERF (Phase-2): long lists draw the first LIST_PAGE rows and add more as the user scrolls (or presses "Show all").
@@ -12806,7 +12807,7 @@ function PduBadge({ kind, text }) {
         (text === "Single Feed" ? ["#475569", "rgba(100,116,139,.12)", text] : text === "Degraded" ? ["#EA7A0C", "rgba(234,122,12,.12)", text] : ["#059669", "rgba(5,150,105,.1)", text]);
     const displayLabel = kind === "status" ? label : text;
     return React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 10px", borderRadius: 20, fontFamily: "Inter", fontSize: 10.5, fontWeight: 800, color: c, background: bg, whiteSpace: "nowrap" } },
-        React.createElement("span", { style: { width: 6, height: 6, borderRadius: "50%", background: c, flex: "none" } }), displayLabel);
+        React.createElement("span", { className: kind === "status" && text === "online" ? "pdu-live-dot" : "", style: { width: 6, height: 6, borderRadius: "50%", background: c, flex: "none" } }), displayLabel);
 }
 function buildPduTrendSvg(rows, ratedKw) {
     if (!rows.length)
@@ -12852,6 +12853,120 @@ const PDU_RACK_COLUMNS = [
     { key: "phaseLabel", label: "Phase" },
     { key: "redundancy", label: "Redundancy" },
 ];
+// Full, flat (one row per feed) export - every column the pdus table stores, so an export
+// can also serve as a filled-in import template (see PDU_HEADER_MAP / parsePduImportFile below).
+const PDU_EXPORT_COLUMNS = [
+    { key: "id", label: "PDU ID" }, { key: "site", label: "Site" }, { key: "zone", label: "Zone" },
+    { key: "rackType", label: "Rack Type" }, { key: "rackNo", label: "Rack No" }, { key: "feedLabel", label: "Feed Label" },
+    { key: "ipAddress", label: "IP Address" }, { key: "vendor", label: "Vendor" }, { key: "model", label: "Model" },
+    { key: "serialNumber", label: "Serial Number" }, { key: "firmware", label: "Firmware" }, { key: "phase", label: "Phase" },
+    { key: "maxLoadKw", label: "Max Load (kW)" }, { key: "snmpCommunity", label: "SNMP Community" }, { key: "powerOid", label: "Power OID" },
+    { key: "powerScale", label: "Power Scale" }, { key: "pollIntervalSec", label: "Poll Interval (sec)" }, { key: "status", label: "Status" },
+    { key: "lastPowerKw", label: "Last Power (kW)" }, { key: "lastReadingAt", label: "Last Reading At", format: (v) => v ? fmtDateTime(v) : "" },
+    { key: "lastError", label: "Last Error" },
+];
+// Accepted sheet headers for bulk import/edit, normalised (lowercase, letters/digits only) -> field key.
+// The export above and the import below share field names on purpose: export, edit in Excel, re-import.
+const PDU_HEADER_MAP = {
+    site: "site", zone: "zone", racktype: "rackType", rackno: "rackNo", feedlabel: "feedLabel",
+    ipaddress: "ipAddress", vendor: "vendor", model: "model", serialnumber: "serialNumber", firmware: "firmware",
+    phase: "phase", maxloadkw: "maxLoadKw", maxload: "maxLoadKw", snmpcommunity: "snmpCommunity",
+    poweroid: "powerOid", powerscale: "powerScale",
+};
+function pduRowsFromJson(json) {
+    return (json || []).map((raw) => {
+        const o = {};
+        Object.keys(raw).forEach((h) => {
+            const k = PDU_HEADER_MAP[String(h).toLowerCase().replace(/[^a-z0-9]/g, "")];
+            if (k) { const v = raw[h]; o[k] = (v === undefined || v === null) ? "" : String(v).trim(); }
+        });
+        return o;
+    }).filter((o) => o.site || o.ipAddress || o.rackNo);
+}
+function parsePduImportFile(file) {
+    return new Promise((resolve, reject) => {
+        if (typeof XLSX === "undefined") { reject(new Error("XLSX library not loaded.")); return; }
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const name = (file.name || "").toLowerCase();
+                const wb = name.endsWith(".csv") ? XLSX.read(e.target.result, { type: "string" }) : XLSX.read(new Uint8Array(e.target.result), { type: "array" });
+                const ws = wb.Sheets[wb.SheetNames[0]];
+                resolve(pduRowsFromJson(XLSX.utils.sheet_to_json(ws, { defval: "" })));
+            }
+            catch (err) { reject(new Error("Could not read the spreadsheet: " + err.message)); }
+        };
+        reader.onerror = () => reject(new Error("Could not read the file from disk"));
+        if ((file.name || "").toLowerCase().endsWith(".csv")) reader.readAsText(file); else reader.readAsArrayBuffer(file);
+    });
+}
+function downloadPduImportTemplate() {
+    const sample = [{ site: "Sample Site A", zone: "AZ-1", rackType: "COMP-1", rackNo: "15", feedLabel: "Feed A", ipAddress: "10.20.4.150", vendor: "APC / Schneider Electric", model: "Rack PDU 2G AP8865", serialNumber: "", firmware: "", phase: "Single-Phase", maxLoadKw: "6.0", snmpCommunity: "public", powerOid: "1.3.6.1.4.1.318.1.1.26.4.3.1.5.0", powerScale: "10" }];
+    exportToExcel(sample, PDU_EXPORT_COLUMNS.filter((c) => c.key !== "id" && c.key !== "pollIntervalSec" && c.key !== "status" && c.key !== "lastPowerKw" && c.key !== "lastReadingAt" && c.key !== "lastError"), "pdu-import-template.xlsx");
+}
+function PduImportModal({ onClose, onDone }) {
+    const fileRef = useRef(null);
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState("");
+    const [fileName, setFileName] = useState("");
+    const [rows, setRows] = useState(null);
+    const [report, setReport] = useState(null);
+    const [saved, setSaved] = useState(null);
+    const pick = async (e) => {
+        const f = e.target.files && e.target.files[0];
+        if (fileRef.current) fileRef.current.value = "";
+        if (!f) return;
+        setErr(""); setReport(null); setSaved(null); setRows(null); setFileName(f.name); setBusy(true);
+        try {
+            const parsed = await parsePduImportFile(f);
+            if (!parsed.length) throw new Error("No data rows found in the first sheet.");
+            setRows(parsed);
+            setReport(await api.importPdus({ dryRun: true, rows: parsed }));
+        }
+        catch (x) { setErr(x.message || String(x)); }
+        setBusy(false);
+    };
+    const commit = async () => {
+        setErr(""); setBusy(true);
+        try { const r = await api.importPdus({ dryRun: false, rows }); setSaved(r); if (onDone) onDone(); }
+        catch (x) { setErr(x.message || String(x)); }
+        setBusy(false);
+    };
+    const c = report && report.counts;
+    const statLabel = { invalid: "Invalid", denied: "Access denied", duplicate_in_file: "Duplicate" };
+    const stat = (label, value, color) => React.createElement("div", { key: label, style: { flex: "1 1 120px", background: "rgba(148,163,184,.12)", borderRadius: 10, padding: "8px 12px" } },
+        React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#64748B", textTransform: "uppercase", letterSpacing: .4 } }, label),
+        React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 22, fontWeight: 800, color } }, value));
+    return ReactDOM.createPortal(React.createElement("div", { className: "pdu-modal-backdrop", style: { position: "fixed", inset: 0, background: "rgba(14,18,28,0.5)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 90 }, onClick: busy ? undefined : onClose },
+        React.createElement("div", { onClick: (e) => e.stopPropagation(), className: "neu-card pdu-modal-pop", style: { width: 760, maxWidth: "94vw", maxHeight: "90vh", overflowY: "auto", padding: 26 } },
+            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#1E293B", marginBottom: 4 } }, "Bulk Import PDUs"),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#64748B", marginBottom: 14, lineHeight: 1.5 } }, "Choose a sheet (.xlsx or .csv) with Site, Rack No and IP Address columns at minimum. A row whose IP already exists updates that PDU instead of creating a duplicate. Nothing is saved until you press Import."),
+            React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 14 } },
+                React.createElement("button", { onClick: () => fileRef.current && fileRef.current.click(), disabled: busy, className: "neu-btn-secondary", style: { display: "flex", alignItems: "center", gap: 6 } }, React.createElement(Upload, { s: 14 }), " Choose sheet"),
+                React.createElement("button", { onClick: downloadPduImportTemplate, disabled: busy, className: "neu-btn-secondary", style: { display: "flex", alignItems: "center", gap: 6, fontSize: 12 } }, React.createElement(Download, { s: 14 }), " Download template"),
+                React.createElement("span", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#475569" } }, fileName || "No file chosen"),
+                busy && React.createElement("span", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B" } }, "Working…"),
+                React.createElement("input", { ref: fileRef, type: "file", accept: ".xlsx,.xls,.csv", style: { display: "none" }, onChange: pick })),
+            err && React.createElement("div", { style: { background: "#FEF2F2", border: "1px solid rgba(220,38,38,.3)", color: "#991B1B", borderRadius: 10, padding: "10px 12px", fontFamily: "Inter", fontSize: 12.5, marginBottom: 12 } }, err),
+            c && React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 } },
+                stat("Rows in sheet", c.total, "#1E293B"),
+                stat("Ready", c.ready, "#059669"),
+                c.invalid ? stat("Invalid", c.invalid, "#DC2626") : null,
+                c.deniedSite ? stat("Access denied", c.deniedSite, "#DC2626") : null,
+                c.duplicateInFile ? stat("Duplicates", c.duplicateInFile, "#64748B") : null),
+            report && report.issues && report.issues.length > 0 && React.createElement("div", { style: { maxHeight: 240, overflow: "auto", border: "1px solid rgba(148,163,184,.35)", borderRadius: 10, marginBottom: 14 } },
+                React.createElement("table", { style: { borderCollapse: "collapse", width: "100%", fontFamily: "Inter", fontSize: 12 } },
+                    React.createElement("thead", null, React.createElement("tr", null, ["Row", "IP", "Result", "Detail"].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "7px 10px", fontSize: 10.5, color: "#64748B", textTransform: "uppercase", position: "sticky", top: 0, background: "#F8FAFC" } }, h)))),
+                    React.createElement("tbody", null, report.issues.slice(0, 300).map((i, n) => React.createElement("tr", { key: n, style: { borderTop: "0.5px solid rgba(148,163,184,.3)" } },
+                        React.createElement("td", { style: { padding: "6px 10px", fontFamily: "'JetBrains Mono'" } }, i.row),
+                        React.createElement("td", { style: { padding: "6px 10px", fontFamily: "'JetBrains Mono'" } }, i.ip || "—"),
+                        React.createElement("td", { style: { padding: "6px 10px", fontWeight: 700, color: "#DC2626", whiteSpace: "nowrap" } }, statLabel[i.status] || i.status),
+                        React.createElement("td", { style: { padding: "6px 10px", color: "#475569" } }, i.message)))))),
+            saved && React.createElement("div", { style: { background: "#ECFDF5", border: "1px solid rgba(5,150,105,.3)", color: "#065F46", borderRadius: 10, padding: "10px 12px", fontFamily: "Inter", fontSize: 13, fontWeight: 600, marginBottom: 12 } }, `Saved ${saved.counts.created} new PDU${saved.counts.created === 1 ? "" : "s"} and updated ${saved.counts.updated}.`),
+            React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8 } },
+                React.createElement("button", { onClick: onClose, disabled: busy, className: "neu-btn-secondary" }, saved ? "Close" : "Cancel"),
+                !saved && React.createElement("button", { onClick: commit, disabled: busy || !c || !c.ready, className: "neu-btn-primary" }, c && c.ready ? `Import ${c.ready} PDU${c.ready === 1 ? "" : "s"}` : "Import")))), document.body);
+}
 function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
     const isNew = !pdu || !pdu.id;
     const [form, setForm] = useState(() => ({
@@ -13045,6 +13160,9 @@ function PduPage({ allowedSites = [], canEdit = false }) {
     const [openRack, setOpenRack] = useState(null);
     const [editing, setEditing] = useState(null);
     const [trendOpen, setTrendOpen] = useState(false);
+    const [importOpen, setImportOpen] = useState(false);
+    const [deleteConfirm, setDeleteConfirm] = useState(null);
+    const [deleting, setDeleting] = useState(false);
     const [syncing, setSyncing] = useState(false);
     const [syncMsg, setSyncMsg] = useState(null);
     const [sparkRows, setSparkRows] = useState([]);
@@ -13076,6 +13194,14 @@ function PduPage({ allowedSites = [], canEdit = false }) {
         catch (e) { setSyncMsg("Sync failed: " + e.message); }
         setSyncing(false);
     };
+    const runExport = () => exportToExcel(flat, PDU_EXPORT_COLUMNS, `pdu-inventory-${localDateStr(today)}.xlsx`);
+    const confirmDelete = async () => {
+        if (!deleteConfirm) return;
+        setDeleting(true);
+        try { await api.deletePdu(deleteConfirm.id); setDeleteConfirm(null); setOpenRack(null); await load(); }
+        catch (e) { setSyncMsg("Delete failed: " + e.message); }
+        setDeleting(false);
+    };
     const overall = (summary && summary.overall) || { totalKw: 0, ratedKw: 0, pduCount: 0, onlineCount: 0 };
     const usedPctOverall = overall.ratedKw > 0 ? Math.round((overall.totalKw / overall.ratedKw) * 100) : 0;
     const degradedCount = racks.filter((r) => pduRedundancy(r) === "Degraded").length;
@@ -13085,9 +13211,11 @@ function PduPage({ allowedSites = [], canEdit = false }) {
             React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
                 React.createElement("span", { className: "module-title-icon", style: { background: "linear-gradient(145deg,#DDD6FE,#A78BFA)", color: "#5B21B6" } }, React.createElement(Zap, { s: 18, c: "#5B21B6" })),
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617" } }, "PDU Power Monitoring")),
-            canEdit && React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
-                React.createElement("button", { className: "neu-btn-secondary", disabled: syncing, onClick: runSync, style: { fontSize: 12.5 } }, syncing ? "Syncing…" : "↻ Sync All PDUs Now"),
-                React.createElement("button", { className: "neu-btn-primary", style: { fontSize: 12.5, padding: "9px 18px" }, onClick: () => setEditing({}) }, "+ Add PDU"))),
+            React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
+                React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 6 }, onClick: runExport, title: "Export every PDU, all columns" }, React.createElement(Download, { s: 13 }), " Export"),
+                canEdit && React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 6 }, onClick: () => setImportOpen(true) }, React.createElement(Upload, { s: 13 }), " Import"),
+                canEdit && React.createElement("button", { className: `neu-btn-secondary pdu-sync-btn${syncing ? " syncing" : ""}`, disabled: syncing, onClick: runSync, style: { fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 6 } }, React.createElement(RefreshCw, { s: 13 }), syncing ? "Syncing…" : "Sync All PDUs Now"),
+                canEdit && React.createElement("button", { className: "neu-btn-primary", style: { fontSize: 12.5, padding: "9px 18px" }, onClick: () => setEditing({}) }, "+ Add PDU"))),
         syncMsg && React.createElement("div", { style: { marginBottom: 14, padding: "10px 16px", borderRadius: 12, background: "rgba(49,87,238,.08)", color: "#244DE5", fontFamily: "Inter", fontSize: 12.5, fontWeight: 700 } }, syncMsg),
         error && React.createElement("div", { className: "neu-card anim-in d1", style: { background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)", padding: "14px 18px", marginBottom: 20, color: "#DC2626", fontFamily: "Inter", fontSize: 13 } }, "API Error: ", error, " ", React.createElement("button", { onClick: load, style: { marginLeft: 12, background: "transparent", border: "none", color: "#DC2626", textDecoration: "underline", cursor: "pointer", fontWeight: 600 } }, "Retry")),
         loading && React.createElement("div", { style: { textAlign: "center", padding: "40px 0", color: "#64748B", fontFamily: "Inter" } }, "Loading PDU data…"),
@@ -13121,7 +13249,7 @@ function PduPage({ allowedSites = [], canEdit = false }) {
                             const anyOff = rack.feeds.some((f) => f.status === "offline");
                             const open = openRack === rack.key;
                             return React.createElement(React.Fragment, { key: rack.key },
-                                React.createElement("tr", { onClick: () => setOpenRack(open ? null : rack.key), style: { cursor: "pointer", background: open ? "rgba(49,87,238,.05)" : "transparent" } },
+                                React.createElement("tr", { className: "pdu-rack-row", onClick: () => setOpenRack(open ? null : rack.key), style: { cursor: "pointer", background: open ? "rgba(49,87,238,.05)" : "transparent" } },
                                     React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)", fontWeight: 700 } }, rack.site),
                                     React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)" } }, rack.zone),
                                     React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)" } }, rack.rackType || "—"),
@@ -13129,7 +13257,7 @@ function PduPage({ allowedSites = [], canEdit = false }) {
                                     React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)" } }, React.createElement(PduBadge, { kind: "phase", text: phaseLabel })),
                                     React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)" } }, React.createElement(PduBadge, { kind: "redundancy", text: redundancy })),
                                     React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)", fontFamily: "'Space Grotesk'", fontWeight: 800 } }, totalKw.toFixed(2), " ", React.createElement("span", { style: { fontSize: 11, color: "#94A3B8", fontWeight: 600 } }, "/ ", ratedKw.toFixed(1), " kW")),
-                                    React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)" } }, React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 7, minWidth: 110 } }, React.createElement("div", { style: { flex: 1, height: 6, borderRadius: 5, background: "rgba(148,163,184,.25)", overflow: "hidden" } }, React.createElement("div", { style: { width: usedPct + "%", height: "100%", borderRadius: 5, background: pduLoadColor(usedPct) } })), React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontWeight: 800, fontSize: 12 } }, usedPct, "%"))),
+                                    React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)" } }, React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 7, minWidth: 110 } }, React.createElement("div", { style: { flex: 1, height: 6, borderRadius: 5, background: "rgba(148,163,184,.25)", overflow: "hidden" } }, React.createElement("div", { className: "pdu-load-bar", style: { width: usedPct + "%", height: "100%", borderRadius: 5, background: pduLoadColor(usedPct) } })), React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontWeight: 800, fontSize: 12 } }, usedPct, "%"))),
                                     React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)", fontSize: 11, color: anyOff ? "#DC2626" : "#94A3B8", fontWeight: anyOff ? 700 : 500 } }, anyOff ? "1 feed unreachable" : (rack.feeds[0] && rack.feeds[0].lastReadingAt ? new Date(rack.feeds[0].lastReadingAt).toLocaleString() : "Not yet polled")),
                                     React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)" } }, React.createElement("span", { style: { display: "inline-block", transform: open ? "rotate(90deg)" : "none", transition: "transform .2s ease", color: "#3157EE" } }, "›"))),
                                 open && React.createElement("tr", null, React.createElement("td", { colSpan: 10, style: { padding: "0 14px 18px 20px", borderBottom: "1px solid rgba(148,163,184,.14)" } },
@@ -13140,10 +13268,20 @@ function PduPage({ allowedSites = [], canEdit = false }) {
                                         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 7 } },
                                             [["Power", f.lastPowerKw != null ? f.lastPowerKw.toFixed(2) + " kW" : "—"], ["Max Load", f.maxLoadKw != null ? f.maxLoadKw.toFixed(1) + " kW" : "—"], ["Capacity Used", f.lastPowerKw != null && f.maxLoadKw ? Math.round(f.lastPowerKw / f.maxLoadKw * 100) + "%" : "—"]].map(([l, v]) => React.createElement("div", { key: l }, React.createElement("small", { style: { display: "block", fontSize: 8.5, fontWeight: 700, textTransform: "uppercase", color: "#94A3B8" } }, l), React.createElement("b", { style: { fontFamily: "'Space Grotesk'", fontSize: 13 } }, v)))),
                                         f.lastError && React.createElement("div", { style: { marginTop: 7, fontSize: 10, color: "#EA7A0C" } }, f.lastError),
-                                        canEdit && React.createElement("button", { className: "neu-btn-secondary", style: { marginTop: 9, fontSize: 11, padding: "6px 12px" }, onClick: (e) => { e.stopPropagation(); setEditing(f); } }, "✎ Edit")))))));
+                                        canEdit && React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 9 } },
+                                            React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 11, padding: "6px 12px" }, onClick: (e) => { e.stopPropagation(); setEditing(f); } }, "✎ Edit"),
+                                            React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 11, padding: "6px 12px", color: "#DC2626" }, onClick: (e) => { e.stopPropagation(); setDeleteConfirm(f); } }, React.createElement(Trash2, { s: 11, c: "#DC2626" }), " Delete"))))))));
                         })))))),
         editing && React.createElement(PduEditModal, { pdu: editing.id ? editing : null, allowedSites: allowedSites, onClose: () => setEditing(null), onSaved: () => { setEditing(null); load(); } }),
         trendOpen && React.createElement(PduTrendModal, { site: "all", zone: "all", allowedSites: allowedSites, zonesForSite: zonesForSite, onClose: () => setTrendOpen(false) }),
+        importOpen && React.createElement(PduImportModal, { onClose: () => setImportOpen(false), onDone: load }),
+        deleteConfirm && React.createElement("div", { className: "pdu-modal-backdrop", style: { position: "fixed", inset: 0, background: "rgba(14,18,28,.45)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, zIndex: 410 }, onClick: deleting ? undefined : () => setDeleteConfirm(null) },
+            React.createElement("div", { className: "neu-card pdu-modal-pop", style: { width: 420, maxWidth: "92vw", padding: 24 }, onClick: (e) => e.stopPropagation() },
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 16, fontWeight: 800, color: "#17345D", marginBottom: 8 } }, "Delete this PDU?"),
+                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#64748B", marginBottom: 18, lineHeight: 1.5 } }, "This removes ", React.createElement("b", null, deleteConfirm.feedLabel, " · ", deleteConfirm.ipAddress), " (", deleteConfirm.site, " · Rack ", deleteConfirm.rackNo, ") and its power history. This cannot be undone."),
+                React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", gap: 10 } },
+                    React.createElement("button", { className: "neu-btn-secondary", disabled: deleting, onClick: () => setDeleteConfirm(null) }, "Cancel"),
+                    React.createElement("button", { className: "neu-btn-primary", disabled: deleting, style: { background: "#DC2626" }, onClick: confirmDelete }, deleting ? "Deleting…" : "Delete PDU")))),
         openFilter && React.createElement(ValueListFilterPopup, { column: openFilter, currentFilter: columnFilters[openFilter.key], optionRows: optionRowsForColumn(openFilter.key), onApply: (value) => setColumnFilters((prev) => ({ ...prev, [openFilter.key]: value })), onClose: () => setOpenFilter(null) }));
 }
 
