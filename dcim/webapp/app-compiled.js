@@ -2187,26 +2187,16 @@ function LoginBackground({ variant }) {
             v.defaultPlaybackRate = LOGIN_BG_SPEED;
         }
         catch (e) { } };
-        // Don't touch playbackRate or call play() before the browser has loaded
-        // metadata (readyState 0 = HAVE_NOTHING): on some Chromium builds, setting
-        // playbackRate or calling play() that early resets the in-flight network
-        // fetch for the video's own `autoplay` attribute, which the browser
-        // already started on mount - intermittently aborting it (seen as
-        // net::ERR_ABORTED or a MEDIA_ERR_SRC_NOT_SUPPORTED error) and permanently
-        // falling back to the animated background. Let `autoplay` do the initial
-        // play, and only apply the speed once metadata has actually loaded.
-        if (v.readyState > 0)
-            applySpeed();
+        applySpeed();
         v.addEventListener("loadedmetadata", applySpeed);
         v.addEventListener("play", applySpeed);
+        const play = () => { applySpeed(); const p = v.play(); if (p && p.catch)
+            p.catch(() => { }); };
+        play();
         const onVis = () => { if (document.hidden)
             v.pause();
-        else {
-            applySpeed();
-            const p = v.play();
-            if (p && p.catch)
-                p.catch(() => { });
-        } };
+        else
+            play(); };
         document.addEventListener("visibilitychange", onVis);
         return () => { document.removeEventListener("visibilitychange", onVis); v.removeEventListener("loadedmetadata", applySpeed); v.removeEventListener("play", applySpeed); };
     }, [useVideo]);
