@@ -379,7 +379,30 @@ function ensureNssmBinary(opts, payloadNssm) {
 
 function invokeNssm(nssmPath, ...args) {
   const res = spawnSync(nssmPath, args, { encoding: 'utf8' });
-  if (res.status !== 0) die(`nssm ${args.join(' ')} failed (exit ${res.status}).`);
+  if (res.status !== 0) {
+    // Found via real execution: a bare exit code alone ("exit 6") gave no
+    // way to tell what actually went wrong without another round-trip -
+    // nssm usually prints a human-readable reason to stdout/stderr.
+    const detail = [res.stdout, res.stderr].filter(Boolean).join('\n').trim();
+    die(`nssm ${args.join(' ')} failed (exit ${res.status})${detail ? `: ${detail}` : '.'}`);
+  }
+}
+
+function setServiceDependency(serviceName, dependsOnServiceName) {
+  // DependOnService is a standard Windows Service Control Manager concept
+  // (the same registry value sc.exe and nssm both read/write) - not
+  // something NSSM-specific, so there's no real reason to go through nssm
+  // for it. Found via real execution: "nssm set DCIM DependOnService
+  // DCIMMariaDB" failed with a bare "exit 6" on a real machine (during an
+  // Upgrade, with DCIMMariaDB already running) while the exact same call
+  // succeeded reliably in CI - switched to sc.exe, which we already use
+  // for every other service operation here, to remove nssm from a code
+  // path that was never really nssm's job to begin with.
+  const res = spawnSync('sc.exe', ['config', serviceName, 'depend=', dependsOnServiceName], { encoding: 'utf8' });
+  if (res.status !== 0) {
+    const detail = [res.stdout, res.stderr].filter(Boolean).join('\n').trim();
+    die(`sc config ${serviceName} depend= ${dependsOnServiceName} failed (exit ${res.status})${detail ? `: ${detail}` : '.'}`);
+  }
 }
 
 async function waitForEmbeddedDb(engineDir, port) {
@@ -521,9 +544,9 @@ function installWindowsService(opts, paths) {
   invokeNssm(nssm, 'set', SERVICE_NAME, 'Start', 'SERVICE_AUTO_START');
   invokeNssm(nssm, 'set', SERVICE_NAME, 'AppExit', 'Default', 'Restart');
   // If an embedded MariaDB instance is in use, tell the Windows Service
-  // Control Manager to start it before DCIM, via NSSM's DependOnService.
+  // Control Manager to start it before DCIM.
   if (fs.existsSync(path.join(opts.InstallDir, 'mariadb', 'data'))) {
-    invokeNssm(nssm, 'set', SERVICE_NAME, 'DependOnService', EMBEDDED_DB_SERVICE_NAME);
+    setServiceDependency(SERVICE_NAME, EMBEDDED_DB_SERVICE_NAME);
   }
   startService(SERVICE_NAME);
   log(`Installed Windows service '${SERVICE_NAME}' (auto-start on boot).`);
