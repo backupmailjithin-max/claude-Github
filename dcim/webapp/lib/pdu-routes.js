@@ -474,13 +474,22 @@ module.exports = function registerPduRoutes(app, deps) {
   });
 
   // ---- poll one PDU (reachability always; wattage only if power_oid is configured) ----
+  // Also opportunistically fills in vendor/model/serial/firmware if any are still blank,
+  // from the same sysDescr/sysName this poll already fetches for reachability - so a PDU
+  // added via bulk import or Add PDU with only Site/Rack/IP filled in gets its identity
+  // captured automatically on the next sync, no separate "Discover" step required. Same
+  // never-overwrite rule as /api/pdus/discover/apply: only fields that are currently blank
+  // are touched.
   async function pollOne(pdu) {
-    const oids = [OID_SYS_DESCR];
+    const oids = [OID_SYS_DESCR, OID_SYS_NAME];
     if (pdu.power_oid) oids.push(pdu.power_oid);
-    let status = 'offline', lastError = null, powerKw = null;
+    let status = 'offline', lastError = null, powerKw = null, detected = null;
     try {
       const out = await snmpGet(pdu.ip_address, pdu.snmp_community || 'public', oids);
       status = 'online';
+      const descr = out[OID_SYS_DESCR] != null ? String(out[OID_SYS_DESCR]) : '';
+      const name = out[OID_SYS_NAME] != null ? String(out[OID_SYS_NAME]) : '';
+      detected = { vendor: guessVendor(descr), model: descr || null, serialNumber: name || null, firmware: guessFirmware(descr) };
       if (pdu.power_oid) {
         const raw = out[pdu.power_oid];
         const n = typeof raw === 'number' ? raw : parseFloat(raw);
@@ -501,10 +510,20 @@ module.exports = function registerPduRoutes(app, deps) {
     } catch (e) {
       status = 'offline'; lastError = 'Unreachable: ' + (e && e.message || 'timeout');
     }
-    await pool.query(
-      'UPDATE pdus SET status=?, last_power_kw=?, last_reading_at=NOW(), last_error=? WHERE id=?',
-      [status, powerKw, lastError, pdu.id]
-    );
+    if (detected) {
+      await pool.query(
+        `UPDATE pdus SET status=?, last_power_kw=?, last_reading_at=NOW(), last_error=?,
+           vendor = COALESCE(NULLIF(vendor,''), ?), model = COALESCE(NULLIF(model,''), ?),
+           serial_number = COALESCE(NULLIF(serial_number,''), ?), firmware = COALESCE(NULLIF(firmware,''), ?)
+         WHERE id=?`,
+        [status, powerKw, lastError, detected.vendor, detected.model, detected.serialNumber, detected.firmware, pdu.id]
+      );
+    } else {
+      await pool.query(
+        'UPDATE pdus SET status=?, last_power_kw=?, last_reading_at=NOW(), last_error=? WHERE id=?',
+        [status, powerKw, lastError, pdu.id]
+      );
+    }
     if (powerKw != null) {
       const today = new Date().toISOString().slice(0, 10);
       await pool.query(
