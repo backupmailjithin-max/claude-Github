@@ -1,0 +1,93 @@
+=============================================================================
+DCIM Dashboard — License Issuing Template / Cheat Sheet
+=============================================================================
+Run this on YOUR machine (the license issuer), not the customer's machine.
+Requires: Node.js, and license-private-key.pem (the private key file you
+were given — keep it secret, never send it to a customer).
+
+-----------------------------------------------------------------------------
+FULL COMMAND TEMPLATE (copy, then fill in the <...> placeholders)
+-----------------------------------------------------------------------------
+node license-issue.js ^
+  --private-key "<PATH-TO-license-private-key.pem>" ^
+  --customer "<CUSTOMER OR SITE NAME>" ^
+  --max-users <NUMBER-OR-OMIT-FOR-UNLIMITED> ^
+  --expires <YYYY-MM-DD-OR-OMIT-FOR-NEVER> ^
+  --machine-id <FINGERPRINT-OR-OMIT-FOR-NOT-MACHINE-LOCKED> ^
+  --out "<OUTPUT-FILENAME>.lic"
+
+(Run this from inside the "tools" folder, e.g. <InstallDir>\webapp\tools.
+The "^" line-continuation is for Windows cmd.exe — on one line, just remove
+the "^" characters and join everything with spaces.)
+
+-----------------------------------------------------------------------------
+FLAG REFERENCE
+-----------------------------------------------------------------------------
+--private-key   REQUIRED. Full path to license-private-key.pem.
+
+--customer      REQUIRED. Any name — shown to the customer on their License
+                page (e.g. "Acme Corp", "Chennai DC - Site A").
+
+--max-users     OPTIONAL. Caps active user accounts at this number
+                (server blocks creating more once the limit is hit).
+                Omit this flag entirely for unlimited users.
+
+--expires       OPTIONAL. Format YYYY-MM-DD (e.g. 2027-12-31). License
+                stops working after this date. Omit for a license that
+                never expires.
+
+--machine-id    OPTIONAL. Locks the license to one specific machine — it
+                will refuse to activate anywhere else. Get this fingerprint
+                from the customer's own Settings -> License page (it shows
+                their "Machine Fingerprint"), or have them run:
+                    node tools/license-fingerprint.js
+                on their machine and send you the printed code.
+                Omit this flag for a non-machine-locked license (works on
+                any machine — fine for evaluation copies, not for strict
+                production licensing).
+
+--out           OPTIONAL. Output .lic filename. Defaults to a name based on
+                --customer if omitted (e.g. "acme-corp.lic").
+
+-----------------------------------------------------------------------------
+READY-TO-USE EXAMPLES
+-----------------------------------------------------------------------------
+
+1) Unlimited users, never expires, NOT machine-locked (evaluation-style):
+node license-issue.js --private-key "C:\Keys\license-private-key.pem" --customer "Acme Corp"
+
+2) 25 users, expires in 1 year, not machine-locked:
+node license-issue.js --private-key "C:\Keys\license-private-key.pem" --customer "Acme Corp" --max-users 25 --expires 2027-10-19
+
+3) 10 users, never expires, LOCKED to one specific machine:
+node license-issue.js --private-key "C:\Keys\license-private-key.pem" --customer "Acme Corp" --max-users 10 --machine-id A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4 --out acme-corp.lic
+
+-----------------------------------------------------------------------------
+WHAT YOU GET AFTER RUNNING IT
+-----------------------------------------------------------------------------
+The tool prints:
+  - A summary of what was issued (licenseId, customer, maxUsers, dates)
+  - A .lic file on disk (give/email this file to the customer to upload)
+  - A long "Activation code" text string (same license, as one line — the
+    customer can paste this into Settings -> License instead of a file)
+
+-----------------------------------------------------------------------------
+HOW THE CUSTOMER ACTIVATES IT
+-----------------------------------------------------------------------------
+1. Sign in as a Global Admin.
+2. Go to Settings -> License.
+3. Either upload the .lic file, or paste the activation code.
+4. Click Activate. Status should flip to "License active" showing the
+   customer name, user limit, and expiry you set.
+
+-----------------------------------------------------------------------------
+IMPORTANT
+-----------------------------------------------------------------------------
+- Never send license-private-key.pem to a customer — only the .lic file or
+  the activation code.
+- Back up license-private-key.pem somewhere safe. If you lose it, you
+  cannot issue new licenses OR modify ones already issued with it — you'd
+  have to generate a brand-new keypair (tools/license-keygen.js) and update
+  every customer's install's lib/license-public-key.js to match, breaking
+  every license issued under the old key.
+=============================================================================
