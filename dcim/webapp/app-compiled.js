@@ -13113,6 +13113,7 @@ function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
     const [detecting, setDetecting] = useState(false);
     const [detectMsg, setDetectMsg] = useState(null);
     const [detectedFields, setDetectedFields] = useState({});
+    const [conflicts, setConflicts] = useState({});
     const [saving, setSaving] = useState(false);
     const [err, setErr] = useState(null);
     const [presets, setPresets] = useState([]);
@@ -13127,22 +13128,36 @@ function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
         setForm((f) => ({ ...f, vendor: p.vendor || f.vendor, powerOid: p.oid || "", powerScale: String(p.scale || 1) }));
         setPresetNote(p);
     };
+    // Fields SNMP can supply. A field that's currently blank is filled in directly (green,
+    // "✓ auto"). A field that already holds a different value is NOT overwritten - it goes
+    // into `conflicts` instead, so a manual correction can never be silently clobbered by a
+    // re-run of Auto-Detect; the admin reviews each one and picks "Keep manual" or "Use
+    // detected" (amber highlight until resolved).
     const runDetect = async () => {
         if (!form.ipAddress) { setDetectMsg({ type: "error", text: "Enter an IP address first." }); return; }
-        setDetecting(true); setDetectMsg(null);
+        setDetecting(true); setDetectMsg(null); setConflicts({});
         try {
             const r = await api.detectPdu({ ipAddress: form.ipAddress, snmpCommunity: form.snmpCommunity });
             if (r.reachable) {
-                const next = {};
-                if (r.vendor) next.vendor = r.vendor;
-                if (r.model) next.model = r.model;
-                if (r.serialNumber) next.serialNumber = r.serialNumber;
-                if (r.firmware) next.firmware = r.firmware;
-                if (r.maxLoadKw != null && !String(form.maxLoadKw || "").trim()) next.maxLoadKw = String(Math.round(r.maxLoadKw * 100) / 100);
-                setForm((f) => ({ ...f, ...next }));
-                setDetectedFields(next);
-                const maxLoadLine = next.maxLoadKw ? ` Max Load was also auto-filled (${r.maxLoadNote || "from this vendor's SNMP capacity value"}) - double-check it against the nameplate.` : (r.maxLoadNote ? ` Max Load: ${r.maxLoadNote}` : " Max Load isn't auto-detectable for this vendor - set it manually.");
-                setDetectMsg({ type: "success", text: "Device reachable - fields below were auto-filled from SNMP (sysDescr/sysName), which varies by vendor. Review and correct anything before saving." + maxLoadLine });
+                const detectedVals = {
+                    vendor: r.vendor || "", model: r.model || "", serialNumber: r.serialNumber || "",
+                    firmware: r.firmware || "", maxLoadKw: r.maxLoadKw != null ? String(Math.round(r.maxLoadKw * 100) / 100) : "",
+                };
+                const filled = {}, newConflicts = {};
+                Object.keys(detectedVals).forEach((key) => {
+                    const detectedVal = detectedVals[key];
+                    if (!detectedVal) return;
+                    const current = String(form[key] || "").trim();
+                    if (!current) filled[key] = detectedVal;
+                    else if (current !== detectedVal) newConflicts[key] = detectedVal;
+                });
+                if (Object.keys(filled).length) setForm((f) => ({ ...f, ...filled }));
+                setDetectedFields(filled);
+                setConflicts(newConflicts);
+                const conflictCount = Object.keys(newConflicts).length;
+                const conflictLine = conflictCount ? ` ${conflictCount} field${conflictCount === 1 ? "" : "s"} already had a different manually-entered value - review the amber-highlighted field${conflictCount === 1 ? "" : "s"} below and choose "Keep manual" or "Use detected".` : "";
+                const maxLoadLine = filled.maxLoadKw ? ` Max Load was also auto-filled (${r.maxLoadNote || "from this vendor's SNMP capacity value"}) - double-check it against the nameplate.` : (r.maxLoadNote && !newConflicts.maxLoadKw ? ` Max Load: ${r.maxLoadNote}` : "");
+                setDetectMsg({ type: "success", text: "Device reachable - blank fields were auto-filled from SNMP (sysDescr/sysName), which varies by vendor." + conflictLine + maxLoadLine });
             }
             else {
                 setDetectMsg({ type: "error", text: r.error || "Could not reach the device." });
@@ -13150,6 +13165,13 @@ function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
         }
         catch (e) { setDetectMsg({ type: "error", text: e.message }); }
         setDetecting(false);
+    };
+    const resolveConflict = (key, useDetected) => {
+        if (useDetected) {
+            setForm((f) => ({ ...f, [key]: conflicts[key] }));
+            setDetectedFields((d) => ({ ...d, [key]: true }));
+        }
+        setConflicts((c) => { const n = { ...c }; delete n[key]; return n; });
     };
     const save = async () => {
         if (!form.site || !form.rackNo || !form.feedLabel || !form.ipAddress) { setErr("Site, Rack No, Feed Label and IP Address are required."); return; }
@@ -13165,9 +13187,23 @@ function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
         catch (e) { setErr(e.message); }
         setSaving(false);
     };
-    const field = (label, key, extra = {}) => React.createElement("div", { style: { flex: 1, minWidth: 140 } },
-        React.createElement("label", { style: PDU_LABEL_STYLE }, label, detectedFields[key] && React.createElement("span", { style: { marginLeft: 6, fontSize: 9, fontWeight: 800, color: "#059669", background: "rgba(5,150,105,.1)", padding: "2px 7px", borderRadius: 7 } }, "✓ auto")),
-        React.createElement("input", { className: "neu-input", style: { width: "100%" }, value: form[key], onChange: (e) => set(key, e.target.value), ...extra }));
+    const field = (label, key, extra = {}) => {
+        const isAuto = !!detectedFields[key];
+        const conflict = conflicts[key];
+        const inputStyle = { width: "100%" };
+        if (isAuto) { inputStyle.background = "rgba(5,150,105,.08)"; inputStyle.border = "1.5px solid #6EE7B7"; }
+        if (conflict) { inputStyle.background = "rgba(217,119,6,.08)"; inputStyle.border = "1.5px solid #FBBF24"; }
+        return React.createElement("div", { style: { flex: 1, minWidth: 140 } },
+            React.createElement("label", { style: PDU_LABEL_STYLE }, label, isAuto && React.createElement("span", { style: { marginLeft: 6, fontSize: 9, fontWeight: 800, color: "#059669", background: "rgba(5,150,105,.1)", padding: "2px 7px", borderRadius: 7 } }, "✓ auto")),
+            React.createElement("input", { className: "neu-input", style: inputStyle, value: form[key], onChange: (e) => set(key, e.target.value), ...extra }),
+            conflict && React.createElement("div", { style: { marginTop: 5, padding: "7px 9px", borderRadius: 9, background: "rgba(217,119,6,.08)", border: "1px solid rgba(217,119,6,.3)" } }, [
+                React.createElement("div", { key: "t", style: { fontFamily: "Inter", fontSize: 10.5, color: "#92400E", fontWeight: 700, marginBottom: 5 } }, "SNMP detected: ", React.createElement("span", { style: { fontFamily: "'JetBrains Mono'" } }, conflict)),
+                React.createElement("div", { key: "b", style: { display: "flex", gap: 6 } }, [
+                    React.createElement("button", { key: "keep", type: "button", onClick: () => resolveConflict(key, false), className: "neu-btn-secondary", style: { fontSize: 10, padding: "4px 9px" } }, "Keep manual"),
+                    React.createElement("button", { key: "use", type: "button", onClick: () => resolveConflict(key, true), className: "neu-btn-secondary", style: { fontSize: 10, padding: "4px 9px", color: "#059669" } }, "Use detected"),
+                ]),
+            ]));
+    };
     return React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(14,18,28,.45)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, zIndex: 400 }, onClick: onClose },
         React.createElement("div", { className: "neu-card anim-in d1", style: { width: 640, maxWidth: "94vw", maxHeight: "90vh", overflowY: "auto", padding: 28, position: "relative" }, onClick: (e) => e.stopPropagation() },
             React.createElement("button", { onClick: onClose, style: { position: "absolute", top: 18, right: 20, background: "none", border: "none", fontSize: 20, color: "#94A3B8", cursor: "pointer" } }, "×"),
