@@ -2150,7 +2150,16 @@ const DCBackground = (function () {
 })();
 // >>> Login background: "video" (your data-center clip) | "racks" | "network" | "matrix" | "floorgrid" | "aurora"
 const LOGIN_BG_STYLE = "video";
-const LOGIN_BG_VIDEO = "media/login-bg.mp4"; // served by server.js from the ./media folder
+// Two encodes of the same clip: WebM/VP9 (royalty-free, decodable by every
+// Chromium/Firefox build including the open-source "chromium-browser" package
+// most Linux distros ship - that build has NO licensed H.264 decoder at all,
+// so an <video src="...mp4"> alone silently fails there) and MP4/H.264
+// (needed for Safari, which doesn't support WebM). Listed as <source> children
+// so the browser tries each in order and uses whichever it can actually decode.
+const LOGIN_BG_SOURCES = [
+    { src: "media/login-bg.webm", type: "video/webm" },
+    { src: "media/login-bg.mp4", type: "video/mp4" },
+];
 const LOGIN_BG_SPEED = 0.5; // login video playback speed (1 = original, 0.5 = half speed, 0.25 = very slow)
 const LOGIN_BG_POSTER = "media/login-bg-poster.jpg"; // shown instantly while the video loads / if autoplay is blocked
 function LoginBackground({ variant }) {
@@ -2178,23 +2187,33 @@ function LoginBackground({ variant }) {
             v.defaultPlaybackRate = LOGIN_BG_SPEED;
         }
         catch (e) { } };
-        applySpeed();
+        // Don't touch playbackRate or call play() before the browser has loaded
+        // metadata (readyState 0 = HAVE_NOTHING): on some Chromium builds, setting
+        // playbackRate or calling play() that early resets the in-flight network
+        // fetch for the video's own `autoplay` attribute, which the browser
+        // already started on mount - intermittently aborting it (seen as
+        // net::ERR_ABORTED or a MEDIA_ERR_SRC_NOT_SUPPORTED error) and permanently
+        // falling back to the animated background. Let `autoplay` do the initial
+        // play, and only apply the speed once metadata has actually loaded.
+        if (v.readyState > 0)
+            applySpeed();
         v.addEventListener("loadedmetadata", applySpeed);
         v.addEventListener("play", applySpeed);
-        const play = () => { applySpeed(); const p = v.play(); if (p && p.catch)
-            p.catch(() => { }); };
-        play();
         const onVis = () => { if (document.hidden)
             v.pause();
-        else
-            play(); };
+        else {
+            applySpeed();
+            const p = v.play();
+            if (p && p.catch)
+                p.catch(() => { });
+        } };
         document.addEventListener("visibilitychange", onVis);
         return () => { document.removeEventListener("visibilitychange", onVis); v.removeEventListener("loadedmetadata", applySpeed); v.removeEventListener("play", applySpeed); };
     }, [useVideo]);
     const layer = { position: "fixed", inset: 0, width: "100%", height: "100%", zIndex: 0 };
     return React.createElement(React.Fragment, null,
         useVideo
-            ? React.createElement("video", { ref: videoRef, src: LOGIN_BG_VIDEO, poster: LOGIN_BG_POSTER, autoPlay: true, muted: true, loop: true, playsInline: true, preload: "auto", "aria-hidden": "true", tabIndex: -1, onError: () => { console.warn('Login background video could not be loaded from "' + LOGIN_BG_VIDEO + '" - check that the media folder sits next to server.js and the server was restarted. Showing the animated fallback instead.'); setVideoFailed(true); }, style: { ...layer, objectFit: "cover", background: "#040a16", pointerEvents: "none" } })
+            ? React.createElement("video", { ref: videoRef, poster: LOGIN_BG_POSTER, autoPlay: true, muted: true, loop: true, playsInline: true, preload: "auto", "aria-hidden": "true", tabIndex: -1, onError: () => { console.warn('Login background video could not be loaded from any of: ' + LOGIN_BG_SOURCES.map((s) => s.src).join(', ') + ' - check that the media folder sits next to server.js and the server was restarted. Showing the animated fallback instead.'); setVideoFailed(true); }, style: { ...layer, objectFit: "cover", background: "#040a16", pointerEvents: "none" } }, LOGIN_BG_SOURCES.map((s) => React.createElement("source", { key: s.src, src: s.src, type: s.type })))
             : React.createElement("canvas", { ref: canvasRef, "aria-hidden": "true", style: { ...layer, display: "block" } }),
         React.createElement("div", { "aria-hidden": "true", style: { ...layer, pointerEvents: "none", background: "radial-gradient(ellipse at center, rgba(4,10,22,.62) 0%, rgba(4,10,22,.30) 62%, rgba(4,10,22,.48) 100%)" } }));
 }
