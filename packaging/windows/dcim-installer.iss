@@ -89,7 +89,8 @@ begin
   DbStrategyPage := CreateInputOptionPage(wpSelectDir,
     'Database Configuration', 'How should DCIM connect to a database?',
     'Choose one, then click Next. You can change this later by re-running Repair. ' +
-    '"Bundled" uses a private MariaDB instance (MySQL-compatible) that DCIM installs and manages for you.',
+    '"Bundled" installs and manages a private MariaDB instance for you - no separate database ' +
+    'software needed. The other option connects to a MySQL or MariaDB server you already have running.',
     True, False);
   DbStrategyPage.Add('Use a bundled, private database (recommended - MariaDB, installed automatically)');
   DbStrategyPage.Add('Connect to an existing MySQL / MariaDB server');
