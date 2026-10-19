@@ -13022,7 +13022,7 @@ function PduDiscoveryModal({ onClose, onDone }) {
         if (!rows.length) return;
         setAdding(true); setAddMsg("");
         try {
-            const payload = rows.map((r) => ({ site: r.site, zone: r.zone, rackNo: r.rackNo.trim(), feedLabel: r.feedLabel || "Feed A", ipAddress: r.ipAddress, vendor: r.detected.vendor, model: r.detected.model, serialNumber: r.detected.serialNumber, firmware: r.detected.firmware }));
+            const payload = rows.map((r) => ({ site: r.site, zone: r.zone, rackNo: r.rackNo.trim(), feedLabel: r.feedLabel || "Feed A", ipAddress: r.ipAddress, vendor: r.detected.vendor, model: r.detected.model, serialNumber: r.detected.serialNumber, firmware: r.detected.firmware, maxLoadKw: r.detected.maxLoadKw }));
             const res = await api.importPdus({ dryRun: false, rows: payload });
             setAddMsg(`Added ${res.counts.created} new PDU(s).`);
             if (onDone) onDone();
@@ -13057,13 +13057,14 @@ function PduDiscoveryModal({ onClose, onDone }) {
                     applyMsg && React.createElement("div", { key: "msg", style: { fontFamily: "Inter", fontSize: 12, color: "#244DE5", marginBottom: 8 } }, applyMsg),
                     React.createElement("div", { key: "tbl", style: { maxHeight: 220, overflow: "auto", border: "1px solid rgba(148,163,184,.3)", borderRadius: 10 } },
                         React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontFamily: "Inter", fontSize: 12 } }, [
-                            React.createElement("thead", { key: "thead" }, React.createElement("tr", null, [th(""), th("IP"), th("Site / Rack"), th("Detected Vendor / Model"), th("Serial")])),
+                            React.createElement("thead", { key: "thead" }, React.createElement("tr", null, [th(""), th("IP"), th("Site / Rack"), th("Detected Vendor / Model"), th("Serial"), th("Max Load")])),
                             React.createElement("tbody", { key: "tbody" }, c.enrichable.map((e) => React.createElement("tr", { key: e.id, style: { borderTop: "1px solid #F1F5F9" } }, [
                                 React.createElement("td", { key: "cb", style: { padding: "6px 10px" } }, React.createElement("input", { type: "checkbox", checked: selectedEnrich.has(e.id), onChange: () => toggleEnrich(e.id) })),
                                 React.createElement("td", { key: "ip", style: { padding: "6px 10px", fontFamily: "'JetBrains Mono'" } }, e.ipAddress),
                                 React.createElement("td", { key: "loc", style: { padding: "6px 10px" } }, e.site + " · Rack " + e.rackNo + " · " + e.feedLabel),
                                 React.createElement("td", { key: "vm", style: { padding: "6px 10px" } }, [e.detected.vendor, e.detected.model].filter(Boolean).join(" — ") || "—"),
                                 React.createElement("td", { key: "sn", style: { padding: "6px 10px", fontFamily: "'JetBrains Mono'" } }, e.detected.serialNumber || "—"),
+                                React.createElement("td", { key: "ml", style: { padding: "6px 10px" } }, e.current.maxLoadKw ? e.current.maxLoadKw + " kW (set)" : (e.detected.maxLoadKw != null ? e.detected.maxLoadKw.toFixed(2) + " kW" : "— n/a for this vendor")),
                             ]))),
                         ])),
                 ]),
@@ -13076,12 +13077,13 @@ function PduDiscoveryModal({ onClose, onDone }) {
                     addMsg && React.createElement("div", { key: "msg", style: { fontFamily: "Inter", fontSize: 12, color: "#244DE5", marginBottom: 8 } }, addMsg),
                     React.createElement("div", { key: "tbl", style: { maxHeight: 260, overflow: "auto", border: "1px solid rgba(148,163,184,.3)", borderRadius: 10 } },
                         React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontFamily: "Inter", fontSize: 12 } }, [
-                            React.createElement("thead", { key: "thead" }, React.createElement("tr", null, [th(""), th("IP"), th("Site / Zone"), th("Detected"), th("Rack No *"), th("Feed Label")])),
+                            React.createElement("thead", { key: "thead" }, React.createElement("tr", null, [th(""), th("IP"), th("Site / Zone"), th("Detected"), th("Max Load"), th("Rack No *"), th("Feed Label")])),
                             React.createElement("tbody", { key: "tbody" }, newRows.map((r, idx) => React.createElement("tr", { key: r.ipAddress, style: { borderTop: "1px solid #F1F5F9" } }, [
                                 React.createElement("td", { key: "cb", style: { padding: "6px 10px" } }, React.createElement("input", { type: "checkbox", checked: r.selected, onChange: () => setNewRow(idx, { selected: !r.selected }) })),
                                 React.createElement("td", { key: "ip", style: { padding: "6px 10px", fontFamily: "'JetBrains Mono'" } }, r.ipAddress),
                                 React.createElement("td", { key: "loc", style: { padding: "6px 10px" } }, r.site + " · " + r.zone),
                                 React.createElement("td", { key: "vm", style: { padding: "6px 10px" } }, [r.detected.vendor, r.detected.model].filter(Boolean).join(" — ") || "—"),
+                                React.createElement("td", { key: "ml", style: { padding: "6px 10px" } }, r.detected.maxLoadKw != null ? r.detected.maxLoadKw.toFixed(2) + " kW" : "—"),
                                 React.createElement("td", { key: "rk", style: { padding: "6px 10px" } }, React.createElement("input", { className: "neu-input", style: { width: 80, padding: "4px 7px", fontSize: 12 }, value: r.rackNo, placeholder: "e.g. 12", onChange: (e) => setNewRow(idx, { rackNo: e.target.value, selected: true }) })),
                                 React.createElement("td", { key: "fl", style: { padding: "6px 10px" } }, React.createElement(ThemedSelect, { value: r.feedLabel, onChange: (e) => setNewRow(idx, { feedLabel: e.target.value }), className: "neu-input", style: { fontSize: 12, minWidth: 90 } }, ["Feed A", "Feed B"].map((f) => React.createElement("option", { key: f, value: f }, f)))),
                             ]))),
@@ -13136,9 +13138,11 @@ function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
                 if (r.model) next.model = r.model;
                 if (r.serialNumber) next.serialNumber = r.serialNumber;
                 if (r.firmware) next.firmware = r.firmware;
+                if (r.maxLoadKw != null && !String(form.maxLoadKw || "").trim()) next.maxLoadKw = String(Math.round(r.maxLoadKw * 100) / 100);
                 setForm((f) => ({ ...f, ...next }));
                 setDetectedFields(next);
-                setDetectMsg({ type: "success", text: "Device reachable - fields below were auto-filled from SNMP (sysDescr/sysName), which varies by vendor. Review and correct anything before saving. Max Load is never auto-detected - set it manually." });
+                const maxLoadLine = next.maxLoadKw ? ` Max Load was also auto-filled (${r.maxLoadNote || "from this vendor's SNMP capacity value"}) - double-check it against the nameplate.` : (r.maxLoadNote ? ` Max Load: ${r.maxLoadNote}` : " Max Load isn't auto-detectable for this vendor - set it manually.");
+                setDetectMsg({ type: "success", text: "Device reachable - fields below were auto-filled from SNMP (sysDescr/sysName), which varies by vendor. Review and correct anything before saving." + maxLoadLine });
             }
             else {
                 setDetectMsg({ type: "error", text: r.error || "Could not reach the device." });

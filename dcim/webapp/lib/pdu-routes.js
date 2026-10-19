@@ -138,6 +138,51 @@ function guessFirmware(descr) {
   return m ? m[1] : null;
 }
 
+// Rated/Max Load capacity. Unlike power_oid (polled every cycle, since the live
+// reading changes), this is a fixed, nameplate-style value - fetched once to seed
+// max_load_kw, with the same never-overwrite rule as every other auto-fill in this
+// module (only fills the column when it is currently blank). Sourced with the same
+// discipline as VENDOR_OID_PRESETS: only wired up where a MIB reference could be
+// found and reasonably corroborated; a vendor with nothing confirmed is left out
+// entirely here, same as "none" in the preset catalog - Max Load stays manual-entry
+// for those (Raritan, Vertiv/Geist, CyberPower, and APC's older rPDU1/Metered family).
+const MAX_LOAD_BY_VENDOR = {
+  Eaton: {
+    confidence: 'high',
+    note: 'pduRatingVA (EATON-PDU-MIB) - the full VA rating of the whole PDU across all phases. Treated as kW (VA and Watts are numerically close for typical IT power factors near 1.0) - verify if your fleet runs a notably lower power factor.',
+    fetch: async (ip, community) => {
+      const out = await snmpGet(ip, community, ['1.3.6.1.4.1.534.6.6.4.1.1.1.1'], DISCOVERY_TIMEOUT_MS);
+      const va = parseFloat(out['1.3.6.1.4.1.534.6.6.4.1.1.1.1']);
+      return Number.isFinite(va) && va > 0 ? va / 1000 : null;
+    },
+  },
+  'Server Technology': {
+    confidence: 'high',
+    note: "infeedCapacity (Amps) x infeedVoltage (tenths of Volts) from Server Technology's own Sentry3 MIB, same infeed #1 index as the Power OID preset - if your unit has more than one power infeed, this may need the correct infeed index from an snmpwalk.",
+    fetch: async (ip, community) => {
+      const out = await snmpGet(ip, community, ['1.3.6.1.4.1.1718.3.2.2.1.10.1.1', '1.3.6.1.4.1.1718.3.2.2.1.11.1.1'], DISCOVERY_TIMEOUT_MS);
+      const amps = parseFloat(out['1.3.6.1.4.1.1718.3.2.2.1.10.1.1']);
+      const deciVolts = parseFloat(out['1.3.6.1.4.1.1718.3.2.2.1.11.1.1']);
+      if (!Number.isFinite(amps) || amps < 0 || !Number.isFinite(deciVolts) || deciVolts <= 0) return null;
+      return (amps * (deciVolts / 10)) / 1000;
+    },
+  },
+  APC: {
+    confidence: 'medium',
+    note: "rPDU2DeviceConfigOverloadPowerThreshold (PowerNet-MIB, tenths of kW) - the overload alarm threshold the unit was configured with. A reasonable proxy for rated capacity, not a guaranteed nameplate value: it is admin-configurable, may differ from the datasheet rating, isn't available on older rPDU1/Metered-only units, and this exact OID could not be independently confirmed against APC's own MIB file. Verify with snmpwalk against your unit and correct if needed.",
+    fetch: async (ip, community) => {
+      const out = await snmpGet(ip, community, ['1.3.6.1.4.1.318.1.1.26.4.1.1.9.0'], DISCOVERY_TIMEOUT_MS);
+      const tenthsKw = parseFloat(out['1.3.6.1.4.1.318.1.1.26.4.1.1.9.0']);
+      return Number.isFinite(tenthsKw) && tenthsKw > 0 ? tenthsKw / 10 : null;
+    },
+  },
+};
+async function detectMaxLoadKw(vendor, ip, community) {
+  const cfg = MAX_LOAD_BY_VENDOR[vendor];
+  if (!cfg) return null;
+  try { return await cfg.fetch(ip, community); } catch (e) { return null; }
+}
+
 function snmpGet(ip, community, oids, timeout) {
   return new Promise((resolve, reject) => {
     let session;
@@ -338,7 +383,7 @@ module.exports = function registerPduRoutes(app, deps) {
           site, zone: clean(r.zone, 20) || 'AZ-1', rackType: clean(r.rackType, 50) || null, rackNo, feedLabel, ipAddress: ip,
           vendor: clean(r.vendor, 50) || null, model: clean(r.model, 150) || null, serialNumber: clean(r.serialNumber, 150) || null,
           firmware: clean(r.firmware, 100) || null, phase: String(r.phase || '').trim() === '3-Phase' ? '3-Phase' : 'Single-Phase',
-          maxLoadKw: r.maxLoadKw !== undefined && r.maxLoadKw !== '' && !isNaN(Number(r.maxLoadKw)) ? Number(r.maxLoadKw) : null,
+          maxLoadKw: r.maxLoadKw != null && r.maxLoadKw !== '' && !isNaN(Number(r.maxLoadKw)) ? Number(r.maxLoadKw) : null,
           snmpCommunity: clean(r.snmpCommunity, 100) || 'public', powerOid: clean(r.powerOid, 100) || null,
           powerScale: r.powerScale !== undefined && r.powerScale !== '' && !isNaN(Number(r.powerScale)) ? Number(r.powerScale) : 1,
         });
@@ -384,13 +429,15 @@ module.exports = function registerPduRoutes(app, deps) {
       const out = await snmpGet(ipAddress, snmpCommunity || 'public', [OID_SYS_DESCR, OID_SYS_NAME]);
       const descr = out[OID_SYS_DESCR] != null ? String(out[OID_SYS_DESCR]) : '';
       const name = out[OID_SYS_NAME] != null ? String(out[OID_SYS_NAME]) : '';
+      const vendor = guessVendor(descr);
+      const maxLoadCfg = vendor && MAX_LOAD_BY_VENDOR[vendor];
+      const maxLoadKw = maxLoadCfg ? await detectMaxLoadKw(vendor, ipAddress, snmpCommunity || 'public') : null;
       res.json({
         reachable: true,
-        vendor: guessVendor(descr),
-        model: descr || null,
-        serialNumber: name || null,
-        firmware: guessFirmware(descr),
-        note: 'Vendor/Model/Firmware are parsed from the device\'s generic SNMP sysDescr/sysName, which varies by vendor and is not always reliable - review and correct every field before saving. Live wattage polling additionally needs a Power OID from this model\'s vendor MIB/datasheet (set it in the Power OID field); without one, this PDU is still monitored for online/offline reachability only.',
+        vendor, model: descr || null, serialNumber: name || null, firmware: guessFirmware(descr),
+        maxLoadKw,
+        maxLoadNote: maxLoadCfg ? (maxLoadKw != null ? `Max Load detected via ${maxLoadCfg.confidence} confidence source: ${maxLoadCfg.note}` : `Could not read a rated-capacity value from this device right now - ${maxLoadCfg.note}`) : null,
+        note: 'Vendor/Model/Firmware are parsed from the device\'s generic SNMP sysDescr/sysName, which varies by vendor and is not always reliable - review and correct every field before saving. Max Load is only auto-filled for a handful of vendors with a confirmed SNMP capacity value (see maxLoadNote); for everything else it stays manual. Live wattage polling additionally needs a Power OID from this model\'s vendor MIB/datasheet (set it in the Power OID field); without one, this PDU is still monitored for online/offline reachability only.',
       });
     } catch (e) {
       res.json({ reachable: false, error: 'Could not reach ' + ipAddress + ' via SNMP (' + (e && e.message || 'timeout') + '). Check the IP, that SNMP is enabled on the device, and the community string.' });
@@ -423,7 +470,9 @@ module.exports = function registerPduRoutes(app, deps) {
           const out = await snmpGet(h.ip, community, [OID_SYS_DESCR, OID_SYS_NAME], DISCOVERY_TIMEOUT_MS);
           const descr = out[OID_SYS_DESCR] != null ? String(out[OID_SYS_DESCR]) : '';
           const name = out[OID_SYS_NAME] != null ? String(out[OID_SYS_NAME]) : '';
-          return { ...h, reachable: true, detected: { vendor: guessVendor(descr), model: descr || null, serialNumber: name || null, firmware: guessFirmware(descr) } };
+          const vendor = guessVendor(descr);
+          const maxLoadKw = vendor && MAX_LOAD_BY_VENDOR[vendor] ? await detectMaxLoadKw(vendor, h.ip, community) : null;
+          return { ...h, reachable: true, detected: { vendor, model: descr || null, serialNumber: name || null, firmware: guessFirmware(descr), maxLoadKw } };
         } catch (e) { return { ...h, reachable: false }; }
       });
 
@@ -433,8 +482,8 @@ module.exports = function registerPduRoutes(app, deps) {
         const existing = byIp.get(r.ip);
         if (existing) {
           if (!r.reachable) { unreachable.push({ id: existing.id, ipAddress: r.ip, site: existing.site, zone: existing.zone, rackNo: existing.rack_no, feedLabel: existing.feed_label }); continue; }
-          const missing = !existing.vendor || !existing.model || !existing.serial_number || !existing.firmware;
-          if (missing) enrichable.push({ id: existing.id, ipAddress: r.ip, site: existing.site, zone: existing.zone, rackNo: existing.rack_no, feedLabel: existing.feed_label, current: { vendor: existing.vendor, model: existing.model, serialNumber: existing.serial_number, firmware: existing.firmware }, detected: r.detected });
+          const missing = !existing.vendor || !existing.model || !existing.serial_number || !existing.firmware || (!existing.max_load_kw && r.detected.maxLoadKw != null);
+          if (missing) enrichable.push({ id: existing.id, ipAddress: r.ip, site: existing.site, zone: existing.zone, rackNo: existing.rack_no, feedLabel: existing.feed_label, current: { vendor: existing.vendor, model: existing.model, serialNumber: existing.serial_number, firmware: existing.firmware, maxLoadKw: existing.max_load_kw }, detected: r.detected });
           else alreadyComplete++;
         } else if (r.reachable) {
           newFound.push({ ipAddress: r.ip, site: r.site, zone: r.zone, detected: r.detected });
@@ -459,11 +508,16 @@ module.exports = function registerPduRoutes(app, deps) {
           const out = await snmpGet(pdu.ip_address, pdu.snmp_community || community, [OID_SYS_DESCR, OID_SYS_NAME], DISCOVERY_TIMEOUT_MS);
           const descr = out[OID_SYS_DESCR] != null ? String(out[OID_SYS_DESCR]) : '';
           const name = out[OID_SYS_NAME] != null ? String(out[OID_SYS_NAME]) : '';
-          const detected = { vendor: guessVendor(descr), model: descr || null, serialNumber: name || null, firmware: guessFirmware(descr) };
+          const vendor = guessVendor(descr);
+          const detected = { vendor, model: descr || null, serialNumber: name || null, firmware: guessFirmware(descr) };
+          const vendorForCapacity = pdu.vendor || vendor;
+          const maxLoadKw = !pdu.max_load_kw && vendorForCapacity && MAX_LOAD_BY_VENDOR[vendorForCapacity]
+            ? await detectMaxLoadKw(vendorForCapacity, pdu.ip_address, pdu.snmp_community || community) : null;
           await pool.query(
             `UPDATE pdus SET vendor = COALESCE(NULLIF(vendor,''), ?), model = COALESCE(NULLIF(model,''), ?),
-               serial_number = COALESCE(NULLIF(serial_number,''), ?), firmware = COALESCE(NULLIF(firmware,''), ?) WHERE id = ?`,
-            [detected.vendor, detected.model, detected.serialNumber, detected.firmware, id]
+               serial_number = COALESCE(NULLIF(serial_number,''), ?), firmware = COALESCE(NULLIF(firmware,''), ?),
+               max_load_kw = COALESCE(max_load_kw, ?) WHERE id = ?`,
+            [detected.vendor, detected.model, detected.serialNumber, detected.firmware, maxLoadKw, id]
           );
           auditLog(req, 'PDU_DISCOVER_APPLY', { entity: 'pdu', entityId: id, site: pdu.site });
           return { id, applied: true };
@@ -483,13 +537,23 @@ module.exports = function registerPduRoutes(app, deps) {
   async function pollOne(pdu) {
     const oids = [OID_SYS_DESCR, OID_SYS_NAME];
     if (pdu.power_oid) oids.push(pdu.power_oid);
-    let status = 'offline', lastError = null, powerKw = null, detected = null;
+    let status = 'offline', lastError = null, powerKw = null, detected = null, detectedMaxLoadKw = null;
     try {
       const out = await snmpGet(pdu.ip_address, pdu.snmp_community || 'public', oids);
       status = 'online';
       const descr = out[OID_SYS_DESCR] != null ? String(out[OID_SYS_DESCR]) : '';
       const name = out[OID_SYS_NAME] != null ? String(out[OID_SYS_NAME]) : '';
       detected = { vendor: guessVendor(descr), model: descr || null, serialNumber: name || null, firmware: guessFirmware(descr) };
+      // Max Load is a fixed, nameplate-style value, so only worth the extra SNMP round
+      // trip while it's still blank - once filled (by this, Edit PDU, or Discover) it's
+      // never re-fetched. Uses the DB's own vendor if already known, falling back to
+      // what sysDescr just identified for a brand-new PDU on its very first poll.
+      if (!pdu.max_load_kw) {
+        const vendorForCapacity = pdu.vendor || detected.vendor;
+        if (vendorForCapacity && MAX_LOAD_BY_VENDOR[vendorForCapacity]) {
+          detectedMaxLoadKw = await detectMaxLoadKw(vendorForCapacity, pdu.ip_address, pdu.snmp_community || 'public');
+        }
+      }
       if (pdu.power_oid) {
         const raw = out[pdu.power_oid];
         const n = typeof raw === 'number' ? raw : parseFloat(raw);
@@ -514,9 +578,10 @@ module.exports = function registerPduRoutes(app, deps) {
       await pool.query(
         `UPDATE pdus SET status=?, last_power_kw=?, last_reading_at=NOW(), last_error=?,
            vendor = COALESCE(NULLIF(vendor,''), ?), model = COALESCE(NULLIF(model,''), ?),
-           serial_number = COALESCE(NULLIF(serial_number,''), ?), firmware = COALESCE(NULLIF(firmware,''), ?)
+           serial_number = COALESCE(NULLIF(serial_number,''), ?), firmware = COALESCE(NULLIF(firmware,''), ?),
+           max_load_kw = COALESCE(max_load_kw, ?)
          WHERE id=?`,
-        [status, powerKw, lastError, detected.vendor, detected.model, detected.serialNumber, detected.firmware, pdu.id]
+        [status, powerKw, lastError, detected.vendor, detected.model, detected.serialNumber, detected.firmware, detectedMaxLoadKw, pdu.id]
       );
     } else {
       await pool.query(
