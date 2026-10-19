@@ -83,8 +83,8 @@ begin
     else if ResultCode <> 0 then
     begin
       ReportInstallFailure('The repair did not finish successfully (install.ps1 exited with code ' + IntToStr(ResultCode) +
-        '). Re-run install.ps1 -Mode repair manually from an elevated PowerShell prompt in ' +
-        ExpandConstant('{app}') + ' to see the full error and retry.');
+        '). See ' + ExpandConstant('{app}') + '\install.log for the full error, or re-run install.ps1 -Mode repair ' +
+        'manually from an elevated PowerShell prompt in ' + ExpandConstant('{app}') + ' to see it live and retry.');
     end;
   end;
 end;

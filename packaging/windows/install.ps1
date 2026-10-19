@@ -44,6 +44,15 @@ $EmbeddedDbServiceName = "DCIMMariaDB"
 function Log($msg)  { Write-Host "[dcim-install] $msg" }
 function Die($msg)  { Write-Error "[dcim-install] ERROR: $msg"; exit 1 }
 
+# Exec()'d from Inno Setup's [Code] section, console output isn't captured
+# anywhere - a failure surfaced only as an exit code with no detail. Always
+# write a transcript so install.ps1's own log file (not just Setup's own
+# Log()'d one-liner) is there to read after any failure, interactive or not.
+try {
+  New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+  Start-Transcript -Path (Join-Path $InstallDir "install.log") -Append -ErrorAction SilentlyContinue | Out-Null
+} catch { }
+
 function Test-ExistingInstall {
   (Test-Path (Join-Path $InstallDir "webapp\.env"))
 }
@@ -178,24 +187,49 @@ function Sync-Payload {
   Log "Syncing application files to $InstallDir\webapp ..."
   New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
   $dest = Join-Path $InstallDir "webapp"
-  robocopy $PayloadWebapp $dest /MIR /XD uploads backups logs /XF .env /NFL /NDL /NJH /NJS | Out-Null
-  # robocopy's exit codes are a bitmask, not a plain success/failure flag:
-  # 0-7 all mean success (0 = nothing to do, 1 = files copied, etc., combined
-  # by addition); only 8 and above indicate a real failure (e.g. a file
-  # locked by antivirus or a stale process). $ErrorActionPreference = "Stop"
-  # does not make a non-zero exit from a native command terminate the
-  # script, so this was previously never checked at all - a failed copy here
-  # left Install-WindowsService/Wait-ForHealth proceeding as if the (possibly
-  # stale or partial) webapp files were correct.
-  if ($LASTEXITCODE -ge 8) { Die "robocopy failed copying the application files to $dest (exit $LASTEXITCODE)." }
+  New-Item -ItemType Directory -Force -Path $dest | Out-Null
+  # Found via real execution of the COMPILED installer (never caught by any
+  # install.ps1-direct CI job): when install.ps1 runs from inside the
+  # install directory itself - exactly how every real customer runs it,
+  # since Inno Setup places install.ps1 at {app} alongside the webapp
+  # payload it already deployed via [Files] - $PayloadWebapp ("$ScriptDir\
+  # webapp") and $dest ("$InstallDir\webapp") resolve to the literal same
+  # folder. robocopy refuses to /MIR a directory onto itself and exits with
+  # a serious-error code, which Die'd here before .env, the service, or
+  # INSTALL-SUMMARY.txt were ever created. Every install.ps1-direct CI job
+  # runs the script from the repo checkout, where the fallback
+  # "..\..\dcim\webapp" source differs from the destination, so this path
+  # was never exercised until a test actually ran the compiled .exe.
+  $srcFull = (Resolve-Path $PayloadWebapp).Path.TrimEnd('\')
+  $destFull = (Resolve-Path $dest).Path.TrimEnd('\')
+  if ($srcFull -ieq $destFull) {
+    Log "Application payload is already staged directly at $dest; nothing to copy."
+  } else {
+    robocopy $PayloadWebapp $dest /MIR /XD uploads backups logs /XF .env /NFL /NDL /NJH /NJS | Out-Null
+    # robocopy's exit codes are a bitmask, not a plain success/failure flag:
+    # 0-7 all mean success (0 = nothing to do, 1 = files copied, etc.,
+    # combined by addition); only 8 and above indicate a real failure (e.g. a
+    # file locked by antivirus or a stale process). $ErrorActionPreference =
+    # "Stop" does not make a non-zero exit from a native command terminate
+    # the script, so this was previously never checked at all - a failed
+    # copy here left Install-WindowsService/Wait-ForHealth proceeding as if
+    # the (possibly stale or partial) webapp files were correct.
+    if ($LASTEXITCODE -ge 8) { Die "robocopy failed copying the application files to $dest (exit $LASTEXITCODE)." }
+  }
   foreach ($d in "uploads", "backups", "logs") {
     New-Item -ItemType Directory -Force -Path (Join-Path $dest $d) | Out-Null
   }
   if (Test-Path $PayloadRuntime) {
     $rtDest = Join-Path $InstallDir "runtime\node"
-    New-Item -ItemType Directory -Force -Path (Split-Path $rtDest) | Out-Null
-    robocopy $PayloadRuntime $rtDest /MIR /NFL /NDL /NJH /NJS | Out-Null
-    if ($LASTEXITCODE -ge 8) { Die "robocopy failed copying the Node.js runtime to $rtDest (exit $LASTEXITCODE)." }
+    New-Item -ItemType Directory -Force -Path $rtDest | Out-Null
+    $rtSrcFull = (Resolve-Path $PayloadRuntime).Path.TrimEnd('\')
+    $rtDestFull = (Resolve-Path $rtDest).Path.TrimEnd('\')
+    if ($rtSrcFull -ieq $rtDestFull) {
+      Log "Node.js runtime is already staged directly at $rtDest; nothing to copy."
+    } else {
+      robocopy $PayloadRuntime $rtDest /MIR /NFL /NDL /NJH /NJS | Out-Null
+      if ($LASTEXITCODE -ge 8) { Die "robocopy failed copying the Node.js runtime to $rtDest (exit $LASTEXITCODE)." }
+    }
   }
 }
 
@@ -647,9 +681,16 @@ function Invoke-Repair {
   Show-Summary
 }
 
-Select-Mode
-switch ($Mode) {
-  "install" { Invoke-Install }
-  "upgrade" { Invoke-Upgrade }
-  "repair"  { Invoke-Repair }
+try {
+  Select-Mode
+  switch ($Mode) {
+    "install" { Invoke-Install }
+    "upgrade" { Invoke-Upgrade }
+    "repair"  { Invoke-Repair }
+  }
+} finally {
+  # Die() calls exit 1 from inside a try block; PowerShell still runs finally
+  # before the process actually exits, so the transcript is always closed
+  # and flushed to disk, success or failure.
+  try { Stop-Transcript | Out-Null } catch { }
 }

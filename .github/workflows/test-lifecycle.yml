@@ -478,6 +478,8 @@ jobs:
           if (Test-Path C:\DCIM\webapp\.env) { (Get-Content C:\DCIM\webapp\.env) -replace '(PASSWORD|SECRET)=.*', '$1=[redacted]' } else { Write-Host "MISSING" }
           Write-Host "--- C:\DCIM\INSTALL-SUMMARY.txt ---"
           if (Test-Path C:\DCIM\INSTALL-SUMMARY.txt) { Get-Content C:\DCIM\INSTALL-SUMMARY.txt } else { Write-Host "MISSING" }
+          Write-Host "--- C:\DCIM\install.log (install.ps1's own transcript - Exec() from [Code] doesn't capture console output, so this is the only place its real error ever shows up) ---"
+          if (Test-Path C:\DCIM\install.log) { Get-Content C:\DCIM\install.log } else { Write-Host "MISSING" }
 
       - name: Verify the installer actually configured everything (not just a successful-looking exit code)
         shell: pwsh

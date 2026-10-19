@@ -302,8 +302,8 @@ begin
     begin
       ReportInstallFailure('DCIM setup did not finish successfully (install.ps1 exited with code ' + IntToStr(ResultCode) +
         '). .env, the database, and the Windows services may not be fully configured. ' +
-        'Re-run install.ps1 manually from an elevated PowerShell prompt in ' + ExpandConstant('{app}') +
-        ' to see the full error and retry.');
+        'See ' + ExpandConstant('{app}') + '\install.log for the full error, or re-run install.ps1 manually ' +
+        'from an elevated PowerShell prompt in ' + ExpandConstant('{app}') + ' to see it live and retry.');
     end;
   end;
 end;
