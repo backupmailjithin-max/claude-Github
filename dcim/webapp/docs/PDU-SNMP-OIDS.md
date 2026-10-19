@@ -1,10 +1,12 @@
-# PDU SNMP Power OID Reference
+# PDU SNMP OID Reference
 
-This is the sourcing record behind the vendor preset list returned by
-`GET /api/pdus/vendor-presets` and defined in `lib/pdu-routes.js`
-(`VENDOR_OID_PRESETS`). It exists so nobody has to re-research where each
-OID came from, and so a wrong value is a change you can trace back to a
-source rather than something re-derived from memory.
+This is the sourcing record behind two things defined in `lib/pdu-routes.js`:
+the vendor preset list returned by `GET /api/pdus/vendor-presets`
+(`VENDOR_OID_PRESETS` — live power draw, polled every cycle) and the
+Max Load auto-detect table (`MAX_LOAD_BY_VENDOR` — a fixed, nameplate-style
+value, fetched once to seed `max_load_kw`). It exists so nobody has to
+re-research where each OID came from, and so a wrong value is a change you
+can trace back to a source rather than something re-derived from memory.
 
 **Why this matters**: the PDU feature polls each unit's configured Power OID
 over SNMP and reports the result as live kW on the Dashboard and PDU Power
@@ -30,6 +32,20 @@ column exists instead of guessing from the magnitude of the number.
 | `vertiv-geist` | Vertiv / Geist | rPDU (all families) | — (none) | — | None | Vertiv ships a model-specific MIB per rPDU family (available from vertiv.com support for the exact model). No single OID is correct across the range — use `snmptranslate`/`snmpwalk` against the right MIB to find the active-power object, then enter it manually. |
 | `cyberpower` | CyberPower | PDU (all families) | — (none) | — | None | No confirmed total-power OID across the CyberPower PDU range. Download the MIB from CyberPower's product support page for the exact model and confirm with `snmpwalk`, then enter it manually. |
 | `other` | — | Other / Not Listed | — (none) | ×1 | None | Catch-all for any brand/model not listed above. Enter everything manually, or leave Power OID blank to monitor reachability only (no wattage). |
+
+## Max Load / Rated Capacity entries (`MAX_LOAD_BY_VENDOR`)
+
+Unlike the Power OID above (polled every cycle, since the live reading
+changes continuously), Max Load is a fixed, nameplate-style value — fetched
+**once** to seed `max_load_kw` when it's blank, never re-fetched once set,
+and never overwritten by anything the admin already entered.
+
+| Vendor | OID(s) | How it's computed | Confidence | Source |
+|---|---|---|---|---|
+| Eaton | `1.3.6.1.4.1.534.6.6.4.1.1.1.1` (`pduRatingVA`, EATON-PDU-MIB) | `raw VA ÷ 1000 = kW` (VA and Watts are numerically close for typical IT power factors near 1.0 — not exact if your fleet runs a notably lower power factor) | High | The whole PDU's VA rating across all phases, scalar, no index needed. |
+| Server Technology (Sentry3) | `1.3.6.1.4.1.1718.3.2.2.1.10.1.1` (`infeedCapacity`, Amps) **and** `1.3.6.1.4.1.1718.3.2.2.1.11.1.1` (`infeedVoltage`, tenths of Volts) | `Amps × (deciVolts ÷ 10) ÷ 1000 = kW` | High | Both values come from the device itself (same infeed `.1.1` index as the Power OID preset), so no voltage assumption is needed — confirmed computation, not a guess. Units with more than one power infeed may need the correct infeed index from an `snmpwalk`. |
+| APC / Schneider (rPDU2) | `1.3.6.1.4.1.318.1.1.26.4.1.1.9.0` (`rPDU2DeviceConfigOverloadPowerThreshold`, tenths of kW) | `raw ÷ 10 = kW` | Medium | This is the overload-alarm threshold the unit was *configured* with — a reasonable proxy for rated capacity, but admin-configurable and not guaranteed to match the datasheet nameplate rating. This exact OID could not be independently verified against APC's own MIB file (fetching it was blocked by this environment's network policy); corroborated instead via two independent third-party searches landing on the same table/column. Confirm with `snmpwalk` against your own unit before trusting it at scale, and not available on older rPDU1/Metered-only units. |
+| Raritan / Legrand, Vertiv / Geist, CyberPower, APC rPDU1/Metered | — (none) | — | None | No confirmed rated-capacity OID found — same as their Power OID preset entries. Max Load stays manual-entry for these; enter it from the nameplate. |
 
 ## Market note: India vs. worldwide
 
