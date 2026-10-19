@@ -46,16 +46,22 @@ Name: "{app}\webapp\logs"
 
 [Icons]
 ; install.ps1/dcim-upgrade.ps1/dcim-repair.ps1 all start with
-; #Requires -RunAsAdministrator, so a double-click of these shortcuts needs
-; "Flags: runas" to actually elevate (Windows then shows the UAC prompt) -
-; without it, PowerShell rejects the script instantly, and without -NoExit
-; the console window closes before that rejection is even visible. Found via
-; review after the same root issue (a non-elevated launch of an
-; admin-required script) had already caused one silent "looks successful but
-; did nothing" failure in the installer's own [Run] step (commit 0250bac).
-Name: "{group}\DCIM Setup"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\install.ps1"" -InstallDir ""{app}"""; Flags: runas
-Name: "{group}\DCIM Upgrade Utility"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\dcim-upgrade.ps1"" -InstallDir ""{app}"""; Flags: runas
-Name: "{group}\DCIM Repair Utility"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\dcim-repair.ps1"" -InstallDir ""{app}"""; Flags: runas
+; #Requires -RunAsAdministrator. Inno Setup's [Icons] section has no "run
+; elevated" flag ("runas" is not valid here - confirmed by ISCC rejecting it
+; outright; that flag only exists in a different sense for [Run] entries),
+; and the correct way to make a .lnk request elevation (patching a specific
+; bit in the shortcut file after SHCreateShellLink creates it) is its own
+; untested bit of Pascal Script, not worth adding sight-unseen right now.
+; What IS fixed here: without -NoExit, a rejection from #Requires was
+; invisible - the console flashed and closed before anyone could read it,
+; which is the exact same "looks successful but did nothing" symptom as a
+; prior silent failure (commit 0250bac). Now the window stays open and the
+; real PowerShell error ("this script requires administrator privileges")
+; is readable, telling you to right-click the shortcut -> "Run as
+; administrator" instead of looking like nothing happened at all.
+Name: "{group}\DCIM Setup"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\install.ps1"" -InstallDir ""{app}"""
+Name: "{group}\DCIM Upgrade Utility"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\dcim-upgrade.ps1"" -InstallDir ""{app}"""
+Name: "{group}\DCIM Repair Utility"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\dcim-repair.ps1"" -InstallDir ""{app}"""
 Name: "{group}\DCIM Service Status"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\dcim-service.ps1"" -Action status"
 Name: "{group}\DCIM Configuration Wizard"; Filename: "{code:GetAppUrl}setup-wizard.html"
 Name: "{group}\DCIM Deployment Dashboard"; Filename: "{code:GetAppUrl}deployment-dashboard.html"
