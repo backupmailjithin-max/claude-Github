@@ -283,17 +283,28 @@ jobs:
       - name: Stage bundled MariaDB runtime
         run: bash packaging/linux/fetch-mariadb-runtime.sh packaging/linux/runtime
 
+      - name: Reject --db-user root for the embedded database (real collision found via execution)
+        run: |
+          # "root" collides with the embedded engine's own admin account:
+          # a TCP connection to 127.0.0.1 gets authenticated by MariaDB
+          # against 'root'@'localhost' (this script's own maintenance
+          # account, re-passworded separately) instead of 'root'@'127.0.0.1',
+          # so the app ends up using the wrong password no matter how the
+          # SQL is written - confirmed by a real install that chose "root"
+          # and got Access Denied. install.sh now rejects it outright;
+          # verify that rejection stays in place rather than regressing
+          # back to a silent Access Denied failure later.
+          if sudo bash packaging/linux/install.sh --mode install --yes --embedded-db --port 18975 \
+            --db-user root --admin-user ciadmin --admin-password 'CiAdminPass123!'; then
+            echo "::error::install.sh accepted --db-user root for the embedded DB - this should have been rejected."
+            exit 1
+          fi
+          echo "Correctly rejected --db-user root."
+
       - name: Install (fresh, --embedded-db, no external MySQL/MariaDB present)
         run: |
-          # --db-user root deliberately: this is the exact collision that
-          # caused a real bug - mariadb-install-db's own bootstrap already
-          # creates 'root'@'127.0.0.1', so CREATE USER IF NOT EXISTS silently
-          # no-ops and the real account keeps its original (blank) password,
-          # unrelated to whatever got written to .env. Exercising it here so
-          # a regression shows up as a failed health check, not a real
-          # customer hitting ERR_CONNECTION_REFUSED with no visible error.
           sudo bash packaging/linux/install.sh --mode install --yes --embedded-db --port 18975 \
-            --db-user root --admin-user ciadmin --admin-password 'CiAdminPass123!'
+            --admin-user ciadmin --admin-password 'CiAdminPass123!'
 
       - name: Diagnostics (always, even on failure)
         if: always()
@@ -364,17 +375,25 @@ jobs:
         shell: pwsh
         run: packaging\windows\fetch-mariadb-runtime.ps1
 
+      - name: Reject -DbUser root for the embedded database (real collision found via execution)
+        shell: pwsh
+        # "root" collides with the embedded engine's own admin account: a
+        # TCP connection to 127.0.0.1 gets authenticated by MariaDB against
+        # 'root'@'localhost' (this script's own maintenance account,
+        # re-passworded separately) instead of 'root'@'127.0.0.1', so the
+        # app ends up using the wrong password no matter how the SQL is
+        # written - confirmed by a real install that chose "root" and got
+        # Access Denied. install.js now rejects it outright; verify that
+        # rejection stays in place rather than regressing back to a silent
+        # Access Denied failure later.
+        run: |
+          node packaging\windows\install.js -Mode install -Yes -EmbeddedDb -InstallDir C:\DCIM -Port 18976 -DbUser root -AdminUser ciadmin -AdminPassword 'CiAdminPass123!'
+          if ($LASTEXITCODE -eq 0) { throw "install.js accepted -DbUser root for the embedded DB - this should have been rejected." }
+          Write-Host "Correctly rejected -DbUser root."
+
       - name: Install (fresh, -EmbeddedDb, no external MySQL/MariaDB present)
         shell: pwsh
-        # -DbUser root deliberately: this is the exact collision that caused
-        # a real bug found via real execution - mariadb-install-db.exe's own
-        # bootstrap already creates 'root'@'127.0.0.1' on Windows, so CREATE
-        # USER IF NOT EXISTS silently no-ops and the real account keeps its
-        # original (blank) password, unrelated to whatever got written to
-        # .env. Exercising it here so a regression shows up as a failed
-        # health check, not a real customer hitting ERR_CONNECTION_REFUSED
-        # with no visible error anywhere.
-        run: node packaging\windows\install.js -Mode install -Yes -EmbeddedDb -InstallDir C:\DCIM -Port 18976 -DbUser root -AdminUser ciadmin -AdminPassword 'CiAdminPass123!'
+        run: node packaging\windows\install.js -Mode install -Yes -EmbeddedDb -InstallDir C:\DCIM -Port 18976 -AdminUser ciadmin -AdminPassword 'CiAdminPass123!'
 
       - name: Diagnostics (always, even on failure)
         if: always()

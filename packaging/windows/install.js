@@ -398,6 +398,20 @@ async function waitForEmbeddedDb(engineDir, port) {
 }
 
 async function setupEmbeddedDb(opts, paths) {
+  // "root" is reserved for the embedded engine's own admin account, which
+  // this function re-passwords for its own maintenance bookkeeping
+  // (ALTER USER 'root'@'localhost', saved to .root-password) - found via
+  // real execution: when -DbUser is also "root", a TCP connection to
+  // 127.0.0.1 gets authenticated by MariaDB against 'root'@'localhost'
+  // instead of 'root'@'127.0.0.1' (reverse-hostname resolution of the
+  // loopback address matches 'localhost'), so the app ends up using the
+  // maintenance account's password, not its own, and every DB connection
+  // fails with Access Denied no matter how carefully the two accounts'
+  // passwords are set. Rejecting it outright avoids relying on MariaDB's
+  // own host-matching precedence working out in our favor.
+  if (opts.DbUser.toLowerCase() === 'root') {
+    die('-DbUser cannot be "root" for the embedded database - that name is reserved for the engine\'s own admin account. Choose a different username.');
+  }
   const mariadbdExe = path.join(paths.payloadMariadb, 'bin', 'mariadbd.exe');
   if (!fs.existsSync(mariadbdExe)) die('-EmbeddedDb requires a bundled MariaDB runtime (run fetch-mariadb-runtime.ps1 at package-build time).');
   const dbDir = path.join(opts.InstallDir, 'mariadb');

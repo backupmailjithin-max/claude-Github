@@ -155,6 +155,16 @@ begin
       Result := False;
       Exit;
     end;
+    { "root" is reserved for the bundled database engine's own admin
+      account (install.js re-passwords it separately for its own
+      maintenance use) - caught right here, not left to surface only after
+      the wizard closes as an install failure. }
+    if Lowercase(Trim(EmbeddedDbPage.Values[1])) = 'root' then
+    begin
+      MsgBox('Username cannot be "root" - that name is reserved for the database engine''s own admin account. Please choose a different username (for example, "dcim").', mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
     if EmbeddedDbPage.Values[2] <> EmbeddedDbPage.Values[3] then
     begin
       MsgBox('The passwords do not match.', mbError, MB_OK);

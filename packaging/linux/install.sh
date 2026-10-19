@@ -414,6 +414,20 @@ install_systemd_unit() {
 }
 
 setup_embedded_db() {
+  # "root" is reserved for the embedded engine's own admin account, which
+  # this function re-passwords for its own maintenance bookkeeping
+  # (ALTER USER 'root'@'localhost', saved to .root-password) - found via
+  # real execution: when DB_USER is also "root", a TCP connection to
+  # 127.0.0.1 gets authenticated by MariaDB against 'root'@'localhost'
+  # instead of 'root'@'127.0.0.1' (reverse-hostname resolution of the
+  # loopback address matches 'localhost'), so the app ends up using the
+  # maintenance account's password, not its own, and every DB connection
+  # fails with Access Denied no matter how carefully the two accounts'
+  # passwords are set. Rejecting it outright avoids relying on MariaDB's
+  # own host-matching precedence working out in our favor.
+  if [ "$(printf '%s' "$DB_USER" | tr '[:upper:]' '[:lower:]')" = "root" ]; then
+    die "--db-user cannot be 'root' for the embedded database - that name is reserved for the engine's own admin account. Choose a different username."
+  fi
   local engine_dir="$EMBEDDED_DB_DIR/engine"
   local data_dir="$EMBEDDED_DB_DIR/data"
   local socket_path="$EMBEDDED_DB_DIR/mariadb.sock"
