@@ -84,7 +84,7 @@
     return;
   }
   var script = document.createElement('script');
-  script.src = './app-compiled.js?v=20261019pdu1';
+  script.src = './app-compiled.js?v=20261019pdu2';
   script.onerror = function(){ if (root) root.innerHTML = '<div style="max-width:760px;margin:60px auto;padding:24px;font-family:Segoe UI,sans-serif;color:#334155;background:#fff;border-radius:14px;box-shadow:0 8px 30px rgba(0,0,0,.12)"><h2 style="margin:0 0 10px">Dashboard application could not start</h2><p style="margin:0;line-height:1.5">The local compiled application file is missing or cannot be loaded. Restore <b>app-compiled.js</b> from the production package and reload.</p></div>'; };
   document.body.appendChild(script);
 })();
