@@ -343,6 +343,18 @@ const api = {
     exportConnectivity: (scope) => apiFetch('/connectivity/export?scope=' + (scope === 'missing' ? 'missing' : 'data'), { timeoutMs: 120000 }),
     connectivityInventoryExtras: () => apiFetch('/connectivity/inventory-extras', { timeoutMs: 120000 }),
     saveAssetConnectivity: (id, body) => apiFetch('/assets/' + encodeURIComponent(id) + '/connectivity', { method: 'PUT', body: JSON.stringify(body) }),
+    getPdus: (site) => apiFetch('/pdus' + (site && site !== 'all' ? '?site=' + encodeURIComponent(site) : '')),
+    getPduSummary: () => apiFetch('/pdus/summary'),
+    createPdu: (body) => apiFetch('/pdus', { method: 'POST', body: JSON.stringify(body) }),
+    updatePdu: (id, body) => apiFetch('/pdus/' + encodeURIComponent(id), { method: 'PUT', body: JSON.stringify(body) }),
+    deletePdu: (id) => apiFetch('/pdus/' + encodeURIComponent(id), { method: 'DELETE' }),
+    detectPdu: (body) => apiFetch('/pdus/detect', { method: 'POST', body: JSON.stringify(body), timeoutMs: 8000 }),
+    syncAllPdus: () => apiFetch('/pdus/sync-all', { method: 'POST', timeoutMs: 60000 }),
+    getPduTrend: (params = {}) => { const q = new URLSearchParams(); if (params.site && params.site !== 'all')
+        q.set('site', params.site); if (params.zone && params.zone !== 'all')
+        q.set('zone', params.zone); if (params.from)
+        q.set('from', params.from); if (params.to)
+        q.set('to', params.to); return apiFetch('/pdus/trend' + (q.toString() ? '?' + q.toString() : '')); },
 };
 const { useState, useMemo, useRef, useEffect } = React;
 /* PERF (Phase-2): long lists draw the first LIST_PAGE rows and add more as the user scrolls (or presses "Show all").
@@ -11457,7 +11469,7 @@ function FwcDetails({ rows, inv, missing, zones, lastSync, types, typeCounts, se
             React.createElement("div", { style: { background: "#fff", borderRadius: 14, border: "1px solid #E2E8F0", overflow: "hidden" } }, pager, body),
             zoneStatus));
 }
-function DashboardOverview({ issues, assets, rackComponents = [], activities, overallStats, perSite, recentActivities, movements, racks = [], goTo, onlineCount, allowedSites = [], locations = [] }) {
+function DashboardOverview({ issues, assets, rackComponents = [], activities, overallStats, perSite, recentActivities, movements, racks = [], goTo, onlineCount, allowedSites = [], locations = [], pduSummary = null }) {
     // These are the exact collections already filtered by the parent using the
     // same predicates as the Asset Inventory and Issue Tracker.  Do not rebuild
     // a second, broader dataset here: every dashboard KPI must reconcile to the
@@ -11685,6 +11697,28 @@ function DashboardOverview({ issues, assets, rackComponents = [], activities, ov
             React.createElement("div", { className: "sample-kpi-icon", style: { background: t.bg, color: t.fg } }, React.createElement(C, { s: 18, c: t.fg })),
             React.createElement("div", { className: "sample-kpi-main" }, React.createElement("div", { className: "sample-kpi-label" }, k.label), React.createElement("div", { className: "sample-kpi-value" }, k.value), React.createElement("div", { className: "sample-kpi-hint" }, k.hint))); })),
         React.createElement("div", { className: "dash-pair dash-trio", style: { marginBottom: 14 } }, React.createElement(DashPowerStatus, null), React.createElement(DashDeviceCounts, { assets: activeAssets, sites: allowedSites }), React.createElement(DashFirmwareCompliance, { assets: activeAssets })),
+        React.createElement("div", { className: "neu-card anim-in d1", style: { padding: "18px 20px", marginBottom: 14 } }, [
+            React.createElement("div", { key: "head", style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 } }, [
+                React.createElement("div", { key: "t", style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#17345D" } }, "⚡ Total Power Load by Location"),
+                pduSummary && React.createElement("div", { key: "s", style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B" } }, (pduSummary.overall.totalKw || 0).toFixed(1) + " kW of " + (pduSummary.overall.ratedKw || 0).toFixed(1) + " kW rated · " + (pduSummary.overall.onlineCount || 0) + "/" + (pduSummary.overall.pduCount || 0) + " PDUs online"),
+            ]),
+            !pduSummary ? React.createElement("div", { key: "body", style: { fontFamily: "Inter", fontSize: 12.5, color: "#64748B" } }, "Loading…") :
+                (!pduSummary.bySite || !pduSummary.bySite.length) ? React.createElement("div", { key: "body", style: { fontFamily: "Inter", fontSize: 12.5, color: "#64748B" } }, "No PDUs configured for your location(s) yet. Add one from PDU Power → + Add PDU.") :
+                    React.createElement("div", { key: "body", style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 12 } },
+                        pduSummary.bySite.map((s) => {
+                            const pct = s.ratedKw > 0 ? Math.round((s.totalKw / s.ratedKw) * 100) : 0;
+                            const color = pct >= 85 ? "#DC2626" : pct >= 70 ? "#EA7A0C" : "#059669";
+                            return React.createElement("div", { key: s.site, style: { background: "linear-gradient(145deg,rgba(255,255,255,.95),rgba(240,245,252,.9))", border: "1px solid rgba(255,255,255,.85)", borderRadius: 14, padding: "13px 15px" } }, [
+                                React.createElement("div", { key: "n", style: { fontFamily: "Inter", fontSize: 11.5, fontWeight: 800, color: "#17345D", marginBottom: 6 } }, s.site),
+                                React.createElement("div", { key: "v", style: { fontFamily: "'Space Grotesk'", fontSize: 19, fontWeight: 800, color: "#17345D" } }, s.totalKw.toFixed(1), React.createElement("span", { style: { fontSize: 12, color: "#94A3B8", fontWeight: 600 } }, " / " + s.ratedKw.toFixed(1) + " kW")),
+                                React.createElement("div", { key: "b", style: { display: "flex", alignItems: "center", gap: 7, marginTop: 7 } }, [
+                                    React.createElement("div", { key: "track", style: { flex: 1, height: 6, borderRadius: 5, background: "rgba(148,163,184,.25)", overflow: "hidden" } }, React.createElement("div", { style: { width: pct + "%", height: "100%", borderRadius: 5, background: color } })),
+                                    React.createElement("span", { key: "pct", style: { fontFamily: "'Space Grotesk'", fontWeight: 800, fontSize: 12, color } }, pct, "%"),
+                                ]),
+                                React.createElement("div", { key: "c", style: { fontFamily: "Inter", fontSize: 10.5, color: "#94A3B8", marginTop: 5 } }, s.pduCount + " PDU(s) · " + s.onlineCount + " online"),
+                            ]);
+                        })),
+        ]),
         React.createElement("div", { className: "sample-grid sample-grid-top" },
             React.createElement(DashCard, { title: "Asset Distribution", sub: "Live inventory by location", action: React.createElement("button", { onClick: () => goTo("inventory", "all"), className: "sample-link-btn" }, "View all") },
                 React.createElement("div", { className: "sample-donut-wrap" },
@@ -12734,6 +12768,360 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
             allSites.length === 0 && React.createElement("div", { style: { textAlign: "center", padding: "30px 0", color: "#64748B", fontSize: 13 } }, "No data available.")));
 }
 /* ===== MAIN APP ===== */
+/* ===== PDU POWER MONITORING ===== */
+function pduGroupRacks(flat) {
+    const map = new Map();
+    flat.forEach((p) => {
+        const key = [p.site, p.zone, p.rackNo].join("|");
+        if (!map.has(key))
+            map.set(key, { key, site: p.site, zone: p.zone, rackType: p.rackType, rackNo: p.rackNo, feeds: [] });
+        map.get(key).feeds.push(p);
+    });
+    return Array.from(map.values()).sort((a, b) => (a.site + a.zone + a.rackNo).localeCompare(b.site + b.zone + b.rackNo));
+}
+function pduRackTotals(rack) {
+    const totalKw = rack.feeds.reduce((s, f) => s + (f.lastPowerKw || 0), 0);
+    const ratedKw = rack.feeds.reduce((s, f) => s + (f.maxLoadKw || 0), 0);
+    const usedPct = ratedKw > 0 ? Math.round((totalKw / ratedKw) * 100) : 0;
+    const phases = Array.from(new Set(rack.feeds.map((f) => f.phase)));
+    const phaseLabel = phases.length > 1 ? "Mixed" : (phases[0] || "Single-Phase");
+    return { totalKw, ratedKw, usedPct, phaseLabel };
+}
+function pduRedundancy(rack) {
+    if (rack.feeds.length === 1)
+        return "Single Feed";
+    const down = rack.feeds.filter((f) => f.status === "offline").length;
+    return down > 0 ? "Degraded" : "Redundant A+B";
+}
+function pduLoadColor(pct) { return pct >= 85 ? "#DC2626" : pct >= 70 ? "#EA7A0C" : "#059669"; }
+const PDU_STATUS_META = {
+    online: ["#059669", "rgba(5,150,105,.1)", "Online"],
+    offline: ["#DC2626", "rgba(220,38,38,.1)", "Offline"],
+    warning: ["#EA7A0C", "rgba(234,122,12,.1)", "Warning"],
+    unknown: ["#64748B", "rgba(100,116,139,.12)", "Not yet polled"],
+};
+function PduBadge({ kind, text }) {
+    const [c, bg, label] = kind === "status" ? (PDU_STATUS_META[text] || PDU_STATUS_META.unknown) :
+        (text === "Single Feed" ? ["#475569", "rgba(100,116,139,.12)", text] : text === "Degraded" ? ["#EA7A0C", "rgba(234,122,12,.12)", text] : ["#059669", "rgba(5,150,105,.1)", text]);
+    const displayLabel = kind === "status" ? label : text;
+    return React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 10px", borderRadius: 20, fontFamily: "Inter", fontSize: 10.5, fontWeight: 800, color: c, background: bg, whiteSpace: "nowrap" } },
+        React.createElement("span", { style: { width: 6, height: 6, borderRadius: "50%", background: c, flex: "none" } }), displayLabel);
+}
+function buildPduTrendSvg(rows, ratedKw) {
+    if (!rows.length)
+        return '<div style="text-align:center;color:#94A3B8;font-family:Inter;font-size:12.5px;padding:34px 10px">No readings recorded in this range yet - readings accumulate as the 15-minute poll runs.</div>';
+    const W = 820, H = 200, padL = 42, padR = 10, padT = 14, padB = 24;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const dataMax = Math.max(...rows.map((r) => r.avgKw), 0.1);
+    const maxY = Math.max(5, Math.ceil((ratedKw || dataMax * 1.2) / 5) * 5);
+    const n = rows.length;
+    const xAt = (i) => n === 1 ? padL + plotW / 2 : padL + i * (plotW / (n - 1));
+    const yAt = (v) => padT + plotH - (Math.min(v, maxY) / maxY) * plotH;
+    const line = rows.map((r, i) => (i === 0 ? "M" : "L") + xAt(i).toFixed(1) + "," + yAt(r.avgKw).toFixed(1) + " ").join("");
+    const area = line + `L${xAt(n - 1).toFixed(1)},${(padT + plotH).toFixed(1)} L${xAt(0).toFixed(1)},${(padT + plotH).toFixed(1)} Z`;
+    let grid = "";
+    for (let g = 0; g <= 4; g++) {
+        const gy = padT + plotH - (g / 4) * plotH;
+        grid += `<line x1="${padL}" y1="${gy}" x2="${W - padR}" y2="${gy}" stroke="rgba(148,163,184,.22)" stroke-width="1"/><text x="${padL - 8}" y="${gy + 3}" font-size="9" fill="#94A3B8" text-anchor="end" font-family="Inter,sans-serif" font-weight="600">${Math.round(maxY * g / 4)}kW</text>`;
+    }
+    const tickIdx = n <= 8 ? rows.map((_, i) => i) : [0, Math.floor((n - 1) / 3), Math.floor((n - 1) * 2 / 3), n - 1];
+    const ticks = Array.from(new Set(tickIdx)).map((i) => `<text x="${xAt(i)}" y="${H - 6}" font-size="9" fill="#64748B" text-anchor="middle" font-family="Inter,sans-serif" font-weight="700">${String(rows[i].date).slice(5)}</text>`).join("");
+    const ratedLine = ratedKw ? `<line x1="${padL}" y1="${yAt(ratedKw).toFixed(1)}" x2="${W - padR}" y2="${yAt(ratedKw).toFixed(1)}" stroke="#DC2626" stroke-width="1.5" stroke-dasharray="5 4" opacity=".65"/>` : "";
+    const dots = rows.map((r, i) => `<circle cx="${xAt(i)}" cy="${yAt(r.avgKw)}" r="2.6" fill="#fff" stroke="#3157EE" stroke-width="2"><title>${r.date}: ${r.avgKw.toFixed(2)} kW</title></circle>`).join("");
+    return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;display:block"><defs><linearGradient id="pduTrendFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#3157EE" stop-opacity="0.32"/><stop offset="100%" stop-color="#3157EE" stop-opacity="0.02"/></linearGradient></defs>${grid}${ratedLine}<path d="${area}" fill="url(#pduTrendFill)"/><path d="${line}" fill="none" stroke="#3157EE" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>${dots}${ticks}</svg>`;
+}
+function buildPduSparkSvg(rows) {
+    if (!rows.length)
+        return '<div style="color:#94A3B8;font-family:Inter;font-size:11px;padding:16px 0">No readings yet</div>';
+    const vals = rows.map((r) => r.avgKw);
+    const maxV = Math.max(...vals), minV = Math.min(...vals);
+    const W = 220, H = 56;
+    const xAt = (i) => (i / ((vals.length - 1) || 1)) * W;
+    const yAt = (v) => H - ((v - minV) / ((maxV - minV) || 1)) * (H - 6) - 3;
+    const path = vals.map((v, i) => (i === 0 ? "M" : "L") + xAt(i).toFixed(1) + "," + yAt(v).toFixed(1) + " ").join("");
+    const area = path + `L${W},${H} L0,${H} Z`;
+    return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:100%;display:block"><defs><linearGradient id="pduSparkFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#3157EE" stop-opacity="0.3"/><stop offset="100%" stop-color="#3157EE" stop-opacity="0.02"/></linearGradient></defs><path d="${area}" fill="url(#pduSparkFill)"/><path d="${path}" fill="none" stroke="#3157EE" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+}
+const PDU_LABEL_STYLE = { display: "block", fontFamily: "Inter", fontSize: 10, fontWeight: 800, letterSpacing: ".04em", textTransform: "uppercase", color: "#64748B", marginBottom: 5 };
+function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
+    const isNew = !pdu || !pdu.id;
+    const [form, setForm] = useState(() => ({
+        site: (pdu && pdu.site) || allowedSites[0] || "", zone: (pdu && pdu.zone) || "AZ-1",
+        rackType: (pdu && pdu.rackType) || "", rackNo: (pdu && pdu.rackNo) || "",
+        feedLabel: (pdu && pdu.feedLabel) || "Feed A", ipAddress: (pdu && pdu.ipAddress) || "",
+        snmpCommunity: (pdu && pdu.snmpCommunity) || "public", vendor: (pdu && pdu.vendor) || "",
+        model: (pdu && pdu.model) || "", serialNumber: (pdu && pdu.serialNumber) || "",
+        firmware: (pdu && pdu.firmware) || "", phase: (pdu && pdu.phase) || "Single-Phase",
+        maxLoadKw: pdu && pdu.maxLoadKw != null ? String(pdu.maxLoadKw) : "", powerOid: (pdu && pdu.powerOid) || "",
+    }));
+    const [detecting, setDetecting] = useState(false);
+    const [detectMsg, setDetectMsg] = useState(null);
+    const [detectedFields, setDetectedFields] = useState({});
+    const [saving, setSaving] = useState(false);
+    const [err, setErr] = useState(null);
+    const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+    const runDetect = async () => {
+        if (!form.ipAddress) { setDetectMsg({ type: "error", text: "Enter an IP address first." }); return; }
+        setDetecting(true); setDetectMsg(null);
+        try {
+            const r = await api.detectPdu({ ipAddress: form.ipAddress, snmpCommunity: form.snmpCommunity });
+            if (r.reachable) {
+                const next = {};
+                if (r.vendor) next.vendor = r.vendor;
+                if (r.model) next.model = r.model;
+                if (r.serialNumber) next.serialNumber = r.serialNumber;
+                if (r.firmware) next.firmware = r.firmware;
+                setForm((f) => ({ ...f, ...next }));
+                setDetectedFields(next);
+                setDetectMsg({ type: "success", text: "Device reachable - fields below were auto-filled from SNMP (sysDescr/sysName), which varies by vendor. Review and correct anything before saving. Max Load is never auto-detected - set it manually." });
+            }
+            else {
+                setDetectMsg({ type: "error", text: r.error || "Could not reach the device." });
+            }
+        }
+        catch (e) { setDetectMsg({ type: "error", text: e.message }); }
+        setDetecting(false);
+    };
+    const save = async () => {
+        if (!form.site || !form.rackNo || !form.feedLabel || !form.ipAddress) { setErr("Site, Rack No, Feed Label and IP Address are required."); return; }
+        setSaving(true); setErr(null);
+        try {
+            const body = { ...form, maxLoadKw: form.maxLoadKw === "" ? null : Number(form.maxLoadKw) };
+            if (isNew)
+                await api.createPdu(body);
+            else
+                await api.updatePdu(pdu.id, body);
+            onSaved();
+        }
+        catch (e) { setErr(e.message); }
+        setSaving(false);
+    };
+    const field = (label, key, extra = {}) => React.createElement("div", { style: { flex: 1, minWidth: 140 } },
+        React.createElement("label", { style: PDU_LABEL_STYLE }, label, detectedFields[key] && React.createElement("span", { style: { marginLeft: 6, fontSize: 9, fontWeight: 800, color: "#059669", background: "rgba(5,150,105,.1)", padding: "2px 7px", borderRadius: 7 } }, "✓ auto")),
+        React.createElement("input", { className: "neu-input", style: { width: "100%" }, value: form[key], onChange: (e) => set(key, e.target.value), ...extra }));
+    return React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(14,18,28,.45)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, zIndex: 400 }, onClick: onClose },
+        React.createElement("div", { className: "neu-card anim-in d1", style: { width: 640, maxWidth: "94vw", maxHeight: "90vh", overflowY: "auto", padding: 28, position: "relative" }, onClick: (e) => e.stopPropagation() },
+            React.createElement("button", { onClick: onClose, style: { position: "absolute", top: 18, right: 20, background: "none", border: "none", fontSize: 20, color: "#94A3B8", cursor: "pointer" } }, "×"),
+            React.createElement("h2", { style: { margin: "0 0 3px", fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#17345D" } }, isNew ? "Add PDU" : "Edit PDU"),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", marginBottom: 18 } }, "Enter the rack + IP, then auto-detect — or fill everything in manually if the unit isn't reachable yet."),
+            React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 12 } },
+                React.createElement("div", { style: { flex: 1 } },
+                    React.createElement("label", { style: PDU_LABEL_STYLE }, "Site"),
+                    React.createElement(ThemedSelect, { value: form.site, onChange: (e) => set("site", e.target.value), className: "neu-input", style: { width: "100%" } }, allowedSites.map((s) => React.createElement("option", { key: s, value: s }, s)))),
+                React.createElement("div", { style: { flex: 1 } },
+                    React.createElement("label", { style: PDU_LABEL_STYLE }, "Zone"),
+                    React.createElement("input", { className: "neu-input", style: { width: "100%" }, value: form.zone, onChange: (e) => set("zone", e.target.value) }))),
+            React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 12 } }, field("Rack Type", "rackType"), field("Rack No", "rackNo"),
+                React.createElement("div", { style: { flex: 1 } },
+                    React.createElement("label", { style: PDU_LABEL_STYLE }, "Feed Label"),
+                    React.createElement(ThemedSelect, { value: form.feedLabel, onChange: (e) => set("feedLabel", e.target.value), className: "neu-input", style: { width: "100%" } }, ["Feed A", "Feed B"].map((f) => React.createElement("option", { key: f, value: f }, f))))),
+            React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 6 } },
+                React.createElement("div", { style: { flex: 1 } }, field("IP Address", "ipAddress")),
+                React.createElement("button", { className: "neu-btn-secondary", disabled: detecting, onClick: runDetect, style: { whiteSpace: "nowrap" } }, detecting ? "Detecting…" : "🔍 Test & Auto-Detect")),
+            detectMsg && React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, margin: "4px 0 14px", padding: "9px 12px", borderRadius: 11, fontFamily: "Inter", fontSize: 12, fontWeight: 700, background: detectMsg.type === "success" ? "rgba(5,150,105,.1)" : "rgba(220,38,38,.1)", color: detectMsg.type === "success" ? "#059669" : "#DC2626" } }, detectMsg.text),
+            React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 12 } }, field("SNMP Community", "snmpCommunity"), field("Power OID (optional)", "powerOid", { placeholder: "from this model's vendor MIB" })),
+            React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 12 } }, field("Vendor", "vendor"), field("Model", "model")),
+            React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 12 } }, field("Serial Number", "serialNumber"), field("Firmware", "firmware")),
+            React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 18 } },
+                React.createElement("div", { style: { flex: 1 } },
+                    React.createElement("label", { style: PDU_LABEL_STYLE }, "Phase"),
+                    React.createElement(ThemedSelect, { value: form.phase, onChange: (e) => set("phase", e.target.value), className: "neu-input", style: { width: "100%" } }, ["Single-Phase", "3-Phase"].map((p) => React.createElement("option", { key: p, value: p }, p)))),
+                field("Max Load / Rated Capacity (kW)", "maxLoadKw", { placeholder: "e.g. 6.0" })),
+            err && React.createElement("div", { style: { color: "#DC2626", fontFamily: "Inter", fontSize: 12.5, fontWeight: 700, marginBottom: 12 } }, err),
+            React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 8, paddingTop: 16, borderTop: "1px solid rgba(148,163,184,.2)" } },
+                React.createElement("button", { className: "neu-btn-secondary", onClick: onClose }, "Cancel"),
+                React.createElement("button", { className: "neu-btn-primary", disabled: saving, onClick: save }, saving ? "Saving…" : "Save PDU"))));
+}
+function pduIsoDaysAgo(n) { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); }
+function PduTrendModal({ site, zone, allowedSites, zonesForSite, onClose }) {
+    const [mSite, setMSite] = useState(site);
+    const [mZone, setMZone] = useState(zone);
+    const [from, setFrom] = useState(pduIsoDaysAgo(29));
+    const [to, setTo] = useState(pduIsoDaysAgo(0));
+    const [rows, setRows] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const chartRef = useRef(null);
+    const load = async (s, z, f, t) => {
+        setLoading(true);
+        try { setRows(await api.getPduTrend({ site: s, zone: z, from: f, to: t })); }
+        catch (e) { setRows([]); }
+        setLoading(false);
+    };
+    useEffect(() => { load(mSite, mZone, from, to); }, []);
+    useEffect(() => { if (chartRef.current) chartRef.current.innerHTML = loading ? '<div style="text-align:center;color:#94A3B8;font-family:Inter;font-size:12.5px;padding:34px 10px">Loading…</div>' : buildPduTrendSvg(rows, null); }, [rows, loading]);
+    const presets = [["Last 7 Days", 6], ["Last 30 Days", 29], ["Last 3 Months", 89]];
+    const total = rows.reduce((s, r) => s + (r.energyKwh || 0), 0);
+    const avg = rows.length ? rows.reduce((s, r) => s + r.avgKw, 0) / rows.length : 0;
+    const peak = rows.length ? Math.max(...rows.map((r) => r.peakKw)) : 0;
+    const siteZoneRow = React.createElement("div", { key: "sitezone", style: { display: "flex", gap: 12, marginBottom: 14 } }, [
+        React.createElement("div", { key: "s", style: { flex: 1 } }, [
+            React.createElement("label", { key: "l", style: PDU_LABEL_STYLE }, "Location (Site)"),
+            React.createElement(ThemedSelect, { key: "sel", value: mSite, onChange: (e) => { setMSite(e.target.value); setMZone("all"); }, className: "neu-input", style: { width: "100%" } }, [
+                React.createElement("option", { key: "all", value: "all" }, "All Sites"),
+                ...allowedSites.map((s) => React.createElement("option", { key: s, value: s }, s)),
+            ]),
+        ]),
+        React.createElement("div", { key: "z", style: { flex: 1 } }, [
+            React.createElement("label", { key: "l", style: PDU_LABEL_STYLE }, "Zone"),
+            React.createElement(ThemedSelect, { key: "sel", value: mZone, onChange: (e) => setMZone(e.target.value), className: "neu-input", style: { width: "100%" } }, [
+                React.createElement("option", { key: "all", value: "all" }, "All Zones"),
+                ...zonesForSite(mSite).map((z) => React.createElement("option", { key: z, value: z }, z)),
+            ]),
+        ]),
+    ]);
+    const presetRow = React.createElement("div", { key: "presets", style: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 } },
+        presets.map(([label, days]) => React.createElement("button", { key: label, className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "7px 14px" }, onClick: () => { const f = pduIsoDaysAgo(days), t = pduIsoDaysAgo(0); setFrom(f); setTo(t); load(mSite, mZone, f, t); } }, label)));
+    const dateRow = React.createElement("div", { key: "daterow", style: { display: "flex", alignItems: "flex-end", gap: 10, marginBottom: 16 } }, [
+        React.createElement("div", { key: "f", style: { flex: 1 } }, [React.createElement("label", { key: "l", style: PDU_LABEL_STYLE }, "From"), React.createElement("input", { key: "i", type: "date", className: "neu-input", style: { width: "100%" }, value: from, onChange: (e) => setFrom(e.target.value) })]),
+        React.createElement("div", { key: "t", style: { flex: 1 } }, [React.createElement("label", { key: "l", style: PDU_LABEL_STYLE }, "To"), React.createElement("input", { key: "i", type: "date", className: "neu-input", style: { width: "100%" }, value: to, onChange: (e) => setTo(e.target.value) })]),
+        React.createElement("button", { key: "g", className: "neu-btn-primary", onClick: () => load(mSite, mZone, from, to) }, "📊 Generate"),
+    ]);
+    const chartDiv = React.createElement("div", { key: "chart", ref: chartRef, style: { marginBottom: 16 } });
+    const statTiles = [["Period Total Energy", Math.round(total) + " kWh"], ["Average Load", avg.toFixed(2) + " kW"], ["Peak Load", peak.toFixed(2) + " kW"], ["Days with Data", String(rows.length)]];
+    const statRow = React.createElement("div", { key: "stats", style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 } },
+        statTiles.map(([label, val]) => React.createElement("div", { key: label, style: { flex: 1, minWidth: 130, background: "linear-gradient(145deg,rgba(255,255,255,.95),rgba(240,245,252,.9))", border: "1px solid rgba(255,255,255,.85)", borderRadius: 13, padding: "11px 13px" } }, [
+            React.createElement("small", { key: "s", style: { display: "block", fontFamily: "Inter", fontSize: 9, fontWeight: 800, letterSpacing: ".05em", textTransform: "uppercase", color: "#64748B" } }, label),
+            React.createElement("b", { key: "v", style: { display: "block", marginTop: 3, fontFamily: "'Space Grotesk'", fontSize: 17, fontWeight: 800, color: "#17345D" } }, val),
+        ])));
+    const sectionDivider = React.createElement("div", { key: "divider", style: { margin: "4px 0 10px", display: "flex", alignItems: "center", gap: 10 } }, [
+        React.createElement("h3", { key: "h", style: { margin: 0, fontFamily: "Inter", fontSize: 12, fontWeight: 800, color: "#64748B", textTransform: "uppercase", letterSpacing: ".05em" } }, "Date-wise Values"),
+        React.createElement("div", { key: "l", style: { flex: 1, height: 1, background: "rgba(148,163,184,.3)" } }),
+    ]);
+    const tableHead = React.createElement("thead", { key: "thead" }, React.createElement("tr", null,
+        ["Date", "Avg Load (kW)", "Peak Load (kW)", "Energy (kWh)"].map((h) => React.createElement("th", { key: h, style: { position: "sticky", top: 0, background: "#fff", textAlign: "left", padding: "9px 14px", fontSize: 10, fontWeight: 800, color: "#64748B", textTransform: "uppercase", letterSpacing: ".05em", borderBottom: "1px solid rgba(148,163,184,.25)" } }, h))));
+    const tableBodyRows = rows.slice().reverse().map((r) => React.createElement("tr", { key: r.date },
+        [r.date, r.avgKw.toFixed(2), r.peakKw.toFixed(2), Math.round(r.energyKwh)].map((v, i) => React.createElement("td", { key: i, style: { padding: "9px 14px", borderBottom: "1px solid rgba(148,163,184,.1)" } }, v))));
+    if (!rows.length) {
+        tableBodyRows.push(React.createElement("tr", { key: "empty" }, React.createElement("td", { colSpan: 4, style: { padding: 24, textAlign: "center", color: "#94A3B8" } }, loading ? "Loading…" : "No data for this range.")));
+    }
+    const tableWrap = React.createElement("div", { key: "tablewrap", style: { maxHeight: 240, overflow: "auto", border: "1px solid rgba(148,163,184,.2)", borderRadius: 14 } },
+        React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12.5, fontFamily: "Inter" } }, [tableHead, React.createElement("tbody", { key: "tbody" }, tableBodyRows)]));
+    const modalBody = [
+        React.createElement("button", { key: "close", onClick: onClose, style: { position: "absolute", top: 18, right: 20, background: "none", border: "none", fontSize: 20, color: "#94A3B8", cursor: "pointer" } }, "×"),
+        React.createElement("h2", { key: "h2", style: { margin: "0 0 3px", fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#17345D" } }, "Power Consumption · Date Range Report"),
+        React.createElement("div", { key: "sub", style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", marginBottom: 16 } }, "Showing " + (mSite === "all" ? "All Sites" : (mZone === "all" ? mSite : mSite + " · " + mZone)) + " — choose a preset or a custom From/To date."),
+        siteZoneRow, presetRow, dateRow, chartDiv, statRow, sectionDivider, tableWrap,
+    ];
+    return React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(14,18,28,.45)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, zIndex: 400 }, onClick: onClose },
+        React.createElement("div", { className: "neu-card anim-in d1", style: { width: 880, maxWidth: "96vw", maxHeight: "90vh", overflowY: "auto", padding: 28, position: "relative" }, onClick: (e) => e.stopPropagation() }, modalBody));
+}
+function PduPage({ allowedSites = [], canEdit = false }) {
+    const [flat, setFlat] = useState([]);
+    const [summary, setSummary] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
+    const [siteFilter, setSiteFilter] = useState("all");
+    const [zoneFilter, setZoneFilter] = useState("all");
+    const [phaseFilter, setPhaseFilter] = useState("all");
+    const [search, setSearch] = useState("");
+    const [openRack, setOpenRack] = useState(null);
+    const [editing, setEditing] = useState(null);
+    const [trendOpen, setTrendOpen] = useState(false);
+    const [syncing, setSyncing] = useState(false);
+    const [syncMsg, setSyncMsg] = useState(null);
+    const [sparkRows, setSparkRows] = useState([]);
+    const sparkRef = useRef(null);
+    const load = async () => {
+        setLoading(true); setError(null);
+        try {
+            const [pdus, summ] = await Promise.all([api.getPdus(), api.getPduSummary()]);
+            setFlat(pdus); setSummary(summ);
+        }
+        catch (e) { setError(e.message); }
+        setLoading(false);
+    };
+    useEffect(() => { load(); }, []);
+    useEffect(() => { api.getPduTrend({ from: pduIsoDaysAgo(29), to: pduIsoDaysAgo(0) }).then(setSparkRows).catch(() => setSparkRows([])); }, []);
+    useEffect(() => { if (sparkRef.current) sparkRef.current.innerHTML = buildPduSparkSvg(sparkRows); }, [sparkRows]);
+    const racks = useMemo(() => pduGroupRacks(flat), [flat]);
+    const zonesForSite = (site) => Array.from(new Set(racks.filter((r) => site === "all" || r.site === site).map((r) => r.zone)));
+    const filteredRacks = racks.filter((r) => {
+        if (siteFilter !== "all" && r.site !== siteFilter) return false;
+        if (zoneFilter !== "all" && r.zone !== zoneFilter) return false;
+        if (phaseFilter !== "all" && pduRackTotals(r).phaseLabel !== phaseFilter) return false;
+        if (search) {
+            const hay = [r.site, r.zone, r.rackType, r.rackNo, ...r.feeds.map((f) => f.vendor + " " + f.model + " " + f.ipAddress)].join(" ").toLowerCase();
+            if (!hay.includes(search.toLowerCase())) return false;
+        }
+        return true;
+    });
+    const runSync = async () => {
+        setSyncing(true); setSyncMsg(null);
+        try { const r = await api.syncAllPdus(); setSyncMsg(`Synced ${r.synced} PDU(s) — ${r.online} online.`); await load(); }
+        catch (e) { setSyncMsg("Sync failed: " + e.message); }
+        setSyncing(false);
+    };
+    const overall = (summary && summary.overall) || { totalKw: 0, ratedKw: 0, pduCount: 0, onlineCount: 0 };
+    const usedPctOverall = overall.ratedKw > 0 ? Math.round((overall.totalKw / overall.ratedKw) * 100) : 0;
+    const degradedCount = racks.filter((r) => pduRedundancy(r) === "Degraded").length;
+    const redundantCount = racks.filter((r) => pduRedundancy(r) === "Redundant A+B").length;
+    return React.createElement(React.Fragment, null,
+        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 12 } },
+            React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
+                React.createElement("span", { className: "module-title-icon", style: { background: "linear-gradient(145deg,#DDD6FE,#A78BFA)", color: "#5B21B6" } }, React.createElement(Zap, { s: 18, c: "#5B21B6" })),
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617" } }, "PDU Power Monitoring")),
+            canEdit && React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
+                React.createElement("button", { className: "neu-btn-secondary", disabled: syncing, onClick: runSync, style: { fontSize: 12.5 } }, syncing ? "Syncing…" : "↻ Sync All PDUs Now"),
+                React.createElement("button", { className: "neu-btn-primary", style: { fontSize: 12.5, padding: "9px 18px" }, onClick: () => setEditing({}) }, "+ Add PDU"))),
+        syncMsg && React.createElement("div", { style: { marginBottom: 14, padding: "10px 16px", borderRadius: 12, background: "rgba(49,87,238,.08)", color: "#244DE5", fontFamily: "Inter", fontSize: 12.5, fontWeight: 700 } }, syncMsg),
+        error && React.createElement("div", { className: "neu-card anim-in d1", style: { background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)", padding: "14px 18px", marginBottom: 20, color: "#DC2626", fontFamily: "Inter", fontSize: 13 } }, "API Error: ", error, " ", React.createElement("button", { onClick: load, style: { marginLeft: 12, background: "transparent", border: "none", color: "#DC2626", textDecoration: "underline", cursor: "pointer", fontWeight: 600 } }, "Retry")),
+        loading && React.createElement("div", { style: { textAlign: "center", padding: "40px 0", color: "#64748B", fontFamily: "Inter" } }, "Loading PDU data…"),
+        !loading && React.createElement(React.Fragment, null,
+            React.createElement("div", { className: "issue-summary-grid", style: { display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 12, marginBottom: 18 } },
+                [["Racks Monitored", String(racks.length), racks.reduce((s, r) => s + r.feeds.length, 0) + " PDU units total", null],
+                    ["Fully Redundant", String(redundantCount), "both A & B online", "#059669"],
+                    ["Degraded / Alert", String(degradedCount), "one feed down", "#DC2626"],
+                    ["Total Load / Capacity", overall.totalKw.toFixed(1) + " / " + overall.ratedKw.toFixed(1) + "kW", usedPctOverall + "% of rated capacity used", null],
+                    ["Online PDUs", overall.onlineCount + " / " + overall.pduCount, "currently reporting", null]].map(([label, val, sub, color]) => React.createElement("div", { key: label, className: "sample-kpi", style: { display: "flex", flexDirection: "column", gap: 4, padding: "14px 16px" } },
+                    React.createElement("small", { style: { fontFamily: "Inter", fontSize: 9, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: "#64748B" } }, label),
+                    React.createElement("b", { style: { fontFamily: "'Space Grotesk'", fontSize: 21, fontWeight: 800, color: color || "#17345D" } }, val),
+                    React.createElement("span", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#94A3B8", fontWeight: 600 } }, sub)))),
+            React.createElement("div", { className: "neu-card anim-in d1", style: { padding: "18px 20px", marginBottom: 18, display: "flex", alignItems: "center", gap: 22, flexWrap: "wrap", cursor: "pointer" }, onClick: () => setTrendOpen(true) },
+                React.createElement("div", { style: { flex: 1, minWidth: 220 } },
+                    React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#17345D" } }, "⚡ Power Consumption Trend"),
+                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginTop: 3 } }, "Last 30 days across all your locations — click to customize the date range")),
+                React.createElement("div", { ref: sparkRef, style: { flex: "0 0 220px", height: 56 } }),
+                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, fontWeight: 700, color: "#244DE5", background: "rgba(49,87,238,.08)", padding: "9px 14px", borderRadius: 20 } }, "View & Customize ›")),
+            React.createElement("div", { className: "neu-card", style: { display: "flex", gap: 10, alignItems: "center", marginBottom: 16, flexWrap: "wrap", padding: "14px 16px" } },
+                React.createElement(ThemedSelect, { value: siteFilter, onChange: (e) => { setSiteFilter(e.target.value); setZoneFilter("all"); }, className: "neu-input", style: { minWidth: 150 } }, [React.createElement("option", { key: "all", value: "all" }, "All Sites"), ...allowedSites.map((s) => React.createElement("option", { key: s, value: s }, s))]),
+                React.createElement(ThemedSelect, { value: zoneFilter, onChange: (e) => setZoneFilter(e.target.value), className: "neu-input", style: { minWidth: 130 } }, [React.createElement("option", { key: "all", value: "all" }, "All Zones"), ...zonesForSite(siteFilter).map((z) => React.createElement("option", { key: z, value: z }, z))]),
+                React.createElement(ThemedSelect, { value: phaseFilter, onChange: (e) => setPhaseFilter(e.target.value), className: "neu-input", style: { minWidth: 140 } }, ["all", "Single-Phase", "3-Phase"].map((p) => React.createElement("option", { key: p, value: p }, p === "all" ? "All Phases" : p))),
+                React.createElement("input", { className: "neu-input", style: { flex: "1 1 200px", minWidth: 160 }, placeholder: "Search rack, vendor, model, or IP...", value: search, onChange: (e) => setSearch(e.target.value) })),
+            React.createElement("div", { className: "neu-card", style: { overflow: "hidden" } },
+                React.createElement("div", { style: { overflowX: "auto" } },
+                    React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 13, fontFamily: "Inter" } },
+                        React.createElement("thead", null, React.createElement("tr", null, ["Site", "Zone", "Rack Type", "Rack No", "Phase", "Redundancy", "Load / Rated Capacity", "Capacity Used", "Last Reading", ""].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "10px 14px", fontSize: 9.5, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: "#64748B", borderBottom: "1px solid rgba(148,163,184,.25)", whiteSpace: "nowrap" } }, h)))),
+                        React.createElement("tbody", null, filteredRacks.length === 0 ? React.createElement("tr", null, React.createElement("td", { colSpan: 10, style: { padding: 30, textAlign: "center", color: "#94A3B8" } }, "No racks match the current filters.")) : filteredRacks.map((rack) => {
+                            const { totalKw, ratedKw, usedPct, phaseLabel } = pduRackTotals(rack);
+                            const redundancy = pduRedundancy(rack);
+                            const anyOff = rack.feeds.some((f) => f.status === "offline");
+                            const open = openRack === rack.key;
+                            return React.createElement(React.Fragment, { key: rack.key },
+                                React.createElement("tr", { onClick: () => setOpenRack(open ? null : rack.key), style: { cursor: "pointer", background: open ? "rgba(49,87,238,.05)" : "transparent" } },
+                                    React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)", fontWeight: 700 } }, rack.site),
+                                    React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)" } }, rack.zone),
+                                    React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)" } }, rack.rackType || "—"),
+                                    React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)", fontFamily: "'Space Grotesk'", fontWeight: 800 } }, rack.rackNo),
+                                    React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)" } }, React.createElement(PduBadge, { kind: "phase", text: phaseLabel })),
+                                    React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)" } }, React.createElement(PduBadge, { kind: "redundancy", text: redundancy })),
+                                    React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)", fontFamily: "'Space Grotesk'", fontWeight: 800 } }, totalKw.toFixed(2), " ", React.createElement("span", { style: { fontSize: 11, color: "#94A3B8", fontWeight: 600 } }, "/ ", ratedKw.toFixed(1), " kW")),
+                                    React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)" } }, React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 7, minWidth: 110 } }, React.createElement("div", { style: { flex: 1, height: 6, borderRadius: 5, background: "rgba(148,163,184,.25)", overflow: "hidden" } }, React.createElement("div", { style: { width: usedPct + "%", height: "100%", borderRadius: 5, background: pduLoadColor(usedPct) } })), React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontWeight: 800, fontSize: 12 } }, usedPct, "%"))),
+                                    React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)", fontSize: 11, color: anyOff ? "#DC2626" : "#94A3B8", fontWeight: anyOff ? 700 : 500 } }, anyOff ? "1 feed unreachable" : (rack.feeds[0] && rack.feeds[0].lastReadingAt ? new Date(rack.feeds[0].lastReadingAt).toLocaleString() : "Not yet polled")),
+                                    React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)" } }, React.createElement("span", { style: { display: "inline-block", transform: open ? "rotate(90deg)" : "none", transition: "transform .2s ease", color: "#3157EE" } }, "›"))),
+                                open && React.createElement("tr", null, React.createElement("td", { colSpan: 10, style: { padding: "0 14px 18px 20px", borderBottom: "1px solid rgba(148,163,184,.14)" } },
+                                    React.createElement("div", { style: { display: "grid", gridTemplateColumns: rack.feeds.length > 1 ? "1fr 1fr" : "1fr", gap: 10, marginTop: 6 } }, rack.feeds.map((f) => React.createElement("div", { key: f.id, style: { background: f.status === "offline" ? "rgba(241,245,249,.9)" : "rgba(255,255,255,.92)", border: "1px solid rgba(255,255,255,.95)", borderRadius: 13, padding: "11px 13px" } },
+                                        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 7 } }, React.createElement("b", { style: { fontSize: 12 } }, f.feedLabel), React.createElement(PduBadge, { kind: "status", text: f.status })),
+                                        React.createElement("div", { style: { fontSize: 10.5, color: "#64748B", marginBottom: 3 } }, [f.vendor, f.model].filter(Boolean).join(" ") || "Vendor/model not set"),
+                                        React.createElement("div", { style: { fontSize: 10, color: "#94A3B8", fontFamily: "monospace", marginBottom: 8 } }, "S/N ", f.serialNumber || "—", " · ", f.ipAddress),
+                                        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 7 } },
+                                            [["Power", f.lastPowerKw != null ? f.lastPowerKw.toFixed(2) + " kW" : "—"], ["Max Load", f.maxLoadKw != null ? f.maxLoadKw.toFixed(1) + " kW" : "—"], ["Capacity Used", f.lastPowerKw != null && f.maxLoadKw ? Math.round(f.lastPowerKw / f.maxLoadKw * 100) + "%" : "—"]].map(([l, v]) => React.createElement("div", { key: l }, React.createElement("small", { style: { display: "block", fontSize: 8.5, fontWeight: 700, textTransform: "uppercase", color: "#94A3B8" } }, l), React.createElement("b", { style: { fontFamily: "'Space Grotesk'", fontSize: 13 } }, v)))),
+                                        f.lastError && React.createElement("div", { style: { marginTop: 7, fontSize: 10, color: "#EA7A0C" } }, f.lastError),
+                                        canEdit && React.createElement("button", { className: "neu-btn-secondary", style: { marginTop: 9, fontSize: 11, padding: "6px 12px" }, onClick: (e) => { e.stopPropagation(); setEditing(f); } }, "✎ Edit")))))));
+                        })))))),
+        editing && React.createElement(PduEditModal, { pdu: editing.id ? editing : null, allowedSites: allowedSites, onClose: () => setEditing(null), onSaved: () => { setEditing(null); load(); } }),
+        trendOpen && React.createElement(PduTrendModal, { site: "all", zone: "all", allowedSites: allowedSites, zonesForSite: zonesForSite, onClose: () => setTrendOpen(false) }));
+}
+
 function DataCenterDashboard() {
     // Organization/Branding settings (company name, app name, logo, footer
     // text) are configured per deployment via Settings -> Organization &
@@ -12861,6 +13249,7 @@ function DataCenterDashboard() {
     const [rackTypes, setRackTypes] = useState([]);
     const [hardwareTypes, setHardwareTypes] = useState([]);
     const [locations, setLocations] = useState([]);
+    const [pduSummary, setPduSummary] = useState(null);
     const [locationModalOpen, setLocationModalOpen] = useState(false);
     const [deleteLocationModalOpen, setDeleteLocationModalOpen] = useState(false);
     const [manageDCModalOpen, setManageDCModalOpen] = useState(false);
@@ -12967,7 +13356,8 @@ function DataCenterDashboard() {
             ['racks', () => api.getRacks()],
             ['locations', () => api.getLocations()],
             ['rackTypes', () => api.getRackTypes()],
-            ['hardwareTypes', () => api.getHardwareTypes()]
+            ['hardwareTypes', () => api.getHardwareTypes()],
+            ['pduSummary', () => api.getPduSummary()]
         ];
         try {
             // PERF: these 10 list endpoints used to all fire at once (Promise.all)
@@ -13003,6 +13393,7 @@ function DataCenterDashboard() {
             apply('racks', setRacks, []);
             apply('rackTypes', setRackTypes, []);
             const hwRes = apply('hardwareTypes', setHardwareTypes, []);
+            apply('pduSummary', setPduSummary, null);
             if (locRes && !locRes.error && Array.isArray(locRes.value))
                 CACHED_LOCATIONS = locRes.value;
             if (hwRes && !hwRes.error && Array.isArray(hwRes.value))
@@ -14007,16 +14398,17 @@ function DataCenterDashboard() {
                     React.createElement(Lock, { s: 16, c: "#5D7394" })),
                 React.createElement("button", { onClick: handleLogout, className: "neu-icon-btn", title: "Sign out" },
                     React.createElement(LogOut, { s: 16, c: "#5D7394" })))),
-        React.createElement("div", { className: "neu-pressed dcim-nav", style: { display: "inline-flex", gap: 6, marginBottom: 28, padding: "6px", borderRadius: 50 } }, [{ key: "dashboard", label: "Dashboard" }, { key: "inventory", label: "Asset Inventory" }, { key: "capacity", label: "DC Capacity" }, { key: "monitoring", label: "Monitoring" }, { key: "issues", label: "Issue Tracker" }, { key: "activities", label: "DC Activity" }, { key: "movements", label: "Material Movements" }, { key: "settings", label: "Settings" }].map((t) => (React.createElement("button", { key: t.key, onClick: () => setTab(t.key), className: `tab-pill ${tab === t.key ? "active" : ""}` }, t.label, t.key === "monitoring" && fwRunning > 0 && React.createElement("span", { title: fwRunning + " firmware update(s) running", style: { marginLeft: 7, padding: "1px 7px", borderRadius: 999, background: "#D97706", color: "#fff", fontSize: 10, fontWeight: 800 } }, fwRunning))))),
+        React.createElement("div", { className: "neu-pressed dcim-nav", style: { display: "inline-flex", gap: 6, marginBottom: 28, padding: "6px", borderRadius: 50 } }, [{ key: "dashboard", label: "Dashboard" }, { key: "inventory", label: "Asset Inventory" }, { key: "capacity", label: "DC Capacity" }, { key: "monitoring", label: "Monitoring" }, { key: "pdu", label: "PDU Power" }, { key: "issues", label: "Issue Tracker" }, { key: "activities", label: "DC Activity" }, { key: "movements", label: "Material Movements" }, { key: "settings", label: "Settings" }].map((t) => (React.createElement("button", { key: t.key, onClick: () => setTab(t.key), className: `tab-pill ${tab === t.key ? "active" : ""}` }, t.label, t.key === "monitoring" && fwRunning > 0 && React.createElement("span", { title: fwRunning + " firmware update(s) running", style: { marginLeft: 7, padding: "1px 7px", borderRadius: 999, background: "#D97706", color: "#fff", fontSize: 10, fontWeight: 800 } }, fwRunning))))),
         apiError && React.createElement("div", { className: "neu-card anim-in d1", style: { background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)", padding: "14px 18px", marginBottom: 20, color: "#DC2626", fontFamily: "Inter", fontSize: 13 } },
             "API Error: ",
             apiError,
             " ",
             React.createElement("button", { onClick: loadAll, style: { marginLeft: 12, background: "transparent", border: "none", color: "#DC2626", textDecoration: "underline", cursor: "pointer", fontWeight: 600 } }, "Retry")),
         loading && React.createElement("div", { style: { textAlign: "center", padding: "40px 0", color: "#64748B", fontFamily: "Inter" } }, "Loading data\u2026"),
-        !loading && tab === "dashboard" && React.createElement(DashboardOverview, { issues: siteRestrictedIssues, assets: siteRestrictedAssets, rackComponents: siteRestrictedRackComponents, activities: siteRestrictedActivities, overallStats: overallStats, perSite: perSite, recentActivities: recentActivities, movements: siteRestrictedMovements, racks: siteRestrictedRacks, goTo: goTo, onlineCount: onlineCount, allowedSites: allowedSites, locations: locations }),
+        !loading && tab === "dashboard" && React.createElement(DashboardOverview, { issues: siteRestrictedIssues, assets: siteRestrictedAssets, rackComponents: siteRestrictedRackComponents, activities: siteRestrictedActivities, overallStats: overallStats, perSite: perSite, recentActivities: recentActivities, movements: siteRestrictedMovements, racks: siteRestrictedRacks, goTo: goTo, onlineCount: onlineCount, allowedSites: allowedSites, locations: locations, pduSummary: pduSummary }),
         !loading && tab === "capacity" && React.createElement(DCCapacity, { assets: siteRestrictedAssets, rackComponents: siteRestrictedRackComponents, issues: siteRestrictedIssues, allowedSites: allowedSites, site: capacitySite, setSite: setCapacitySite, onOpenRack: openRackModal, zones: siteRestrictedZones, racks: siteRestrictedRacks, canEdit: canEdit, isAdmin: isAdmin, onManageDC: (selectedSite) => { setManageDCSite(selectedSite); setManageDCModalOpen(true); }, onDeleteZone: deleteZone, onDeleteRack: deleteRack, onAddStructural: openAddStructural, onMoveRack: (rack) => setMoveRackTarget(rack), onRackDataChanged: () => loadAll(), onOpenRackLayoutPicker: (presetSite) => setRackLayoutPicker({ presetSite }) }),
         !loading && tab === "monitoring" && React.createElement(MonitoringPage, { locations: locations.filter(l => allowedSites.includes(l.name)), zones: siteRestrictedZones, allowedSites: allowedSites, onAddLocation: () => setLocationModalOpen(true), canEdit: canEdit, canManageLocations: isGlobalAdmin }),
+        !loading && tab === "pdu" && React.createElement(PduPage, { allowedSites: allowedSites, canEdit: canEdit }),
         !loading && tab === "issues" && React.createElement(React.Fragment, null,
             React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 } },
                 React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } },

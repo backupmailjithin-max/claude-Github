@@ -18,6 +18,7 @@
     "jsonwebtoken": "9.0.3",
     "multer": "^2.4.0",
     "mysql2": "3.24.2",
+    "net-snmp": "^3.29.2",
     "undici": "^7.29.1"
   }
 }

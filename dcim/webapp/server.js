@@ -8641,6 +8641,12 @@ const setupRoutesModule = require('./lib/setup-routes')(app, {
   getOmeToken, getOneviewSession, monitorEnvKey,
   validateBackupDir, backupConfig, ocrEngine, webappDir: __dirname,
 });
+const pduRoutesModule = require('./lib/pdu-routes')(app, {
+  pool: livePool, log, httpErr, sendErr,
+  authenticateToken, requireRole, getAllowedSitesForUser, applySiteScope, assertSiteAccess,
+  genId, auditLog,
+});
+const PDU_POLL_INTERVAL_MS = Math.max(60000, Number(process.env.PDU_POLL_INTERVAL_MS) || 15 * 60 * 1000); // 15 min default
 
 // Serve frontend (SPA fallback) — compatible with Express 4 and Express 5.
 app.use((req, res, next) => {
@@ -8716,6 +8722,7 @@ async function startServer() {
     }
     await initDB();
     await setupRoutesModule.applyIntegrationEnv();
+    await pduRoutesModule.ensureSchema();
     // BIND_HOST (optional, e.g. 127.0.0.1 when nginx is the only entry point). Unset = all interfaces, exactly as before.
     httpServer = app.listen(...(process.env.BIND_HOST ? [PORT, process.env.BIND_HOST] : [PORT]), () => {
       log.info(`[startup] DCIM server v${APP_VERSION} listening on port ${PORT} (${IS_PRODUCTION ? 'production' : 'development'}, node ${process.version}, pid ${process.pid}, db ${DB_NAME})`);
@@ -8733,6 +8740,7 @@ async function startServer() {
         } catch (e) { log.warn('[static] pre-compression skipped:', e.message); }
       }, 1500).unref();
       if (String(process.env.MONITOR_FW_SCAN || 'on').toLowerCase() !== 'off') { setTimeout(() => fwJobsTick(true).catch(() => { }), 20000).unref(); setInterval(() => fwJobsTick(true).catch(() => { }), FW_SCAN_INTERVAL_MS).unref(); }
+      if (String(process.env.PDU_POLL || 'on').toLowerCase() !== 'off') { setTimeout(() => pduRoutesModule.pollAllPdus().catch((e) => log.warn('[pdu] poll skipped: ' + e.message)), 25000).unref(); setInterval(() => pduRoutesModule.pollAllPdus().catch((e) => log.warn('[pdu] poll skipped: ' + e.message)), PDU_POLL_INTERVAL_MS).unref(); }
       auditLog(null, 'SERVER_START', { username: 'system', entity: 'server', details: { version: APP_VERSION, port: Number(PORT), node: process.version } });
       console.log(`\n========================================`);
       log.info(`  Data Center API Server Ready`);
