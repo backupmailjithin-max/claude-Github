@@ -12844,6 +12844,14 @@ function buildPduSparkSvg(rows) {
     return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:100%;display:block"><defs><linearGradient id="pduSparkFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#3157EE" stop-opacity="0.3"/><stop offset="100%" stop-color="#3157EE" stop-opacity="0.02"/></linearGradient></defs><path d="${area}" fill="url(#pduSparkFill)"/><path d="${path}" fill="none" stroke="#3157EE" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 }
 const PDU_LABEL_STYLE = { display: "block", fontFamily: "Inter", fontSize: 10, fontWeight: 800, letterSpacing: ".04em", textTransform: "uppercase", color: "#64748B", marginBottom: 5 };
+const PDU_RACK_COLUMNS = [
+    { key: "site", label: "Site" },
+    { key: "zone", label: "Zone" },
+    { key: "rackType", label: "Rack Type", format: (v) => v || "—" },
+    { key: "rackNo", label: "Rack No" },
+    { key: "phaseLabel", label: "Phase" },
+    { key: "redundancy", label: "Redundancy" },
+];
 function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
     const isNew = !pdu || !pdu.id;
     const [form, setForm] = useState(() => ({
@@ -13032,10 +13040,8 @@ function PduPage({ allowedSites = [], canEdit = false }) {
     const [summary, setSummary] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-    const [siteFilter, setSiteFilter] = useState("all");
-    const [zoneFilter, setZoneFilter] = useState("all");
-    const [phaseFilter, setPhaseFilter] = useState("all");
-    const [search, setSearch] = useState("");
+    const [columnFilters, setColumnFilters] = useState(() => makeEmptyListColumnFilters(PDU_RACK_COLUMNS));
+    const [openFilter, setOpenFilter] = useState(null);
     const [openRack, setOpenRack] = useState(null);
     const [editing, setEditing] = useState(null);
     const [trendOpen, setTrendOpen] = useState(false);
@@ -13057,16 +13063,13 @@ function PduPage({ allowedSites = [], canEdit = false }) {
     useEffect(() => { if (sparkRef.current) sparkRef.current.innerHTML = buildPduSparkSvg(sparkRows); }, [sparkRows]);
     const racks = useMemo(() => pduGroupRacks(flat), [flat]);
     const zonesForSite = (site) => Array.from(new Set(racks.filter((r) => site === "all" || r.site === site).map((r) => r.zone)));
-    const filteredRacks = racks.filter((r) => {
-        if (siteFilter !== "all" && r.site !== siteFilter) return false;
-        if (zoneFilter !== "all" && r.zone !== zoneFilter) return false;
-        if (phaseFilter !== "all" && pduRackTotals(r).phaseLabel !== phaseFilter) return false;
-        if (search) {
-            const hay = [r.site, r.zone, r.rackType, r.rackNo, ...r.feeds.map((f) => f.vendor + " " + f.model + " " + f.ipAddress)].join(" ").toLowerCase();
-            if (!hay.includes(search.toLowerCase())) return false;
-        }
-        return true;
-    });
+    const racksAugmented = useMemo(() => racks.map((r) => {
+        const t = pduRackTotals(r);
+        return { ...r, totalKw: t.totalKw, ratedKw: t.ratedKw, usedPct: t.usedPct, phaseLabel: t.phaseLabel, redundancy: pduRedundancy(r) };
+    }), [racks]);
+    const filteredRacks = racksAugmented.filter((row) => PDU_RACK_COLUMNS.every((col) => listColumnFilterMatches(columnFilters[col.key], col, row)));
+    const optionRowsForColumn = (key) => racksAugmented.filter((row) => PDU_RACK_COLUMNS.every((col) => col.key === key || listColumnFilterMatches(columnFilters[col.key], col, row)));
+    const topLoadedRacks = useMemo(() => racksAugmented.filter((r) => r.totalKw > 0).slice().sort((a, b) => b.totalKw - a.totalKw).slice(0, 5), [racksAugmented]);
     const runSync = async () => {
         setSyncing(true); setSyncMsg(null);
         try { const r = await api.syncAllPdus(); setSyncMsg(`Synced ${r.synced} PDU(s) — ${r.online} online.`); await load(); }
@@ -13104,15 +13107,27 @@ function PduPage({ allowedSites = [], canEdit = false }) {
                     React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginTop: 3 } }, "Last 30 days across all your locations — click to customize the date range")),
                 React.createElement("div", { ref: sparkRef, style: { flex: "0 0 220px", height: 56 } }),
                 React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, fontWeight: 700, color: "#244DE5", background: "rgba(49,87,238,.08)", padding: "9px 14px", borderRadius: 20 } }, "View & Customize ›")),
-            React.createElement("div", { className: "neu-card", style: { display: "flex", gap: 10, alignItems: "center", marginBottom: 16, flexWrap: "wrap", padding: "14px 16px" } },
-                React.createElement(ThemedSelect, { value: siteFilter, onChange: (e) => { setSiteFilter(e.target.value); setZoneFilter("all"); }, className: "neu-input", style: { minWidth: 150 } }, [React.createElement("option", { key: "all", value: "all" }, "All Sites"), ...allowedSites.map((s) => React.createElement("option", { key: s, value: s }, s))]),
-                React.createElement(ThemedSelect, { value: zoneFilter, onChange: (e) => setZoneFilter(e.target.value), className: "neu-input", style: { minWidth: 130 } }, [React.createElement("option", { key: "all", value: "all" }, "All Zones"), ...zonesForSite(siteFilter).map((z) => React.createElement("option", { key: z, value: z }, z))]),
-                React.createElement(ThemedSelect, { value: phaseFilter, onChange: (e) => setPhaseFilter(e.target.value), className: "neu-input", style: { minWidth: 140 } }, ["all", "Single-Phase", "3-Phase"].map((p) => React.createElement("option", { key: p, value: p }, p === "all" ? "All Phases" : p))),
-                React.createElement("input", { className: "neu-input", style: { flex: "1 1 200px", minWidth: 160 }, placeholder: "Search rack, vendor, model, or IP...", value: search, onChange: (e) => setSearch(e.target.value) })),
+            React.createElement("div", { className: "neu-card anim-in d1", style: { padding: "18px 20px", marginBottom: 18 } },
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#17345D", marginBottom: 3 } }, "🔺 Highest Rack Power Load"),
+                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 14 } }, "Top racks by current load across your locations — click a row to jump to it in the table below."),
+                topLoadedRacks.length === 0 ? React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#94A3B8", padding: "6px 0" } }, "No PDU readings yet — add a PDU and set its Power OID to see rack load rankings here.") :
+                    React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, topLoadedRacks.map((r, idx) => React.createElement("div", { key: r.key, onClick: () => setOpenRack(r.key), style: { display: "flex", alignItems: "center", gap: 12, padding: "9px 12px", borderRadius: 11, background: "rgba(248,250,252,.75)", cursor: "pointer" } },
+                        React.createElement("div", { style: { width: 24, height: 24, borderRadius: 8, background: idx === 0 ? "#FEE2E2" : "rgba(148,163,184,.15)", color: idx === 0 ? "#DC2626" : "#64748B", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Space Grotesk'", fontWeight: 800, fontSize: 11, flexShrink: 0 } }, "#" + (idx + 1)),
+                        React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+                            React.createElement("div", { style: { fontWeight: 700, fontSize: 12.5, color: "#17345D", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, r.site + " · " + r.zone + " · Rack " + r.rackNo),
+                            React.createElement("div", { style: { fontSize: 10.5, color: "#94A3B8" } }, r.rackType || "—")),
+                        React.createElement("div", { style: { flex: "0 0 130px", display: "flex", alignItems: "center", gap: 7 } },
+                            React.createElement("div", { style: { flex: 1, height: 6, borderRadius: 5, background: "rgba(148,163,184,.25)", overflow: "hidden" } }, React.createElement("div", { style: { width: r.usedPct + "%", height: "100%", borderRadius: 5, background: pduLoadColor(r.usedPct) } })),
+                            React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontWeight: 800, fontSize: 11.5 } }, r.usedPct, "%")),
+                        React.createElement("div", { style: { flex: "0 0 90px", textAlign: "right", fontFamily: "'Space Grotesk'", fontWeight: 800, fontSize: 13, color: "#17345D" } }, r.totalKw.toFixed(2), " kW")))),
+            ),
             React.createElement("div", { className: "neu-card", style: { overflow: "hidden" } },
                 React.createElement("div", { style: { overflowX: "auto" } },
                     React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 13, fontFamily: "Inter" } },
-                        React.createElement("thead", null, React.createElement("tr", null, ["Site", "Zone", "Rack Type", "Rack No", "Phase", "Redundancy", "Load / Rated Capacity", "Capacity Used", "Last Reading", ""].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "10px 14px", fontSize: 9.5, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: "#64748B", borderBottom: "1px solid rgba(148,163,184,.25)", whiteSpace: "nowrap" } }, h)))),
+                        React.createElement("thead", null, React.createElement("tr", null, [
+                            ...PDU_RACK_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, style: { textAlign: "left", padding: "10px 14px", fontSize: 9.5, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: "#64748B", borderBottom: "1px solid rgba(148,163,184,.25)", whiteSpace: "nowrap" } })),
+                            ...["Load / Rated Capacity", "Capacity Used", "Last Reading", ""].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "10px 14px", fontSize: 9.5, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: "#64748B", borderBottom: "1px solid rgba(148,163,184,.25)", whiteSpace: "nowrap" } }, h)),
+                        ])),
                         React.createElement("tbody", null, filteredRacks.length === 0 ? React.createElement("tr", null, React.createElement("td", { colSpan: 10, style: { padding: 30, textAlign: "center", color: "#94A3B8" } }, "No racks match the current filters.")) : filteredRacks.map((rack) => {
                             const { totalKw, ratedKw, usedPct, phaseLabel } = pduRackTotals(rack);
                             const redundancy = pduRedundancy(rack);
@@ -13141,7 +13156,8 @@ function PduPage({ allowedSites = [], canEdit = false }) {
                                         canEdit && React.createElement("button", { className: "neu-btn-secondary", style: { marginTop: 9, fontSize: 11, padding: "6px 12px" }, onClick: (e) => { e.stopPropagation(); setEditing(f); } }, "✎ Edit")))))));
                         })))))),
         editing && React.createElement(PduEditModal, { pdu: editing.id ? editing : null, allowedSites: allowedSites, onClose: () => setEditing(null), onSaved: () => { setEditing(null); load(); } }),
-        trendOpen && React.createElement(PduTrendModal, { site: "all", zone: "all", allowedSites: allowedSites, zonesForSite: zonesForSite, onClose: () => setTrendOpen(false) }));
+        trendOpen && React.createElement(PduTrendModal, { site: "all", zone: "all", allowedSites: allowedSites, zonesForSite: zonesForSite, onClose: () => setTrendOpen(false) }),
+        openFilter && React.createElement(ValueListFilterPopup, { column: openFilter, currentFilter: columnFilters[openFilter.key], optionRows: optionRowsForColumn(openFilter.key), onApply: (value) => setColumnFilters((prev) => ({ ...prev, [openFilter.key]: value })), onClose: () => setOpenFilter(null) }));
 }
 
 function DataCenterDashboard() {
