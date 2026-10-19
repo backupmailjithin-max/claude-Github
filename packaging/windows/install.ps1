@@ -274,7 +274,11 @@ function Setup-EmbeddedDb {
 
   if ($firstInit) {
     $chars = (48..57) + (65..90) + (97..122)
-    $script:DbPassword = -join ((1..32) | ForEach-Object { [char](Get-Random -InputObject $chars) })
+    # Respect a password the installer's wizard (or -DbPassword directly)
+    # actually supplied for the embedded DB's app user - only generate one
+    # when the caller left it blank, instead of always discarding it.
+    if ($DbPassword) { $script:DbPassword = $DbPassword }
+    else { $script:DbPassword = -join ((1..32) | ForEach-Object { [char](Get-Random -InputObject $chars) }) }
     $rootPw = -join ((1..32) | ForEach-Object { [char](Get-Random -InputObject $chars) })
     $sql = "ALTER USER 'root'@'localhost' IDENTIFIED BY '$rootPw';`nCREATE DATABASE IF NOT EXISTS ``$DbName`` CHARACTER SET utf8mb4;`nCREATE USER IF NOT EXISTS '$DbUser'@'127.0.0.1' IDENTIFIED BY '$($script:DbPassword)';`nGRANT ALL PRIVILEGES ON ``$DbName``.* TO '$DbUser'@'127.0.0.1';`nFLUSH PRIVILEGES;`n"
     $sql | & $mysqlExe -h 127.0.0.1 -P $EmbeddedDbPort -u root

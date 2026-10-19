@@ -64,22 +64,40 @@ Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Fil
 [Code]
 var
   DbStrategyPage: TInputOptionWizardPage;
+  EmbeddedDbPage: TInputQueryWizardPage;
   DbConnectionPage: TInputQueryWizardPage;
   AppSettingsPage: TInputQueryWizardPage;
 
 procedure InitializeWizard;
 begin
   { Database strategy: the one real fork in the installer (see
-    docs/guides/installation-guide.md's "Database Strategy - pick one"). }
+    docs/guides/installation-guide.md's "Database Strategy - pick one").
+    The bundled engine is MariaDB specifically (a drop-in, MySQL-protocol-
+    compatible server) - there is no separate "MySQL" bundled option to
+    choose between, which is why only one option is offered here. }
   DbStrategyPage := CreateInputOptionPage(wpSelectDir,
     'Database Configuration', 'How should DCIM connect to a database?',
-    'Choose one, then click Next. You can change this later by re-running Repair.',
+    'Choose one, then click Next. You can change this later by re-running Repair. ' +
+    '"Bundled" uses a private MariaDB instance (MySQL-compatible) that DCIM installs and manages for you.',
     True, False);
-  DbStrategyPage.Add('Use a bundled, private database (recommended - no setup required)');
+  DbStrategyPage.Add('Use a bundled, private database (recommended - MariaDB, installed automatically)');
   DbStrategyPage.Add('Connect to an existing MySQL / MariaDB server');
   DbStrategyPage.SelectedValueIndex := 0;
 
-  DbConnectionPage := CreateInputQueryPage(DbStrategyPage.ID,
+  { Even the bundled/embedded path lets you set the database name, app
+    username and password yourself - only the fields that don't apply to a
+    private, localhost-only database (host, port) are skipped for it. }
+  EmbeddedDbPage := CreateInputQueryPage(DbStrategyPage.ID,
+    'Bundled Database Account', 'Set the database name and login DCIM''s app will use.',
+    'Leave the password blank to have DCIM generate a secure random one for you (shown on the summary screen at the end).');
+  EmbeddedDbPage.Add('Database name:', False);
+  EmbeddedDbPage.Add('Username:', False);
+  EmbeddedDbPage.Add('Password (optional):', True);
+  EmbeddedDbPage.Add('Confirm password:', True);
+  EmbeddedDbPage.Values[0] := 'dcim';
+  EmbeddedDbPage.Values[1] := 'dcim';
+
+  DbConnectionPage := CreateInputQueryPage(EmbeddedDbPage.ID,
     'Database Connection', 'Enter the connection details for your existing database server.',
     'DCIM will verify this connection before anything else is installed.');
   DbConnectionPage.Add('Host:', False);
@@ -105,8 +123,9 @@ end;
 function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   Result := False;
-  { Only ask for connection details when "existing server" was chosen - the
-    embedded path needs nothing more than the choice itself. }
+  { Each DB page only applies to the strategy it belongs to. }
+  if (PageID = EmbeddedDbPage.ID) and (DbStrategyPage.SelectedValueIndex <> 0) then
+    Result := True;
   if (PageID = DbConnectionPage.ID) and (DbStrategyPage.SelectedValueIndex = 0) then
     Result := True;
 end;
@@ -116,7 +135,21 @@ var
   PortNum: Longint;
 begin
   Result := True;
-  if CurPageID = DbConnectionPage.ID then
+  if CurPageID = EmbeddedDbPage.ID then
+  begin
+    if (Trim(EmbeddedDbPage.Values[0]) = '') or (Trim(EmbeddedDbPage.Values[1]) = '') then
+    begin
+      MsgBox('Please enter a database name and username (or leave this at its defaults).', mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
+    if EmbeddedDbPage.Values[2] <> EmbeddedDbPage.Values[3] then
+    begin
+      MsgBox('The passwords do not match.', mbError, MB_OK);
+      Result := False;
+    end;
+  end
+  else if CurPageID = DbConnectionPage.ID then
   begin
     if (Trim(DbConnectionPage.Values[0]) = '') or (Trim(DbConnectionPage.Values[2]) = '') then
     begin
@@ -174,6 +207,10 @@ begin
   if DbStrategyPage.SelectedValueIndex = 0 then
   begin
     P := P + ' -EmbeddedDb';
+    P := P + ' -DbName "' + EscapeForPowerShell(EmbeddedDbPage.Values[0]) + '"';
+    P := P + ' -DbUser "' + EscapeForPowerShell(EmbeddedDbPage.Values[1]) + '"';
+    if EmbeddedDbPage.Values[2] <> '' then
+      P := P + ' -DbPassword "' + EscapeForPowerShell(EmbeddedDbPage.Values[2]) + '"';
   end
   else
   begin

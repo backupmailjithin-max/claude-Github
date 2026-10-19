@@ -58,11 +58,15 @@ Usage: $0 [--mode install|upgrade|repair] [options]
 Options:
   --mode MODE          install | upgrade | repair (skips the interactive menu)
   --port PORT          HTTP port the app listens on (default: $REQUIRED_PORT_DEFAULT)
-  --db-host HOST        (default: localhost; ignored with --embedded-db)
+  --db-host HOST        (default: localhost; ignored with --embedded-db - it
+                        always runs on its own private socket)
   --db-port PORT        (default: 3306; ignored with --embedded-db)
-  --db-user USER        (default: dcim; ignored with --embedded-db)
-  --db-password PASS    (ignored with --embedded-db - a random one is generated)
-  --db-name NAME         (default: dcim)
+  --db-user USER        (default: dcim; also used as the embedded DB's app
+                        user when --embedded-db is given)
+  --db-password PASS    (also used for the embedded DB's app user when
+                        --embedded-db is given; a secure random one is
+                        generated if left blank, either way)
+  --db-name NAME         (default: dcim; also used with --embedded-db)
   --embedded-db         bundle and run a private MariaDB instance instead of
                         using an external one (Option 1 vs. the --db-* flags'
                         Option 2) - requires the package to have been built
@@ -482,7 +486,10 @@ setup_embedded_db() {
     || die "Embedded MariaDB did not start within 90s. Check: journalctl -u $EMBEDDED_DB_SERVICE -n 100"
 
   if [ "$first_init" -eq 1 ]; then
-    DB_PASSWORD="$(random_secret | head -c 32)"
+    # Respect a password actually supplied via --db-password for the embedded
+    # DB's app user - only generate one when it was left blank, instead of
+    # always discarding it (previously true even with --embedded-db).
+    [ -n "$DB_PASSWORD" ] || DB_PASSWORD="$(random_secret | head -c 32)"
     local root_pw esc_db_pw esc_root_pw
     root_pw="$(random_secret | head -c 32)"
     esc_db_pw="$(printf '%s' "$DB_PASSWORD" | sed "s/'/''/g")"
