@@ -293,16 +293,32 @@ const CSP_MODE = (() => { const v = String(process.env.CSP_MODE || 'report-only'
 // exactly as before.
 const JWT_EXPIRES_IN = (() => { const n = Number(process.env.SESSION_TIMEOUT_HOURS); return Number.isFinite(n) && n > 0 ? `${n}h` : '8h'; })();
 const cspExtra = (name) => String(process.env[name] || '').split(/[\s,]+/).filter((x) => /^(https?:\/\/[A-Za-z0-9.*:_-]+|wss?:\/\/[A-Za-z0-9.*:_-]+)$/.test(x)).join(' ');
-let _cspCache = { mtime: 0, value: '' };
+// index.html is never hand-versioned: the ?v= on app-compiled.js is rewritten here, on every
+// request, to the live bundle's own content hash (same hash appBundlePath() already computes -
+// not a file mtime, since the bundle is often deployed by copying a file over an existing one,
+// which does not reliably bump mtime). This is what used to be a hardcoded "?v=20261019pduN"
+// string in index.html that had to be remembered and bumped by hand on every app-compiled.js
+// release - a human (or AI) forgetting to do that is exactly the bug this removes, permanently:
+// there is nothing left to forget. CSP script-src hashes are computed from this SAME rewritten
+// HTML (not the raw on-disk file), so the hash list always matches what is actually served.
+let _indexCache = { htmlMtime: 0, bundleHash: '', html: '', cspHashes: '' };
+function getRenderedIndex() {
+  const f = path.join(__dirname, 'index.html');
+  const st = fs.statSync(f);
+  appBundlePath(); // side effect: refreshes _bundleCheck.hash for the current app-compiled.js content
+  const bundleHash = _bundleCheck.hash;
+  if (_indexCache.html && _indexCache.htmlMtime === st.mtimeMs && _indexCache.bundleHash === bundleHash) return _indexCache;
+  let html = fs.readFileSync(f, 'utf8').replace(/(\.\/app-compiled\.js\?v=)[^"'\s]+/, `$1${bundleHash || 'dev'}`);
+  const noComments = html.replace(/<!--[\s\S]*?-->/g, ''); const hashes = []; // comments removed first: a '<script>' written inside an HTML comment must not be mistaken for a real tag
+  noComments.replace(/<script(?![^>]*\bsrc\s*=)[^>]*>([\s\S]*?)<\/script>/gi, (m, body) => { if (body.trim()) hashes.push(`'sha256-${nodeCrypto.createHash('sha256').update(body.replace(/\r\n?/g, '\n'), 'utf8').digest('base64')}'`); return m; });
+  _indexCache = { htmlMtime: st.mtimeMs, bundleHash, html, cspHashes: hashes.join(' ') };
+  return _indexCache;
+}
 function buildCspValue() {
   try {
-    const f = path.join(__dirname, 'index.html'); const st = fs.statSync(f);
-    if (_cspCache.value && _cspCache.mtime === st.mtimeMs) return _cspCache.value;
-    const html = fs.readFileSync(f, 'utf8').replace(/<!--[\s\S]*?-->/g, ''); const hashes = []; // comments removed first: a '<script>' written inside an HTML comment must not be mistaken for a real tag
-    html.replace(/<script(?![^>]*\bsrc\s*=)[^>]*>([\s\S]*?)<\/script>/gi, (m, body) => { if (body.trim()) hashes.push(`'sha256-${nodeCrypto.createHash('sha256').update(body.replace(/\r\n?/g, '\n'), 'utf8').digest('base64')}'`); return m; });
+    const { cspHashes } = getRenderedIndex();
     const conn = ["'self'", cspExtra('CSP_EXTRA_CONNECT')].filter(Boolean).join(' '); const img = ["'self'", 'data:', 'blob:', cspExtra('CSP_EXTRA_IMG')].filter(Boolean).join(' ');
-    const value = ["default-src 'self'", `script-src 'self' ${hashes.join(' ')}`.trim(), "style-src 'self' 'unsafe-inline'", `img-src ${img}`, "font-src 'self' data:", "media-src 'self' blob:", `connect-src ${conn}`, "worker-src 'self' blob:", "object-src 'none'", "base-uri 'self'", "form-action 'self'", "frame-ancestors 'self'", 'report-uri /api/csp-report'].join('; ');
-    _cspCache = { mtime: st.mtimeMs, value }; return value;
+    return ["default-src 'self'", `script-src 'self' ${cspHashes}`.trim(), "style-src 'self' 'unsafe-inline'", `img-src ${img}`, "font-src 'self' data:", "media-src 'self' blob:", `connect-src ${conn}`, "worker-src 'self' blob:", "object-src 'none'", "base-uri 'self'", "form-action 'self'", "frame-ancestors 'self'", 'report-uri /api/csp-report'].join('; ');
   } catch (e) { return ''; }
 }
 let _cspLogWindow = 0, _cspLogCount = 0;
@@ -554,7 +570,17 @@ function appBundlePath() {
 }
 app.get('/app-compiled.js', (req, res, next) => sendStaticFile(req, res, next, appBundlePath(), req.query.v ? APP_CACHE : 'no-cache'));
 // Production HTML: always revalidated (ETag -> 304 when unchanged) so a deployment is picked up at once.
-app.get(['/', '/index.html'], (req, res, next) => sendStaticFile(req, res, next, path.join(__dirname, 'index.html'), 'no-cache'));
+// Served through getRenderedIndex(), not sendStaticFile(), because the app-compiled.js ?v= cache-buster
+// inside it is rewritten live from the bundle's own content hash - see getRenderedIndex() above.
+app.get(['/', '/index.html'], (req, res, next) => {
+  try {
+    const { html, htmlMtime, bundleHash } = getRenderedIndex();
+    const etag = `"idx-${htmlMtime.toString(16)}-${bundleHash}"`;
+    res.set({ 'Cache-Control': 'no-cache', ETag: etag, 'Content-Type': 'text/html; charset=utf-8' });
+    if (req.headers['if-none-match'] === etag) return res.status(304).end();
+    return req.method === 'HEAD' ? res.end() : res.end(html);
+  } catch (e) { return next(e); }
+});
 // Login-page background video + poster (public on purpose: the login screen is shown before sign-in).
 app.use('/media', express.static(path.join(__dirname, 'media'), { dotfiles: 'deny', index: false, maxAge: '7d' }));
 
@@ -8659,7 +8685,8 @@ app.use((req, res, next) => {
     return res.status(404).send('Not found');
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') return next();
-  return res.sendFile(path.join(__dirname, 'index.html'));
+  res.set({ 'Cache-Control': 'no-cache', 'Content-Type': 'text/html; charset=utf-8' });
+  return res.end(getRenderedIndex().html);
 });
 
 // Error handler — must be registered last, with all 4 args, for Express to
