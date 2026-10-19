@@ -390,6 +390,13 @@ jobs:
           node packaging\windows\install.js -Mode install -Yes -EmbeddedDb -InstallDir C:\DCIM -Port 18976 -DbUser root -AdminUser ciadmin -AdminPassword 'CiAdminPass123!'
           if ($LASTEXITCODE -eq 0) { throw "install.js accepted -DbUser root for the embedded DB - this should have been rejected." }
           Write-Host "Correctly rejected -DbUser root."
+          # GitHub Actions' pwsh step wrapper checks $LASTEXITCODE at the end
+          # of the whole script and fails the STEP if it's non-zero - even
+          # though the script's own logic above already handled and verified
+          # the expected failure. Without this, the step fails despite doing
+          # exactly what it should (found by this exact step failing with no
+          # other error after correctly printing the line above).
+          $LASTEXITCODE = 0
 
       - name: Install (fresh, -EmbeddedDb, no external MySQL/MariaDB present)
         shell: pwsh
