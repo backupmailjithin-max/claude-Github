@@ -359,6 +359,14 @@ const api = {
     importPdus: (payload) => apiFetch('/pdus/import', { method: 'POST', body: JSON.stringify(payload), timeoutMs: 60000 }),
     discoverPdus: () => apiFetch('/pdus/discover', { method: 'POST', timeoutMs: 90000 }),
     applyPduDiscovery: (ids) => apiFetch('/pdus/discover/apply', { method: 'POST', body: JSON.stringify({ ids }), timeoutMs: 60000 }),
+    getRedfishAssets: (site) => apiFetch('/monitoring/redfish/assets' + (site && site !== 'all' ? '?site=' + encodeURIComponent(site) : '')),
+    detectRedfish: (body) => apiFetch('/monitoring/redfish/detect', { method: 'POST', body: JSON.stringify(body), timeoutMs: 15000 }),
+    saveRedfishCredentials: (assetId, body) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/credentials', { method: 'PUT', body: JSON.stringify(body) }),
+    syncRedfishAsset: (assetId) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/sync', { method: 'POST', timeoutMs: 15000 }),
+    discoverRedfish: () => apiFetch('/monitoring/redfish/discover', { method: 'POST', timeoutMs: 120000 }),
+    applyRedfishDiscovery: (assetIds) => apiFetch('/monitoring/redfish/discover/apply', { method: 'POST', body: JSON.stringify({ assetIds }), timeoutMs: 120000 }),
+    getRedfishFirmwareInventory: (assetId) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/firmware-inventory', { timeoutMs: 20000 }),
+    updateRedfishFirmware: (assetId, imageUri) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/firmware/update', { method: 'POST', body: JSON.stringify({ imageUri }) }),
 };
 const { useState, useMemo, useRef, useEffect } = React;
 /* PERF (Phase-2): long lists draw the first LIST_PAGE rows and add more as the user scrolls (or presses "Show all").
@@ -7229,6 +7237,193 @@ function FwServerRows({ rows }) {
                 detail ? React.createElement("div", { style: { color: row.status === "Failed" ? "#B91C1C" : "#334155", whiteSpace: "pre-wrap", wordBreak: "break-word" } }, detail) : React.createElement("div", { style: { color: "#94A3B8" } }, "No further detail reported yet.")));
     }));
 }
+
+/* ===== REDFISH (multi-vendor hardware monitoring) ===== */
+// Generic, vendor-agnostic preview + discovery UI for any Redfish-capable
+// BMC (Dell iDRAC, HPE iLO, Lenovo XCC, Cisco standalone IMC, NVIDIA DGX,
+// etc.) - talks directly to the device's management IP, no per-vendor
+// appliance required. Firmware update jobs started here land in the SAME
+// firmware_jobs table / "Firmware Update Jobs" tab OME/OneView jobs use.
+function RedfishHealthPill({ status }) {
+    const s = String(status || "").toLowerCase();
+    const color = s === "ok" ? "#059669" : s === "warning" ? "#D97706" : s === "critical" ? "#DC2626" : "#94A3B8";
+    return React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "Inter", fontSize: 11, fontWeight: 700, color } },
+        React.createElement("span", { style: { width: 7, height: 7, borderRadius: "50%", background: color } }), status || "Unknown");
+}
+function RedfishDetectModal({ asset, onClose, onSaved }) {
+    const [ip, setIp] = useState((asset && asset.mgmtIp) || "");
+    const [port, setPort] = useState(443);
+    const [username, setUsername] = useState("");
+    const [password, setPassword] = useState("");
+    const [busy, setBusy] = useState(false);
+    const [result, setResult] = useState(null);
+    const [err, setErr] = useState("");
+    const [fwInv, setFwInv] = useState(null);
+    const [fwBusy, setFwBusy] = useState(false);
+    const [imageUri, setImageUri] = useState("");
+    const [updateMsg, setUpdateMsg] = useState(null);
+
+    const runDetect = async () => {
+        if (!ip) { setErr("Enter the BMC/management IP address."); return; }
+        setBusy(true); setErr(""); setResult(null);
+        try { const r = await api.detectRedfish({ ip, port, username, password }); setResult(r); if (!r.reachable) setErr(r.error || "Could not reach the device."); }
+        catch (e) { setErr(e.message); }
+        setBusy(false);
+    };
+    const saveAndApply = async () => {
+        if (!asset) return;
+        setBusy(true); setErr("");
+        try {
+            await api.saveRedfishCredentials(asset.id, { username, password, port });
+            await api.syncRedfishAsset(asset.id);
+            onSaved && onSaved();
+            onClose();
+        } catch (e) { setErr(e.message); }
+        setBusy(false);
+    };
+    const loadFirmware = async () => {
+        if (!asset) return;
+        setFwBusy(true);
+        try { setFwInv(await api.getRedfishFirmwareInventory(asset.id)); } catch (e) { setFwInv({ supported: false, error: e.message }); }
+        setFwBusy(false);
+    };
+    const triggerUpdate = async () => {
+        if (!asset || !imageUri) return;
+        setUpdateMsg(null);
+        try { await api.updateRedfishFirmware(asset.id, imageUri); setUpdateMsg({ type: "success", text: "Update started - track progress in the Firmware Jobs tab." }); }
+        catch (e) { setUpdateMsg({ type: "error", text: e.message }); }
+    };
+    const field = (label, value, onChange, type) => React.createElement("div", { style: { flex: 1, minWidth: 140 } },
+        React.createElement("label", { style: PDU_LABEL_STYLE }, label),
+        React.createElement("input", { className: "neu-input", style: { width: "100%" }, type: type || "text", value: value, onChange: (e) => onChange(e.target.value) }));
+
+    return ReactDOM.createPortal(
+        React.createElement("div", { className: "pdu-modal-backdrop", style: { position: "fixed", inset: 0, background: "rgba(15,23,42,.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }, onClick: onClose },
+            React.createElement("div", { className: "pdu-modal-pop neu-card", style: { width: 640, maxWidth: "94vw", maxHeight: "88vh", overflowY: "auto", padding: 28 }, onClick: (e) => e.stopPropagation() },
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617", marginBottom: 4 } }, asset ? `Server Hardware — ${asset.deviceName || asset.id}` : "Test & Detect Server Hardware"),
+                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 18 } }, "Works against any Redfish-capable BMC (Dell iDRAC, HPE iLO, Lenovo XCC, Cisco standalone IMC, NVIDIA DGX, etc.) — reads identity, health, power and thermal directly from the device's management port."),
+                React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 12 } }, field("BMC / Management IP", ip, setIp), field("Port", port, (v) => setPort(Number(v) || 443), "number")),
+                React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 14 } }, field("Username", username, setUsername), field("Password", password, setPassword, "password")),
+                React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 16 } },
+                    React.createElement("button", { type: "button", onClick: runDetect, disabled: busy, className: "neu-btn-secondary" }, busy ? "Testing…" : "Test & Detect"),
+                    asset && result && result.reachable && React.createElement("button", { type: "button", onClick: saveAndApply, disabled: busy, className: "neu-btn-primary" }, "Save & Apply to This Asset")),
+                err && React.createElement("div", { style: { padding: "9px 12px", borderRadius: 9, background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.25)", color: "#B91C1C", fontFamily: "Inter", fontSize: 12, marginBottom: 14 } }, err),
+                result && result.reachable && React.createElement("div", { style: { padding: 14, borderRadius: 11, background: "#F8FAFC", border: "1px solid #E2E8F0", marginBottom: 16 } },
+                    React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 16px", fontFamily: "Inter", fontSize: 12.5 } },
+                        React.createElement("div", null, React.createElement("span", { style: { color: "#64748B" } }, "Redfish version: "), React.createElement("b", null, result.redfishVersion || "—")),
+                        React.createElement("div", null, React.createElement("span", { style: { color: "#64748B" } }, "Health: "), React.createElement(RedfishHealthPill, { status: result.healthStatus })),
+                        React.createElement("div", null, React.createElement("span", { style: { color: "#64748B" } }, "Vendor: "), React.createElement("b", null, result.vendor || "—")),
+                        React.createElement("div", null, React.createElement("span", { style: { color: "#64748B" } }, "Power state: "), React.createElement("b", null, result.powerState || "—")),
+                        React.createElement("div", null, React.createElement("span", { style: { color: "#64748B" } }, "Model: "), React.createElement("b", null, result.model || "—")),
+                        React.createElement("div", null, React.createElement("span", { style: { color: "#64748B" } }, "Power draw: "), React.createElement("b", null, result.powerWatts != null ? result.powerWatts + " W" : "—")),
+                        React.createElement("div", null, React.createElement("span", { style: { color: "#64748B" } }, "Serial: "), React.createElement("b", { style: { fontFamily: "'JetBrains Mono'" } }, result.serialNumber || "—")),
+                        React.createElement("div", null, React.createElement("span", { style: { color: "#64748B" } }, "BMC firmware: "), React.createElement("b", null, result.bmcFirmware || "—")),
+                        React.createElement("div", null, React.createElement("span", { style: { color: "#64748B" } }, "BIOS / host firmware: "), React.createElement("b", null, result.biosVersion || "—"))),
+                    (result.temperatures || []).length > 0 && React.createElement("div", { style: { marginTop: 12 } },
+                        React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, fontWeight: 700, color: "#475569", marginBottom: 5 } }, "Temperatures"),
+                        React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, result.temperatures.map((t, i) => React.createElement("span", { key: i, style: { fontFamily: "Inter", fontSize: 11, padding: "3px 9px", borderRadius: 7, background: "#fff", border: "1px solid #E2E8F0" } }, `${t.name}: ${t.readingCelsius != null ? t.readingCelsius + "°C" : "—"}`)))),
+                    (result.fans || []).length > 0 && React.createElement("div", { style: { marginTop: 10 } },
+                        React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, fontWeight: 700, color: "#475569", marginBottom: 5 } }, "Fans"),
+                        React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, result.fans.map((f, i) => React.createElement("span", { key: i, style: { fontFamily: "Inter", fontSize: 11, padding: "3px 9px", borderRadius: 7, background: "#fff", border: "1px solid #E2E8F0" } }, `${f.name}: ${f.readingRpm != null ? f.readingRpm + " RPM" : "—"}`))))),
+                asset && asset.redfishConfigured && React.createElement("div", { style: { borderTop: "1px solid #E2E8F0", paddingTop: 16, marginTop: 4 } },
+                    React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 } },
+                        React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 14, fontWeight: 700, color: "#0F172A" } }, "Firmware"),
+                        React.createElement("button", { type: "button", onClick: loadFirmware, disabled: fwBusy, className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "5px 11px" } }, fwBusy ? "Loading…" : "Load Firmware Inventory")),
+                    fwInv && fwInv.supported === false && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B" } }, "This BMC does not expose a Redfish UpdateService - firmware is not readable/updatable here for this device."),
+                    fwInv && fwInv.components && React.createElement("div", { style: { marginBottom: 12 } }, fwInv.components.map((c, i) => React.createElement("div", { key: i, style: { display: "flex", justifyContent: "space-between", fontFamily: "Inter", fontSize: 12, padding: "6px 0", borderBottom: "1px solid #F1F5F9" } }, React.createElement("span", null, c.name), React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", color: "#475569" } }, c.version || "—")))),
+                    fwInv && fwInv.simpleUpdateSupported && React.createElement("div", { style: { display: "flex", gap: 8 } },
+                        React.createElement("input", { className: "neu-input", style: { flex: 1 }, placeholder: "https://fileserver/firmware/image.exe — the BMC fetches it directly from this URL", value: imageUri, onChange: (e) => setImageUri(e.target.value) }),
+                        React.createElement("button", { type: "button", onClick: triggerUpdate, disabled: !imageUri, className: "neu-btn-primary", style: { whiteSpace: "nowrap" } }, "Update Firmware")),
+                    updateMsg && React.createElement("div", { style: { marginTop: 8, fontFamily: "Inter", fontSize: 12, color: updateMsg.type === "error" ? "#B91C1C" : "#059669" } }, updateMsg.text)),
+                React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", marginTop: 20 } },
+                    React.createElement("button", { type: "button", onClick: onClose, className: "neu-btn-secondary" }, "Close"))))
+        , document.body);
+}
+function RedfishDiscoverModal({ onClose, onApplied }) {
+    const [busy, setBusy] = useState(false);
+    const [scan, setScan] = useState(null);
+    const [err, setErr] = useState("");
+    const [selected, setSelected] = useState(() => new Set());
+    const [applyMsg, setApplyMsg] = useState(null);
+    const runScan = async () => {
+        setBusy(true); setErr(""); setScan(null);
+        try { const r = await api.discoverRedfish(); setScan(r); setSelected(new Set(r.results.filter((x) => x.reachable).map((x) => x.assetId))); }
+        catch (e) { setErr(e.message); }
+        setBusy(false);
+    };
+    useEffect(() => { runScan(); }, []);
+    const toggle = (id) => setSelected((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+    const apply = async () => {
+        setBusy(true); setApplyMsg(null);
+        try { const r = await api.applyRedfishDiscovery(Array.from(selected)); setApplyMsg({ type: "success", text: `Applied to ${r.applied} device(s).` }); onApplied && onApplied(); }
+        catch (e) { setApplyMsg({ type: "error", text: e.message }); }
+        setBusy(false);
+    };
+    return ReactDOM.createPortal(
+        React.createElement("div", { className: "pdu-modal-backdrop", style: { position: "fixed", inset: 0, background: "rgba(15,23,42,.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }, onClick: onClose },
+            React.createElement("div", { className: "pdu-modal-pop neu-card", style: { width: 760, maxWidth: "94vw", maxHeight: "88vh", overflowY: "auto", padding: 28 }, onClick: (e) => e.stopPropagation() },
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617", marginBottom: 4 } }, "Discover Server Hardware (Redfish)"),
+                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 16 } }, "Tries the shared default BMC credential (REDFISH_DEFAULT_USERNAME / REDFISH_DEFAULT_PASSWORD in .env) against every asset that has a management IP but no Redfish credentials saved yet. Nothing is changed until you select devices and apply."),
+                busy && !scan && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 13, color: "#64748B" } }, "Scanning…"),
+                err && React.createElement("div", { style: { padding: "9px 12px", borderRadius: 9, background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.25)", color: "#B91C1C", fontFamily: "Inter", fontSize: 12, marginBottom: 14 } }, err),
+                scan && React.createElement("div", null,
+                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#475569", marginBottom: 10 } }, `Scanned ${scan.scanned} asset(s), ${scan.reachable} responded to Redfish.`),
+                    React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12 } },
+                        React.createElement("thead", null, React.createElement("tr", null, ["", "Asset", "Site", "Rack", "Mgmt IP", "Vendor / Model", "Result"].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "6px 8px", borderBottom: "1px solid #E2E8F0", color: "#64748B", fontWeight: 700, fontSize: 10.5, textTransform: "uppercase" } }, h)))),
+                        React.createElement("tbody", null, scan.results.map((r) => React.createElement("tr", { key: r.assetId, style: { borderBottom: "1px solid #F1F5F9" } },
+                            React.createElement("td", { style: { padding: "6px 8px" } }, r.reachable && React.createElement("input", { type: "checkbox", checked: selected.has(r.assetId), onChange: () => toggle(r.assetId) })),
+                            React.createElement("td", { style: { padding: "6px 8px" } }, r.assetId),
+                            React.createElement("td", { style: { padding: "6px 8px" } }, r.site),
+                            React.createElement("td", { style: { padding: "6px 8px" } }, r.rackNo),
+                            React.createElement("td", { style: { padding: "6px 8px", fontFamily: "'JetBrains Mono'" } }, r.mgmtIp),
+                            React.createElement("td", { style: { padding: "6px 8px" } }, r.reachable ? `${r.vendor || "—"} ${r.model || ""}` : "—"),
+                            React.createElement("td", { style: { padding: "6px 8px", color: r.reachable ? "#059669" : "#94A3B8" } }, r.reachable ? "Reachable" : (r.error || "Not reachable")))))),
+                    applyMsg && React.createElement("div", { style: { marginTop: 10, fontFamily: "Inter", fontSize: 12, color: applyMsg.type === "error" ? "#B91C1C" : "#059669" } }, applyMsg.text)),
+                React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 } },
+                    React.createElement("button", { type: "button", onClick: onClose, className: "neu-btn-secondary" }, "Close"),
+                    scan && React.createElement("button", { type: "button", onClick: apply, disabled: busy || !selected.size, className: "neu-btn-primary" }, busy ? "Applying…" : `Apply to ${selected.size} Selected`))))
+        , document.body);
+}
+function RedfishTab({ canEdit, allowedSites }) {
+    const [assets, setAssets] = useState(null);
+    const [err, setErr] = useState("");
+    const [modalAsset, setModalAsset] = useState(undefined); // undefined=closed, null=new/ad-hoc, object=existing asset
+    const [discoverOpen, setDiscoverOpen] = useState(false);
+    const [site, setSite] = useState("all");
+    const load = () => { api.getRedfishAssets(site).then((r) => { setAssets(r); setErr(""); }).catch((e) => setErr(e.message || "Could not load devices")); };
+    useEffect(() => { load(); }, [site]);
+    const sel = { padding: "6px 10px", borderRadius: 8, border: "1px solid #CBD5E1", background: "#fff", fontFamily: "Inter", fontSize: 12, color: "#0F172A" };
+    return React.createElement("div", { className: "neu-card anim-in d1", style: { padding: 20 } },
+        React.createElement("div", { style: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 16 } },
+            React.createElement("div", null,
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15.5, fontWeight: 700, color: "#0F172A" } }, "Multi-Vendor Server Hardware (Redfish)"),
+                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#475569", marginTop: 3, maxWidth: 680, lineHeight: 1.5 } }, "Works directly against any server's management port (Dell iDRAC, HPE iLO, Lenovo XCC, Cisco standalone IMC, NVIDIA DGX, and any other Redfish-capable BMC) — no vendor appliance needed. This is additional to Dell OME / HPE OneView above, not a replacement.")),
+            canEdit && React.createElement("div", { style: { display: "flex", gap: 8 } },
+                React.createElement("button", { onClick: () => setDiscoverOpen(true), className: "neu-btn-secondary" }, "Discover"),
+                React.createElement("button", { onClick: () => setModalAsset(null), className: "neu-btn-primary" }, "+ Test & Detect"))),
+        React.createElement("div", { style: { marginBottom: 14 } },
+            React.createElement("select", { value: site, onChange: (e) => setSite(e.target.value), style: sel },
+                React.createElement("option", { value: "all" }, "All locations"),
+                (allowedSites || []).map((s) => React.createElement("option", { key: s, value: s }, s)))),
+        err && React.createElement("div", { style: { padding: "9px 12px", borderRadius: 9, background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.25)", color: "#B91C1C", fontFamily: "Inter", fontSize: 12, marginBottom: 14 } }, err),
+        !assets && !err && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 13, color: "#64748B", padding: 20 } }, "Loading…"),
+        assets && !assets.length && React.createElement("div", { style: { padding: "40px 20px", textAlign: "center", fontFamily: "Inter", fontSize: 13, color: "#64748B" } }, "No assets with a management IP yet. Add one from Asset Inventory, or click \"Discover\" to scan assets that already have one."),
+        assets && assets.length > 0 && React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12.5 } },
+            React.createElement("thead", null, React.createElement("tr", null, ["Asset", "Site", "Rack", "Mgmt IP", "Vendor / Model", "Health", "Power", "BMC Firmware", "Last Sync", ""].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "8px 9px", borderBottom: "1px solid #E2E8F0", color: "#64748B", fontWeight: 700, fontSize: 10.5, textTransform: "uppercase" } }, h)))),
+            React.createElement("tbody", null, assets.map((a) => React.createElement("tr", { key: a.id, style: { borderBottom: "1px solid #F1F5F9" } },
+                React.createElement("td", { style: { padding: "8px 9px", fontWeight: 600 } }, a.deviceName || a.assetTag || a.id),
+                React.createElement("td", { style: { padding: "8px 9px" } }, a.site),
+                React.createElement("td", { style: { padding: "8px 9px" } }, a.rackNo || "—"),
+                React.createElement("td", { style: { padding: "8px 9px", fontFamily: "'JetBrains Mono'" } }, a.mgmtIp),
+                React.createElement("td", { style: { padding: "8px 9px" } }, a.vendor ? `${a.vendor} ${a.model || ""}` : "—"),
+                React.createElement("td", { style: { padding: "8px 9px" } }, React.createElement(RedfishHealthPill, { status: a.healthStatus })),
+                React.createElement("td", { style: { padding: "8px 9px" } }, a.powerState || "—"),
+                React.createElement("td", { style: { padding: "8px 9px", fontFamily: "'JetBrains Mono'", fontSize: 11.5 } }, a.bmcFirmware || "—"),
+                React.createElement("td", { style: { padding: "8px 9px", fontFamily: "Inter", fontSize: 11, color: "#64748B" } }, a.lastSyncAt ? new Date(a.lastSyncAt).toLocaleString() : "Never"),
+                React.createElement("td", { style: { padding: "8px 9px", textAlign: "right" } }, React.createElement("button", { onClick: () => setModalAsset(a), className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px" } }, a.redfishConfigured ? "View / Sync" : "Configure")))))),
+        modalAsset !== undefined && React.createElement(RedfishDetectModal, { asset: modalAsset, onClose: () => setModalAsset(undefined), onSaved: load }),
+        discoverOpen && React.createElement(RedfishDiscoverModal, { onClose: () => setDiscoverOpen(false), onApplied: load }));
+}
 function FirmwareJobsTab({ canEdit }) {
     const [scan, setScan] = useState(null);
     const [scanBusy, setScanBusy] = useState(false);
@@ -8383,7 +8578,9 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
                 React.createElement("button", { onClick: () => setTab("status"), style: tabBtnStyle(tab === "status") }, "Device Status"),
                 React.createElement("button", { onClick: () => setTab("fwjobs"), style: tabBtnStyle(tab === "fwjobs") }, "Firmware Jobs", activeJobs.some((j) => j.status === "Running") && React.createElement("span", { style: { marginLeft: 6, padding: "1px 7px", borderRadius: 999, background: "#2563EB", color: "#fff", fontSize: 10, fontWeight: 700 } }, activeJobs.filter((j) => j.status === "Running").length)),
                 React.createElement("button", { onClick: () => setTab("firmware"), style: tabBtnStyle(tab === "firmware") }, "Firmware Comparison"),
-                React.createElement("button", { onClick: () => setTab("reconciliation"), style: tabBtnStyle(tab === "reconciliation") }, "Inventory Reconciliation")),
+                React.createElement("button", { onClick: () => setTab("reconciliation"), style: tabBtnStyle(tab === "reconciliation") }, "Inventory Reconciliation"),
+                React.createElement("button", { onClick: () => setTab("redfish"), style: tabBtnStyle(tab === "redfish") }, "Multi-Vendor (Redfish)")),
+            tab === "redfish" && React.createElement(RedfishTab, { canEdit: canEdit, allowedSites: allowedSites }),
             tab === "fwjobs" && React.createElement(FirmwareJobsTab, { canEdit: canEdit }),
             tab === "status" && React.createElement(React.Fragment, null,
                 !selected && React.createElement("div", { className: "neu-card anim-in d2", style: { padding: "60px 30px", textAlign: "center" } },

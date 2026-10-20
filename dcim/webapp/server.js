@@ -1042,6 +1042,26 @@ async function initDB() {
     // Asset inventory Remarks field (backward-compatible migration for existing installs)
     try { await conn.query('ALTER TABLE assets ADD COLUMN remarks TEXT'); } catch (e) { /* column already exists */ }
 
+    // Direct-to-BMC Redfish fields (vendor-agnostic hardware monitoring - any
+    // brand with a Redfish-capable BMC: Dell iDRAC, HPE iLO, Lenovo XCC, Cisco
+    // standalone IMC, NVIDIA DGX, etc.). Reuses the existing mgmt_ip column as
+    // the BMC address. redfish_password is stored the same way PDU
+    // snmp_community already is (plain, local-network credential, consistent
+    // with this app's existing out-of-band-management credential handling -
+    // not a user password). health_status/power_state/bmc_firmware reflect
+    // live BMC state and are overwritten on every sync (unlike vendor/model/
+    // serial/firmware, which stay COALESCE-protected like every other
+    // auto-fill in this app and are never silently overwritten).
+    try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_username VARCHAR(100)'); } catch (e) { /* already exists */ }
+    try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_password VARCHAR(255)'); } catch (e) { /* already exists */ }
+    try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_port INT DEFAULT 443'); } catch (e) { /* already exists */ }
+    try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_version VARCHAR(20)'); } catch (e) { /* already exists */ }
+    try { await conn.query('ALTER TABLE assets ADD COLUMN bmc_firmware VARCHAR(100)'); } catch (e) { /* already exists */ }
+    try { await conn.query('ALTER TABLE assets ADD COLUMN health_status VARCHAR(20)'); } catch (e) { /* already exists */ }
+    try { await conn.query('ALTER TABLE assets ADD COLUMN power_state VARCHAR(20)'); } catch (e) { /* already exists */ }
+    try { await conn.query('ALTER TABLE assets ADD COLUMN last_redfish_sync_at DATETIME NULL'); } catch (e) { /* already exists */ }
+    try { await conn.query('ALTER TABLE assets ADD COLUMN last_redfish_error VARCHAR(255)'); } catch (e) { /* already exists */ }
+
     // ---- Widen id columns (VARCHAR(20) -> VARCHAR(50)) ----
     // Bulk-upsert generates IDs like AST-<13-digit timestamp>-<batch index>,
     // which can exceed 20 chars and fail with "Data too long for column 'id'".
@@ -3646,10 +3666,12 @@ async function fwJobsTick(force) {
       if (getMonitorConfig('OME', z.site, z.zone)) { try { await scanOmeExternalFirmware(z.site, z.zone); } catch (e) { log.warn(`[firmware-jobs] OME scan ${z.site}/${z.zone}: ${String(e.message).slice(0, 120)}`); } }
     }
     // Keep every running row current, whoever started it and whether or not anyone has the page open.
-    const [running] = await pool.query("SELECT DISTINCT vendor, site, zone, job_ref FROM firmware_jobs WHERE state='Running' AND started_at > ? AND job_ref IS NOT NULL", [Date.now() - FW_JOB_LIST_RUNNING_MS]);
+    const [running] = await pool.query("SELECT DISTINCT vendor, site, zone, job_ref, device_id FROM firmware_jobs WHERE state='Running' AND started_at > ? AND job_ref IS NOT NULL", [Date.now() - FW_JOB_LIST_RUNNING_MS]);
     for (const g of running) {
       try {
-        const result = g.vendor === 'ome' ? await getOmeJobStatus(g.site, g.zone, g.job_ref) : await getOneviewTaskStatus(g.site, g.zone, g.job_ref);
+        const result = g.vendor === 'ome' ? await getOmeJobStatus(g.site, g.zone, g.job_ref)
+          : g.vendor === 'redfish' ? await redfishRoutesModule.getRedfishTaskStatus(g.device_id, g.job_ref)
+          : await getOneviewTaskStatus(g.site, g.zone, g.job_ref);
         await persistFirmwareJobStatus(g.vendor, g.site, g.zone, g.job_ref, result);
         if (result.status === 'Completed' || result.status === 'Failed') {
           const [rows] = await pool.query('SELECT device_id FROM firmware_jobs WHERE vendor=? AND site=? AND zone=? AND job_ref=?', [g.vendor, g.site, g.zone, g.job_ref]);
@@ -3688,7 +3710,7 @@ app.get('/api/monitoring/firmware/jobs/active', authenticateToken, async (req, r
       groups.get(gk).push(r);
     });
     const jobs = [...groups.values()].map((g) => ({
-      vendor: g[0].vendor, vendorLabel: g[0].vendor === 'ome' ? 'Dell OME' : 'HPE OneView', site: g[0].site, zone: g[0].zone,
+      vendor: g[0].vendor, vendorLabel: g[0].vendor === 'ome' ? 'Dell OME' : g[0].vendor === 'oneview' ? 'HPE OneView' : 'Redfish', site: g[0].site, zone: g[0].zone,
       jobRef: g[0].job_ref, targetLabel: g[0].baseline_label || '', startedBy: g[0].started_by, startedAt: Number(g[0].started_at), source: g[0].source || 'dcim',
       finishedAt: g.every((r) => r.state !== 'Running') ? Math.max(...g.map((r) => Number(r.finished_at) || 0)) || null : null,
       deviceCount: g.length, requestedCount: g.length, failedCount: 0, status: fwJobAggregate(g),
@@ -8673,6 +8695,11 @@ const pduRoutesModule = require('./lib/pdu-routes')(app, {
   genId, auditLog,
 });
 const PDU_POLL_INTERVAL_MS = Math.max(60000, Number(process.env.PDU_POLL_INTERVAL_MS) || 15 * 60 * 1000); // 15 min default
+const redfishRoutesModule = require('./lib/redfish-routes')(app, {
+  pool: livePool, log, httpErr, sendErr,
+  authenticateToken, requireRole, getAllowedSitesForUser, applySiteScope, assertSiteAccess,
+  genId, auditLog, monitorFetch,
+});
 
 // Serve frontend (SPA fallback) — compatible with Express 4 and Express 5.
 app.use((req, res, next) => {
