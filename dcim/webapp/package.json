@@ -20,5 +20,8 @@
     "mysql2": "3.24.2",
     "net-snmp": "^3.29.2",
     "undici": "^7.29.1"
+  },
+  "overrides": {
+    "proxy-addr": "2.0.8"
   }
 }
