@@ -730,6 +730,14 @@ async function initDB() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     `);
+    // Sample/demo data (Sample Site A/B and everything seeded under them) is
+    // for a brand-new install only - computed once, here, right after the
+    // users table exists, so every seed block below (locations/zones as
+    // well as assets/issues/activities/movements further down) can gate on
+    // it. Without this, a customer who deleted the demo locations entirely
+    // to start clean with their own sites would see "Sample Site A"/
+    // "Sample Site B" silently reappear on the next restart.
+    const freshInstall = (await conn.query('SELECT COUNT(*) as cnt FROM users'))[0][0].cnt === 0;
 
     await conn.query(`
       CREATE TABLE IF NOT EXISTS assets (
@@ -880,7 +888,7 @@ async function initDB() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     `);
     const [locRows] = await conn.query('SELECT COUNT(*) as cnt FROM locations');
-    if (locRows[0].cnt === 0) {
+    if (freshInstall && locRows[0].cnt === 0) {
       await conn.query('INSERT IGNORE INTO locations (id, name, created_by) VALUES (?,?,?)', ['LOC-SITE-A', 'Sample Site A', 'System']);
       await conn.query('INSERT IGNORE INTO locations (id, name, created_by) VALUES (?,?,?)', ['LOC-SITE-B', 'Sample Site B', 'System']);
     }
@@ -1030,7 +1038,7 @@ async function initDB() {
     // Seed the two zones the app always shipped with, for both sites, so
     // existing installs keep working unchanged once this table exists.
     const [zoneRows] = await conn.query('SELECT COUNT(*) as cnt FROM zones');
-    if (zoneRows[0].cnt === 0) {
+    if (freshInstall && zoneRows[0].cnt === 0) {
       const seedSites = (await conn.query('SELECT name FROM locations'))[0].map(r => r.name);
       for (const site of seedSites) {
         for (const zn of ['AZ-1', 'AZ-2']) {
@@ -1528,9 +1536,8 @@ async function initDB() {
 
     // Seed default users
     const [userRows] = await conn.query('SELECT COUNT(*) as cnt FROM users');
-    // Sample data is for a brand-new install only. Without this, a live database whose tickets / activities / movements were all
-    // cleared (or never used) got fake sample rows re-inserted on every restart.
-    const freshInstall = userRows[0].cnt === 0;
+    // freshInstall itself is computed earlier, right after the users table
+    // is created, so the locations/zones seed blocks above can gate on it too.
     if (userRows[0].cnt === 0) {
       log.info('Seeding default users...');
       const hash = await bcrypt.hash('admin', 10);
