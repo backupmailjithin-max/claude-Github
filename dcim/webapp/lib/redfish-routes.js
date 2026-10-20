@@ -261,7 +261,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
       if (!username) return res.status(400).json({ error: 'Username is required' });
       await pool.query('UPDATE assets SET redfish_username = ?, redfish_password = ?, redfish_port = ? WHERE id = ?',
         [username, password || '', Number(port) > 0 ? Number(port) : 443, asset.id]);
-      auditLog(req.user, 'REDFISH_CREDENTIALS_SET', { entity: 'asset', entityId: asset.id, site: asset.site, status: 'success' });
+      auditLog(req, 'REDFISH_CREDENTIALS_SET', { entity: 'asset', entityId: asset.id, site: asset.site, status: 'success' });
       res.json({ success: true });
     } catch (e) { sendErr(res, e); }
   });
@@ -353,7 +353,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
         );
         applied++;
       }
-      auditLog(req.user, 'REDFISH_DISCOVERY_APPLY', { entity: 'asset', status: 'success' }, { count: applied });
+      auditLog(req, 'REDFISH_DISCOVERY_APPLY', { entity: 'asset', status: 'success' }, { count: applied });
       res.json({ applied });
     } catch (e) { sendErr(res, e); }
   });
@@ -394,7 +394,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
          VALUES ('redfish', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Running', 'dcim', ?)`,
         [asset.site, asset.zone, asset.id, asset.device_name || asset.asset_tag || asset.id, asset.serial_number, taskPath, taskPath, req.user.name || req.user.username, Date.now(), `Firmware update (Redfish) - ${imageUri.split('/').pop()}`]
       );
-      auditLog(req.user, 'REDFISH_FIRMWARE_UPDATE_STARTED', { entity: 'asset', entityId: asset.id, site: asset.site, status: 'success' }, { imageUri });
+      auditLog(req, 'REDFISH_FIRMWARE_UPDATE_STARTED', { entity: 'asset', entityId: asset.id, site: asset.site, status: 'success' }, { imageUri });
       res.json({ success: true, jobId: ins.insertId, taskPath });
     } catch (e) { sendErr(res, e); }
   });
