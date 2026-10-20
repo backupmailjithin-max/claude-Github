@@ -85,7 +85,7 @@ async function detectRedfish(monitorFetch, ip, port, username, password) {
     reachable: false, redfishVersion: null, vendor: null, model: null, serialNumber: null,
     biosVersion: null, bmcFirmware: null, healthStatus: null, powerState: null,
     powerWatts: null, temperatures: [], fans: [], systemPath: null, chassisPath: null,
-    managerPath: null, updateServicePath: null, error: null,
+    managerPath: null, updateServicePath: null, error: null, alertCount: null,
   };
   let root;
   try { root = await redfishGet(monitorFetch, ip, port, username, password, '/redfish/v1/'); }
@@ -150,6 +150,20 @@ async function detectRedfish(monitorFetch, ip, port, username, password) {
     }
   } catch (e) { /* Managers collection missing - leave bmcFirmware null, not fatal */ }
 
+  // Alert count: every sensor reporting Health != OK, plus the overall
+  // system health itself if it's not OK - the Redfish-side equivalent of
+  // the critical/warning counts already shown for OME/OneView devices.
+  // null (not 0) when the device wasn't reachable, so the UI can tell
+  // "no alerts" apart from "never checked".
+  if (out.reachable) {
+    const abnormal = (s) => s && String(s).toUpperCase() !== 'OK';
+    let count = out.temperatures.filter((t) => abnormal(t.status)).length + out.fans.filter((f) => abnormal(f.status)).length;
+    if (abnormal(out.healthStatus)) count += 1;
+    out.alertCount = count;
+  } else {
+    out.alertCount = null;
+  }
+
   return out;
 }
 
@@ -203,7 +217,8 @@ module.exports = function registerRedfishRoutes(app, deps) {
     id: a.id, site: a.site, zone: a.zone, rackNo: a.rack_no, deviceName: a.device_name, assetTag: a.asset_tag,
     mgmtIp: a.mgmt_ip, vendor: a.manufacturer, model: a.model, serialNumber: a.serial_number, firmware: a.firmware,
     redfishConfigured: !!a.redfish_username, redfishVersion: a.redfish_version, bmcFirmware: a.bmc_firmware,
-    healthStatus: a.health_status, powerState: a.power_state, lastSyncAt: a.last_redfish_sync_at, lastError: a.last_redfish_error,
+    healthStatus: a.health_status, powerState: a.power_state, alertCount: a.redfish_alert_count,
+    lastSyncAt: a.last_redfish_sync_at, lastError: a.last_redfish_error,
   });
 
   // Live, read-only test against any IP/credentials - does NOT save anything.
@@ -270,10 +285,10 @@ module.exports = function registerRedfishRoutes(app, deps) {
         `UPDATE assets SET
            manufacturer = COALESCE(NULLIF(manufacturer, ''), ?), model = COALESCE(NULLIF(model, ''), ?),
            serial_number = COALESCE(NULLIF(serial_number, ''), ?), firmware = COALESCE(NULLIF(firmware, ''), ?),
-           bmc_firmware = ?, redfish_version = ?, health_status = ?, power_state = ?,
+           bmc_firmware = ?, redfish_version = ?, health_status = ?, power_state = ?, redfish_alert_count = ?,
            last_redfish_sync_at = NOW(), last_redfish_error = NULL
          WHERE id = ?`,
-        [r.vendor, r.model, r.serialNumber, r.biosVersion, r.bmcFirmware, r.redfishVersion, r.healthStatus, r.powerState, asset.id]
+        [r.vendor, r.model, r.serialNumber, r.biosVersion, r.bmcFirmware, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, asset.id]
       );
       res.json({ reachable: true, ...r });
     } catch (e) { sendErr(res, e); }
@@ -331,10 +346,10 @@ module.exports = function registerRedfishRoutes(app, deps) {
           `UPDATE assets SET redfish_username = ?, redfish_password = ?, redfish_port = 443,
              manufacturer = COALESCE(NULLIF(manufacturer, ''), ?), model = COALESCE(NULLIF(model, ''), ?),
              serial_number = COALESCE(NULLIF(serial_number, ''), ?), firmware = COALESCE(NULLIF(firmware, ''), ?),
-             bmc_firmware = ?, redfish_version = ?, health_status = ?, power_state = ?,
+             bmc_firmware = ?, redfish_version = ?, health_status = ?, power_state = ?, redfish_alert_count = ?,
              last_redfish_sync_at = NOW(), last_redfish_error = NULL
            WHERE id = ?`,
-          [defaultUser, defaultPass || '', r.vendor, r.model, r.serialNumber, r.biosVersion, r.bmcFirmware, r.redfishVersion, r.healthStatus, r.powerState, asset.id]
+          [defaultUser, defaultPass || '', r.vendor, r.model, r.serialNumber, r.biosVersion, r.bmcFirmware, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, asset.id]
         );
         applied++;
       }

@@ -1061,6 +1061,12 @@ async function initDB() {
     try { await conn.query('ALTER TABLE assets ADD COLUMN power_state VARCHAR(20)'); } catch (e) { /* already exists */ }
     try { await conn.query('ALTER TABLE assets ADD COLUMN last_redfish_sync_at DATETIME NULL'); } catch (e) { /* already exists */ }
     try { await conn.query('ALTER TABLE assets ADD COLUMN last_redfish_error VARCHAR(255)'); } catch (e) { /* already exists */ }
+    // Count of sensors (temperatures/fans) reporting Health != OK, plus the
+    // overall Status.Health itself if it's not OK - the Redfish-side
+    // equivalent of the critical/warning counts already shown for OME/
+    // OneView devices. Always reflects the latest poll (live state), same
+    // as health_status/power_state above - never COALESCE-protected.
+    try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_alert_count INT NULL'); } catch (e) { /* already exists */ }
 
     // ---- Widen id columns (VARCHAR(20) -> VARCHAR(50)) ----
     // Bulk-upsert generates IDs like AST-<13-digit timestamp>-<batch index>,
