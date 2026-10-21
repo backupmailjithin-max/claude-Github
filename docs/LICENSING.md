@@ -54,6 +54,14 @@ touched.
 - To restart the clock on a TEST machine: delete `.trial-state` and run
   `DELETE FROM app_settings WHERE k LIKE 'license.%'`.
 
+### Clock rollback
+
+The server remembers the latest time it has seen (signed, stored next to the trial record and in the database). Setting the system clock back, or deleting one of the two trial copies, does not give extra days: the trial uses the later of "now" and the last time seen.
+
+### What customer packages leave out
+
+The licence generator, key tool and issue template (`tools/license-*.js`, `Run-License-Generator.bat`, `LICENSE-ISSUE-TEMPLATE.txt`) are vendor-only and are not included in the Windows, deb or rpm packages.
+
 ## One-time setup (do this once, ever)
 
 1. **Generate your signing keypair**, on a machine you control — never on a

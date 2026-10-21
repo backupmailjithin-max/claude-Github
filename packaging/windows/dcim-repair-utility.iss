@@ -37,7 +37,7 @@ Source: "install.js"; DestDir: "{app}"; Flags: ignoreversion
 Source: "uninstall.js"; DestDir: "{app}"; Flags: ignoreversion
 Source: "rollback.js"; DestDir: "{app}"; Flags: ignoreversion
 Source: "dcim-service.js"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\..\dcim\webapp\*"; DestDir: "{app}\webapp"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: ".env,license.lic,.trial-state,uploads\*,backups\*,logs\*"
+Source: "..\..\dcim\webapp\*"; DestDir: "{app}\webapp"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: ".env,license.lic,.trial-state,tools\license-*.js,tools\Run-License-Generator.bat,tools\LICENSE-ISSUE-TEMPLATE.txt,uploads\*,backups\*,logs\*"
 Source: "runtime\node\*"; DestDir: "{app}\runtime\node"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "runtime\mariadb\*"; DestDir: "{app}\runtime\mariadb"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "tools\nssm.exe"; DestDir: "{app}\tools"; Flags: ignoreversion skipifsourcedoesntexist

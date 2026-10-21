@@ -35,6 +35,7 @@ cp "$SCRIPT_DIR/dcim-repair.sh" "$STAGE/usr/bin/dcim-repair"
 chmod 755 "$STAGE/usr/bin/dcim-service" "$STAGE/usr/bin/dcim-upgrade" "$STAGE/usr/bin/dcim-repair"
 
 cp -a "$REPO_ROOT/dcim/webapp" "$STAGE/usr/share/dcim/webapp"
+rm -f "$STAGE"/usr/share/dcim/webapp/tools/license-*.js "$STAGE/usr/share/dcim/webapp/tools/Run-License-Generator.bat" "$STAGE/usr/share/dcim/webapp/tools/LICENSE-ISSUE-TEMPLATE.txt"
 rm -rf "$STAGE/usr/share/dcim/webapp/.env" \
        "$STAGE/usr/share/dcim/webapp/license.lic" \
        "$STAGE/usr/share/dcim/webapp/.trial-state" \

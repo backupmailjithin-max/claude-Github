@@ -38,7 +38,7 @@ DB_NAME="dcim"
 CORS_ORIGIN=""
 ADMIN_USER=""
 ADMIN_PASSWORD=""
-CSP_MODE="report-only"
+CSP_MODE="enforce"
 AUDIT_RETENTION_DAYS="365"
 ASSUME_YES=0
 PURGE_DATA=0
@@ -77,7 +77,7 @@ Options:
   --cors-origin ORIGIN
   --admin-user USER     (install only) replace the seeded "admin" username on first install
   --admin-password PASS (install only) replace the seeded "admin" password on first install
-  --csp-mode MODE       enforce | report-only (default) | off
+  --csp-mode MODE       enforce (default) | report-only | off
   --audit-retention-days N  days of audit log to keep; 0 = forever (default: 365)
   --yes                 non-interactive, assume defaults / confirmations
   --purge-data          (uninstall only) also remove the database and data files

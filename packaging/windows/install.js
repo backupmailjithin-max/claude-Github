@@ -106,7 +106,7 @@ function defaultOpts() {
     CorsOrigin: '',
     AdminUser: '',
     AdminPassword: '',
-    CspMode: 'report-only',
+    CspMode: 'enforce',
     AuditRetentionDays: 365,
     Yes: false,
   };

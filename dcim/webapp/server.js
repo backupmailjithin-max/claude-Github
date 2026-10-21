@@ -283,10 +283,10 @@ if (CORS_ORIGIN) {
   app.use(cors());
 }
 // ---- HARDENING: Content-Security-Policy ----
-// CSP_MODE = report-only (default: violations are reported, nothing is blocked) | enforce | off.
+// CSP_MODE = enforce (default: violations are blocked and reported) | report-only (reported only) | off.
 // Inline <script> blocks of index.html are allowed by SHA-256 hash (computed from the file that is actually served), so 'unsafe-inline' is not needed for scripts.
 // The browser talks only to this same origin (Dell OME / HPE OneView are called by the server, never by the browser). CSP_EXTRA_CONNECT / CSP_EXTRA_IMG add origins if ever needed.
-const CSP_MODE = (() => { const v = String(process.env.CSP_MODE || 'report-only').toLowerCase(); return ['enforce', 'report-only', 'off'].includes(v) ? v : 'report-only'; })();
+const CSP_MODE = (() => { const v = String(process.env.CSP_MODE || 'enforce').toLowerCase(); return ['enforce', 'report-only', 'off'].includes(v) ? v : 'enforce'; })();
 // Session Timeout: read once at startup, same "write to .env + restart" pattern as
 // CSP_MODE/JWT_SECRET above (see the Setup Wizard's Security tab) - defaults to the
 // previous hardcoded 8h if unset or invalid, so an upgrade with no .env change behaves
@@ -314,9 +314,22 @@ function getRenderedIndex() {
   _indexCache = { htmlMtime: st.mtimeMs, bundleHash, html, cspHashes: hashes.join(' ') };
   return _indexCache;
 }
-function buildCspValue() {
+// Inline <script> hashes for the stand-alone admin pages (setup wizard / deployment dashboard), so they keep working when CSP_MODE=enforce.
+const ADMIN_PAGES = { '/setup-wizard.html': 'setup-wizard.html', '/deployment-dashboard.html': 'deployment-dashboard.html' };
+const _adminCspCache = {};
+function adminPageHashes(reqPath) {
+  const name = ADMIN_PAGES[reqPath]; if (!name) return null;
+  const f = path.join(__dirname, name);
+  const st = fs.statSync(f); const c = _adminCspCache[name];
+  if (c && c.mtime === st.mtimeMs) return c.hashes;
+  const html = fs.readFileSync(f, 'utf8').replace(/<!--[\s\S]*?-->/g, ''); const hashes = [];
+  html.replace(/<script(?![^>]*\bsrc\s*=)[^>]*>([\s\S]*?)<\/script>/gi, (m, body) => { if (body.trim()) hashes.push(`'sha256-${nodeCrypto.createHash('sha256').update(body.replace(/\r\n?/g, '\n'), 'utf8').digest('base64')}'`); return m; });
+  _adminCspCache[name] = { mtime: st.mtimeMs, hashes: hashes.join(' ') };
+  return _adminCspCache[name].hashes;
+}
+function buildCspValue(reqPath) {
   try {
-    const { cspHashes } = getRenderedIndex();
+    const cspHashes = (reqPath && adminPageHashes(reqPath)) || getRenderedIndex().cspHashes;
     const conn = ["'self'", cspExtra('CSP_EXTRA_CONNECT')].filter(Boolean).join(' '); const img = ["'self'", 'data:', 'blob:', cspExtra('CSP_EXTRA_IMG')].filter(Boolean).join(' ');
     return ["default-src 'self'", `script-src 'self' ${cspHashes}`.trim(), "style-src 'self' 'unsafe-inline'", `img-src ${img}`, "font-src 'self' data:", "media-src 'self' blob:", `connect-src ${conn}`, "worker-src 'self' blob:", "object-src 'none'", "base-uri 'self'", "form-action 'self'", "frame-ancestors 'self'", 'report-uri /api/csp-report'].join('; ');
   } catch (e) { return ''; }
@@ -356,7 +369,7 @@ app.use((req, res, next) => {
   res.set('X-Content-Type-Options', 'nosniff');
   res.set('X-Frame-Options', 'SAMEORIGIN');
   res.set('Referrer-Policy', 'same-origin');
-  if (CSP_MODE !== 'off' && !req.path.startsWith('/api/')) { const cv = buildCspValue(); if (cv) res.set(CSP_MODE === 'enforce' ? 'Content-Security-Policy' : 'Content-Security-Policy-Report-Only', cv); }
+  if (CSP_MODE !== 'off' && !req.path.startsWith('/api/')) { const cv = buildCspValue(req.path); if (cv) res.set(CSP_MODE === 'enforce' ? 'Content-Security-Policy' : 'Content-Security-Policy-Report-Only', cv); }
   // PHASE-1 hardening headers
   res.set('Permissions-Policy', 'geolocation=(), microphone=(), camera=(), payment=(), usb=(), serial=()');
   res.set('Cross-Origin-Opener-Policy', 'same-origin');
@@ -737,7 +750,8 @@ async function initDB() {
     // it. Without this, a customer who deleted the demo locations entirely
     // to start clean with their own sites would see "Sample Site A"/
     // "Sample Site B" silently reappear on the next restart.
-    const freshInstall = (await conn.query('SELECT COUNT(*) as cnt FROM users'))[0][0].cnt === 0;
+    const SEED_SAMPLE = String(process.env.SEED_SAMPLE_DATA === undefined ? '1' : process.env.SEED_SAMPLE_DATA).trim() !== '0';   // SEED_SAMPLE_DATA=0 in .env: production install with no demo sites/assets/accounts
+    const freshInstall = (await conn.query('SELECT COUNT(*) as cnt FROM users'))[0][0].cnt === 0 && SEED_SAMPLE;
 
     await conn.query(`
       CREATE TABLE IF NOT EXISTS assets (
@@ -1545,15 +1559,17 @@ async function initDB() {
         'INSERT INTO users (username, password_hash, name, role, location_access, status) VALUES (?,?,?,?,?,?)',
         ['admin', hash, 'System Administrator', 'Admin', 'All', 'Active']
       );
-      const hash2 = await bcrypt.hash('pass', 10);
-      await conn.query(
-        'INSERT INTO users (username, password_hash, name, role, location_access, status) VALUES (?,?,?,?,?,?)',
-        ['site-a-op', hash2, 'Site A Operator', 'Operator', 'Sample Site A', 'Active']
-      );
-      await conn.query(
-        'INSERT INTO users (username, password_hash, name, role, location_access, status) VALUES (?,?,?,?,?,?)',
-        ['site-b-op', hash2, 'Site B Operator', 'Operator', 'Sample Site B', 'Active']
-      );
+      if (SEED_SAMPLE) {   // the two demo operator accounts only exist on a sample-data install (SEED_SAMPLE_DATA=0 skips them)
+        const hash2 = await bcrypt.hash('pass', 10);
+        await conn.query(
+          'INSERT INTO users (username, password_hash, name, role, location_access, status) VALUES (?,?,?,?,?,?)',
+          ['site-a-op', hash2, 'Site A Operator', 'Operator', 'Sample Site A', 'Active']
+        );
+        await conn.query(
+          'INSERT INTO users (username, password_hash, name, role, location_access, status) VALUES (?,?,?,?,?,?)',
+          ['site-b-op', hash2, 'Site B Operator', 'Operator', 'Sample Site B', 'Active']
+        );
+      }
       log.info('✓ Users seeded');
     }
 
@@ -8808,6 +8824,11 @@ async function startServer() {
     // BIND_HOST (optional, e.g. 127.0.0.1 when nginx is the only entry point). Unset = all interfaces, exactly as before.
     httpServer = app.listen(...(process.env.BIND_HOST ? [PORT, process.env.BIND_HOST] : [PORT]), () => {
       log.info(`[startup] DCIM server v${APP_VERSION} listening on port ${PORT} (${IS_PRODUCTION ? 'production' : 'development'}, node ${process.version}, pid ${process.pid}, db ${DB_NAME})`);
+      if (IS_PRODUCTION) {   // production hygiene hints (log only, never blocks start)
+        if (!CORS_ORIGIN || CORS_ORIGIN.split(',').map((v) => v.trim()).includes('*')) log.warn('[security] CORS_ORIGIN is unset or "*" - set it to this site\'s real URL (e.g. https://dcim.example.com) in .env.');
+        if (CSP_MODE !== 'enforce') log.warn(`[security] CSP_MODE is "${CSP_MODE}" - "enforce" is recommended in production.`);
+        try { const m = fs.statSync(path.join(__dirname, '.env')).mode & 0o077; if (m && process.platform !== 'win32') log.warn('[security] .env is readable by other users - run: chmod 600 .env'); } catch (e) { /* no .env file (variables supplied by the service) */ }
+      }
       { // REVIEW: audit-trail retention (AUDIT_RETENTION_DAYS, default 365; 0 = keep forever). Deletes in small batches so it never locks the table for long.
         const keepDays = process.env.AUDIT_RETENTION_DAYS !== undefined && process.env.AUDIT_RETENTION_DAYS !== '' ? Math.max(0, Number(process.env.AUDIT_RETENTION_DAYS) || 0) : 365;
         const purgeAudit = async () => { try { let total = 0, n; do { const [r] = await pool.query('DELETE FROM audit_logs WHERE created_at < (NOW() - INTERVAL ? DAY) LIMIT 2000', [keepDays]); n = r.affectedRows; total += n; } while (n === 2000); if (total) log.info(`[audit] purged ${total} audit_logs rows older than ${keepDays} days`); } catch (e) { log.warn('[audit] retention purge skipped: ' + e.message); } };

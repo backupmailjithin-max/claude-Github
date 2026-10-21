@@ -126,7 +126,9 @@ const TRIAL_DAYS = 10;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const TRIAL_DB_KEY = 'license.trialStartedAt';
 const TRIAL_DB_SIG_KEY = 'license.trialSig';
-let trialState = { startedAt: null, tampered: false, filePath: null };
+const TRIAL_DB_SEEN_KEY = 'license.trialSeen';   // high-water mark of the clock, so rolling the system clock back cannot extend the trial
+const TRIAL_DB_SEEN_SIG_KEY = 'license.trialSeenSig';
+let trialState = { startedAt: null, tampered: false, filePath: null, lastSeen: 0, lastPersist: 0, dbSet: null };
 
 function trialSig(startedAt) {
   const key = crypto.createHash('sha256').update('dcim-trial-v1|' + computeMachineFingerprint()).digest();
@@ -140,13 +142,15 @@ function sigOk(startedAt, sig) {
 
 // Call once at startup, after the database is ready. dbGet(key)/dbSet(key, value) are the app_settings helpers.
 async function initTrial({ filePath, dbGet, dbSet, log }) {
-  trialState = { startedAt: null, tampered: false, filePath };
+  trialState = { startedAt: null, tampered: false, filePath, lastSeen: 0, lastPersist: 0, dbSet };
   const valid = [];
   let tampered = false;
+  let seen = 0;
   try {
     if (filePath && fs.existsSync(filePath)) {
       const f = JSON.parse(fs.readFileSync(filePath, 'utf8'));
       if (sigOk(Number(f.startedAt), f.sig)) valid.push(Number(f.startedAt)); else tampered = true;
+      if (f.seen && sigOk('seen:' + Number(f.seen), f.seenSig)) seen = Math.max(seen, Number(f.seen));
     }
   } catch (e) { tampered = true; }
   try {
@@ -155,12 +159,14 @@ async function initTrial({ filePath, dbGet, dbSet, log }) {
       const sig = await dbGet(TRIAL_DB_SIG_KEY, '');
       if (sigOk(Number(d), sig)) valid.push(Number(d)); else tampered = true;
     }
+    const dSeen = await dbGet(TRIAL_DB_SEEN_KEY, '');
+    if (dSeen) { const sSig = await dbGet(TRIAL_DB_SEEN_SIG_KEY, ''); if (sigOk('seen:' + Number(dSeen), sSig)) seen = Math.max(seen, Number(dSeen)); }
   } catch (e) { /* database unavailable: the file alone decides */ }
   let startedAt;
   if (tampered) { startedAt = 1; if (log) log.warn('[license] trial record was altered or copied from another machine - trial treated as ended.'); }
   else if (valid.length) startedAt = Math.min(...valid);
   else { startedAt = Date.now(); if (log) log.info(`[license] ${TRIAL_DAYS}-day free trial started now.`); }
-  trialState.startedAt = startedAt; trialState.tampered = tampered;
+  trialState.startedAt = startedAt; trialState.tampered = tampered; trialState.lastSeen = Math.max(seen, Date.now());
   if (!tampered) {
     const sig = trialSig(startedAt);
     try { if (filePath) fs.writeFileSync(filePath, JSON.stringify({ startedAt, sig })); } catch (e) { if (log) log.warn('[license] could not write trial state file: ' + e.message); }
@@ -169,10 +175,30 @@ async function initTrial({ filePath, dbGet, dbSet, log }) {
   return getTrialInfo();
 }
 
+// Effective "now": never earlier than the latest time this install has seen, so winding the clock back does not give the trial more days.
+// The high-water mark is saved (signed) at most once an hour, to both the state file and the database.
+function trialNow() {
+  const real = Date.now();
+  if (real > trialState.lastSeen) trialState.lastSeen = real;
+  if (!trialState.tampered && trialState.startedAt && trialState.lastSeen - trialState.lastPersist >= 60 * 60 * 1000) persistSeen();
+  return trialState.lastSeen;
+}
+function persistSeen() {
+  const seen = trialState.lastSeen; trialState.lastPersist = seen;
+  const seenSig = trialSig('seen:' + seen);
+  try {
+    if (trialState.filePath) {
+      let cur = {}; try { cur = JSON.parse(fs.readFileSync(trialState.filePath, 'utf8')); } catch (e) { cur = {}; }
+      fs.writeFileSync(trialState.filePath, JSON.stringify({ startedAt: cur.startedAt || trialState.startedAt, sig: cur.sig || trialSig(trialState.startedAt), seen, seenSig }));
+    }
+  } catch (e) { /* best effort */ }
+  try { if (trialState.dbSet) Promise.resolve(trialState.dbSet(TRIAL_DB_SEEN_KEY, String(seen))).then(() => trialState.dbSet(TRIAL_DB_SEEN_SIG_KEY, seenSig)).catch(() => {}); } catch (e) { /* best effort */ }
+}
+
 function getTrialInfo() {
   if (!trialState.startedAt) return null;
   const endsAt = trialState.startedAt + TRIAL_DAYS * DAY_MS;
-  const msLeft = endsAt - Date.now();
+  const msLeft = endsAt - trialNow();
   return {
     days: TRIAL_DAYS,
     startedAt: new Date(trialState.startedAt).toISOString(),
