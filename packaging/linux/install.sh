@@ -378,6 +378,8 @@ sync_payload() {
     done
   fi
   mkdir -p "$INSTALL_DIR/webapp/uploads" "$INSTALL_DIR/webapp/backups" "$INSTALL_DIR/webapp/logs"
+  # Vendor-only licence tooling is never installed on a customer machine.
+  rm -f "$INSTALL_DIR"/webapp/tools/license-*.js "$INSTALL_DIR/webapp/tools/Run-License-Generator.bat" "$INSTALL_DIR/webapp/tools/LICENSE-ISSUE-TEMPLATE.txt"
   if [ -d "$PAYLOAD_RUNTIME" ]; then
     rm -rf "$INSTALL_DIR/runtime"
     install -d "$INSTALL_DIR/runtime"
@@ -813,6 +815,10 @@ do_install() {
 
 do_upgrade() {
   existing_install_present || die "No existing installation found at $INSTALL_DIR; use --mode install instead."
+  # Use the port/DB settings of the installed .env (not the command-line defaults) for the
+  # port check and the post-restart health wait - otherwise an install on a custom port
+  # reports "not healthy" on every upgrade/repair that does not re-pass --port.
+  reload_env_for_summary
   run_validations
   backup_before_change
   systemctl stop "$SERVICE_NAME" 2>/dev/null || true
@@ -829,6 +835,7 @@ do_upgrade() {
 
 do_repair() {
   repair_target_present || die "No existing installation found at $INSTALL_DIR; use --mode install instead."
+  reload_env_for_summary   # see do_upgrade: honour the installed .env's port for validation and health wait
   run_validations
   ensure_service_user
   backup_before_change
@@ -848,6 +855,7 @@ do_repair() {
       install -d -m 750 "$(dirname "$ENV_FILE")"
       cp -a "$latest_env" "$ENV_FILE"
       chmod 640 "$ENV_FILE"
+      reload_env_for_summary
     else
       die "No .env found at $ENV_FILE and no prior backup contains one; repair cannot recover the configuration. Restore it manually (e.g. from an external backup) or reinstall with --mode install."
     fi
