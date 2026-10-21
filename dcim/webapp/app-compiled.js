@@ -131,6 +131,11 @@ async function apiFetch(path, opts = {}) {
             throw new Error('Session expired');
         }
         const data = await res.json().catch(() => ({}));
+        if (res.status === 402 && data && data.code === 'LICENSE_REQUIRED') {
+            // Free trial ended / no valid license: the server locks every data call. The app shows the activation screen.
+            try { window.dispatchEvent(new CustomEvent('dcim-license-locked', { detail: data.error || 'License required' })); }
+            catch (e) { }
+        }
         if (res.status === 403 && data && data.code === 'PASSWORD_CHANGE_REQUIRED') {
             // The account still has its default password (e.g. flagged while this browser was already signed in): show the change-password screen.
             try {
@@ -2565,8 +2570,24 @@ function ListFilterHeader({ column, filter, onOpen, style = {} }) {
                 React.createElement(Filter, { s: 12, c: active ? "#4F46E5" : "#64748B" }))));
 }
 /* ===== DC ACTIVITY TABLE ===== */
+/* ===== EXPANDABLE LIST ROW (DC Activity / Material Movement) ===== */
+const WRAP_COLS = new Set(["description", "itemName", "remarks", "receiverName", "senderName"]);
+function wrapCellStyle(open) {
+    return open ? { whiteSpace: "pre-wrap", wordBreak: "break-word", overflowWrap: "anywhere", minWidth: 220, maxWidth: 380 }
+        : { whiteSpace: "normal", wordBreak: "break-word", overflowWrap: "anywhere", minWidth: 220, maxWidth: 380, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" };
+}
+function ExpandedDetailRow({ colSpan, title, items }) {
+    return React.createElement("tr", { className: "list-detail-row" },
+        React.createElement("td", { colSpan: colSpan, style: { padding: "12px 18px 16px 44px", background: "rgba(99,102,241,0.05)", borderBottom: "0.5px solid rgba(163,177,198,0.25)" } },
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, fontWeight: 700, color: "#6366F1", letterSpacing: 0.4, textTransform: "uppercase", marginBottom: 8 } }, title),
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: "10px 22px" } },
+                items.map((it) => React.createElement("div", { key: it.label, style: { minWidth: 0, gridColumn: it.wide ? "1 / -1" : undefined } },
+                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, fontWeight: 600, color: "#64748B", marginBottom: 2 } }, it.label),
+                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#1E293B", whiteSpace: "pre-wrap", wordBreak: "break-word", overflowWrap: "anywhere", lineHeight: 1.5 } }, it.value != null && it.value !== "" ? it.value : "\u2014"))))));
+}
 function DCActivity({ activities, allowedSites, canEdit, onEdit, onDelete, onExportExcel, onExportCSV, onImport, importError, importProgress, importErrorDetails, selectedIds, onSelectId, onSelectAll, onDeleteSelected, onClearSelection }) {
     const actListCtl = useProgressiveList();
+    const [expandedId, setExpandedId] = useState(null);
     const [siteFilter, setSiteFilter] = useState("all");
     const [typeFilter, setTypeFilter] = useState("all");
     const [search, setSearch] = useState("");
@@ -2625,20 +2646,24 @@ function DCActivity({ activities, allowedSites, canEdit, onEdit, onDelete, onExp
                 React.createElement("tbody", null,
                     filtered.length === 0 && React.createElement("tr", null,
                         React.createElement("td", { colSpan: ACTIVITY_COLUMNS.length + 1, style: { padding: "40px 0", textAlign: "center", color: "#64748B", fontFamily: "Inter", fontSize: 13 } }, "No DC activity records match these filters.")),
-                    pmapList(filtered, actListCtl, true, ACTIVITY_COLUMNS.length + 1, (a, idx) => (React.createElement("tr", { key: a.id, className: `neu-table-row${selectedIds.has(a.id) ? " selected-row asset-selected-row" : ""}`, style: { background: selectedIds.has(a.id) ? undefined : (idx % 2 === 1 ? "rgba(255,255,255,0.25)" : "transparent") } },
-                        canEdit && React.createElement("td", { style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px" } },
+                    pmapList(filtered, actListCtl, true, ACTIVITY_COLUMNS.length + 1, (a, idx) => { const open = expandedId === a.id; return React.createElement(React.Fragment, { key: a.id }, React.createElement("tr", { "data-list-row": "activity", "aria-expanded": open, title: open ? "Click to collapse" : "Click to view full details", onClick: () => setExpandedId(open ? null : a.id), className: `neu-table-row${selectedIds.has(a.id) ? " selected-row asset-selected-row" : ""}`, style: { cursor: "pointer", verticalAlign: "top", background: selectedIds.has(a.id) ? undefined : (open ? "rgba(99,102,241,0.08)" : (idx % 2 === 1 ? "rgba(255,255,255,0.25)" : "transparent")) } },
+                        canEdit && React.createElement("td", { onClick: (e) => e.stopPropagation(), style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px" } },
                             React.createElement("input", { type: "checkbox", checked: selectedIds.has(a.id), onChange: e => onSelectId(a.id, e.target.checked), style: { width: 15, height: 15, accentColor: "#6366F1", cursor: "pointer" } })),
                         ACTIVITY_COLUMNS.map((col) => {
                             const rawVal = a[col.key];
                             const displayVal = col.key === "activityType" && rawVal === "PSU Provision" ? "Port/Link Down Issue" : rawVal;
                             const val = col.format ? col.format(displayVal, a) : displayVal;
-                            return React.createElement("td", { key: col.key, style: { padding: "10px 10px", borderBottom: "0.5px solid rgba(163,177,198,0.25)", fontFamily: "Inter", fontSize: 12, color: col.key === "site" ? "#6366F1" : (col.key === "_status" ? (a.completionDate ? "#059669" : "#D97706") : "#1E293B"), fontWeight: col.key === "site" || col.key === "_status" ? 600 : 400, whiteSpace: "nowrap" } }, val != null && val !== "" ? val : "—");
+                            return React.createElement("td", { key: col.key, style: { padding: "10px 10px", borderBottom: "0.5px solid rgba(163,177,198,0.25)", fontFamily: "Inter", fontSize: 12, color: col.key === "site" ? "#6366F1" : (col.key === "_status" ? (a.completionDate ? "#059669" : "#D97706") : "#1E293B"), fontWeight: col.key === "site" || col.key === "_status" ? 600 : 400, whiteSpace: "nowrap" } }, WRAP_COLS.has(col.key) ? React.createElement("div", { style: wrapCellStyle(false) }, val != null && val !== "" ? val : "—") : (val != null && val !== "" ? val : "—"));
                         }),
-                        canEdit && React.createElement("td", { style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px", textAlign: "right", whiteSpace: "nowrap" } },
+                        canEdit && React.createElement("td", { onClick: (e) => e.stopPropagation(), style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px", textAlign: "right", whiteSpace: "nowrap" } },
                             React.createElement("button", { onClick: () => onEdit(a), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Edit activity" },
                                 React.createElement(Edit2, { s: 13, c: "#64748B" })),
                             React.createElement("button", { onClick: () => onDelete(a.id), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex" }, title: "Delete activity" },
-                                React.createElement(Trash2, { s: 13, c: "#64748B" }))))))))),
+                                React.createElement(Trash2, { s: 13, c: "#64748B" })))),
+                        open && React.createElement(ExpandedDetailRow, { colSpan: ACTIVITY_COLUMNS.length + 2, title: "DC Activity details", items: [
+                            { label: "Activity Description", value: a.description, wide: true },
+                            ...ACTIVITY_COLUMNS.filter((c) => c.key !== "description").map((c) => { const dv = c.key === "activityType" && a[c.key] === "PSU Provision" ? "Port/Link Down Issue" : a[c.key]; return { label: c.label, value: c.format ? c.format(dv, a) : dv }; }),
+                            { label: "Rack No.", value: a.rackNo }] })); })))),
         openFilter && React.createElement(ValueListFilterPopup, { column: openFilter, currentFilter: columnFilters[openFilter.key], optionRows: optionRowsForColumn(openFilter.key), onApply: (value) => setColumnFilters((prev) => ({ ...prev, [openFilter.key]: value })), onClose: () => setOpenFilter(null) }));
 }
 /* ===== RECORD MATERIAL MOVEMENT MODAL ===== */
@@ -2984,6 +3009,7 @@ function RecordMovementModal({ onClose, onSave, initial, zones, onDownload, onRe
 /* ===== MATERIAL MOVEMENTS TABLE ===== */
 function MaterialMovements({ movements, allowedSites, canEdit, onEdit, onDelete, onDownload, onExportExcel, onExportCSV, onImport, importError, importProgress, importErrorDetails, selectedIds, onSelectId, onSelectAll, onDeleteSelected, onClearSelection }) {
     const movListCtl = useProgressiveList();
+    const [expandedId, setExpandedId] = useState(null);
     const [siteFilter, setSiteFilter] = useState("all");
     const [typeFilter, setTypeFilter] = useState("all");
     const [search, setSearch] = useState("");
@@ -3074,23 +3100,28 @@ function MaterialMovements({ movements, allowedSites, canEdit, onEdit, onDelete,
                 React.createElement("tbody", null,
                     filtered.length === 0 && React.createElement("tr", null,
                         React.createElement("td", { colSpan: MOVEMENT_COLUMNS.length + 1, style: { padding: "40px 0", textAlign: "center", color: "#64748B", fontFamily: "Inter", fontSize: 13 } }, "No material movement records match these filters.")),
-                    pmapList(filtered, movListCtl, true, MOVEMENT_COLUMNS.length + 1, (m, idx) => (React.createElement("tr", { key: m.id, className: `neu-table-row${selectedIds.has(m.id) ? " selected-row" : ""}`, style: { background: selectedIds.has(m.id) ? undefined : (idx % 2 === 1 ? "rgba(255,255,255,0.25)" : "transparent") } },
-                        canEdit && React.createElement("td", { style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px" } },
+                    pmapList(filtered, movListCtl, true, MOVEMENT_COLUMNS.length + 1, (m, idx) => { const open = expandedId === m.id; return React.createElement(React.Fragment, { key: m.id }, React.createElement("tr", { "data-list-row": "movement", "aria-expanded": open, title: open ? "Click to collapse" : "Click to view full details", onClick: () => setExpandedId(open ? null : m.id), className: `neu-table-row${selectedIds.has(m.id) ? " selected-row" : ""}`, style: { cursor: "pointer", verticalAlign: "top", background: selectedIds.has(m.id) ? undefined : (open ? "rgba(99,102,241,0.08)" : (idx % 2 === 1 ? "rgba(255,255,255,0.25)" : "transparent")) } },
+                        canEdit && React.createElement("td", { onClick: (e) => e.stopPropagation(), style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px" } },
                             React.createElement("input", { type: "checkbox", checked: selectedIds.has(m.id), onChange: e => onSelectId(m.id, e.target.checked), style: { width: 15, height: 15, accentColor: "#6366F1", cursor: "pointer" } })),
                         MOVEMENT_COLUMNS.map((col) => {
                             const val = col.format ? col.format(m[col.key], m) : m[col.key];
                             const isType = col.key === "movementType";
                             return React.createElement("td", { key: col.key, style: { padding: "10px 10px", borderBottom: "0.5px solid rgba(163,177,198,0.25)", fontFamily: "Inter", fontSize: 12, whiteSpace: "nowrap",
                                     color: isType ? (m.movementType === "Inward" ? "#059669" : "#DC2626") : (col.key === "site" ? "#6366F1" : "#1E293B"),
-                                    fontWeight: isType || col.key === "site" ? 700 : 400 } }, val != null && val !== "" ? val : "—");
+                                    fontWeight: isType || col.key === "site" ? 700 : 400 } }, WRAP_COLS.has(col.key) ? React.createElement("div", { style: wrapCellStyle(false) }, val != null && val !== "" ? val : "—") : (val != null && val !== "" ? val : "—"));
                         }),
-                        React.createElement("td", { style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px", textAlign: "right", whiteSpace: "nowrap" } },
+                        React.createElement("td", { onClick: (e) => e.stopPropagation(), style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px", textAlign: "right", whiteSpace: "nowrap" } },
                             m.hasDocument && React.createElement("button", { onClick: () => onDownload(m.id, m.documentName), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Download DC/Invoice" },
                                 React.createElement(Download, { s: 13, c: "#0EA5E9" })),
                             canEdit && React.createElement("button", { onClick: () => onEdit(m), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Edit record" },
                                 React.createElement(Edit2, { s: 13, c: "#64748B" })),
                             canEdit && React.createElement("button", { onClick: () => onDelete(m.id), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex" }, title: "Delete record" },
-                                React.createElement(Trash2, { s: 13, c: "#64748B" }))))))))),
+                                React.createElement(Trash2, { s: 13, c: "#64748B" })))),
+                        open && React.createElement(ExpandedDetailRow, { colSpan: MOVEMENT_COLUMNS.length + 2, title: "Material movement details", items: [
+                            { label: "Item", value: m.itemName, wide: true },
+                            { label: "Item description", value: m.description, wide: true },
+                            ...MOVEMENT_COLUMNS.filter((c) => c.key !== "itemName" && c.key !== "remarks").map((c) => ({ label: c.label, value: c.format ? c.format(m[c.key], m) : m[c.key] })),
+                            { label: "Remarks", value: m.remarks, wide: true }] })); })))),
         openFilter && React.createElement(ValueListFilterPopup, { column: openFilter, currentFilter: columnFilters[openFilter.key], optionRows: optionRowsForColumn(openFilter.key), onApply: (value) => setColumnFilters((prev) => ({ ...prev, [openFilter.key]: value })), onClose: () => setOpenFilter(null) }));
 }
 /* ===== ASSET TABLE ===== */
@@ -9665,6 +9696,25 @@ function AddLocationModal({ onClose, onCreate, onArchive, onRestore, onDelete, l
                             React.createElement(Trash2, { s: 12, c: "#DC2626" }))) : React.createElement("button", { onClick: () => onArchive(l), title: "Archive this location", className: "neu-icon-btn", style: { width: 28, height: 28, borderRadius: 8 } },
                         React.createElement("span", { style: { fontSize: 11, fontWeight: 900, color: "#B45309" } }, "\u21A5"))))))));
 }
+/* ===== LICENSE: FREE-TRIAL BANNER + AUTO-LOCK SCREEN ===== */
+function LicenseTrialBanner({ status, canActivate, onOpenSettings }) {
+    if (!status || status.mode !== "trial" || !status.trial) return null;
+    const d = status.trial.daysLeft;
+    const urgent = d <= 3;
+    return React.createElement("div", { "data-license": "trial-banner", role: "status", style: { display: "flex", alignItems: "center", justifyContent: "center", gap: 12, flexWrap: "wrap", padding: "8px 14px", marginBottom: 14, borderRadius: 12, fontFamily: "Inter", fontSize: 12.5, fontWeight: 600, background: urgent ? "rgba(220,38,38,0.10)" : "rgba(99,102,241,0.10)", color: urgent ? "#B91C1C" : "#4338CA", border: "1px solid " + (urgent ? "rgba(220,38,38,0.25)" : "rgba(99,102,241,0.25)") } },
+        React.createElement("span", null, `Free trial: ${d} day${d === 1 ? "" : "s"} left (ends ${new Date(status.trial.endsAt).toLocaleDateString()}). The application locks automatically when the trial ends.`),
+        canActivate && React.createElement("button", { onClick: onOpenSettings, className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "5px 11px" } }, "Activate license"));
+}
+function LicenseLockScreen({ reason, isGlobalAdmin, user, onLogout }) {
+    return React.createElement("div", { "data-license": "lock-screen", style: { position: "fixed", inset: 0, zIndex: 9999, overflowY: "auto", background: "linear-gradient(160deg,#EEF2FF,#F8FAFC)", padding: "40px 16px", display: "flex", justifyContent: "center", alignItems: "flex-start" } },
+        React.createElement("div", { style: { width: "100%", maxWidth: 760 } },
+            React.createElement("div", { className: "neu-card", style: { padding: 26, marginBottom: 16 } },
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 22, fontWeight: 800, color: "#0F172A", marginBottom: 6 } }, "Application locked"),
+                React.createElement("p", { "data-license": "lock-reason", style: { fontFamily: "Inter", fontSize: 13.5, color: "#475569", lineHeight: 1.55, margin: "0 0 10px" } }, reason || "A valid license is required."),
+                React.createElement("p", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#64748B", margin: "0 0 14px" } }, isGlobalAdmin ? "Activate a license below to unlock immediately. Your data is untouched." : `Signed in as ${user && user.name}. Ask a global administrator to activate a license; your data is untouched.`),
+                React.createElement("button", { onClick: onLogout, className: "neu-btn-secondary", style: { fontSize: 12 } }, "Sign out")),
+            isGlobalAdmin && React.createElement(LicensePanel, { onActivated: () => setTimeout(() => window.location.reload(), 600) })));
+}
 function ForcedPasswordChange({ user, onLogout }) {
     const [current, setCurrent] = useState("");
     const [newPass, setNewPass] = useState("");
@@ -10194,7 +10244,7 @@ function ScopedBackupPanel({ currentUser }) {
         note && React.createElement("div", { "data-bk": "note", role: note.ok ? "status" : "alert", style: { marginTop: 12, padding: "8px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, background: note.ok ? "#ECFDF5" : "#FEF2F2", color: note.ok ? "#047857" : "#B91C1C", border: "1px solid " + (note.ok ? "#A7F3D0" : "#FECACA") } }, note.text),
         React.createElement("p", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#475569", margin: "12px 0 0", lineHeight: 1.5 } }, "This copy contains only your location's assets, issues, activities, material movements, racks and floor plans - no user accounts or passwords. Restoring data is done by the Administrator from a full backup."));
 }
-function LicensePanel() {
+function LicensePanel({ onActivated }) {
     const [status, setStatus] = useState(null);
     const [loadErr, setLoadErr] = useState("");
     const [code, setCode] = useState("");
@@ -10223,6 +10273,7 @@ function LicensePanel() {
         setNote({ ok: true, text: `Activated - licensed to ${r.status.license.customer}.` });
         setCode("");
         await load();
+        if (typeof onActivated === "function") onActivated(r.status);
     };
     const activateCode = async () => {
         if (!code.trim())
@@ -14899,14 +14950,32 @@ function DataCenterDashboard() {
     // Clamp: after deleting / filtering / a refresh the stored page can be past the last page ("2 / 1" and an empty table).
     const assetPageClamped = Math.min(Math.max(1, assetPage), assetTotalPages);
     const paginatedAssets = filteredAssets.slice((assetPageClamped - 1) * assetPageSize, assetPageClamped * assetPageSize);
+    const [licenseStatus, setLicenseStatus] = useState(null);
+    const [licenseLockReason, setLicenseLockReason] = useState(null);
+    useEffect(() => {
+        const onLock = (e) => setLicenseLockReason((e && e.detail) || "License required");
+        window.addEventListener("dcim-license-locked", onLock);
+        return () => window.removeEventListener("dcim-license-locked", onLock);
+    }, []);
+    useEffect(() => {
+        if (!currentUser || currentUser.mustChangePassword) return undefined;
+        let dead = false;
+        const poll = async () => { try { const st = await apiFetch("/license/status"); if (dead) return; setLicenseStatus(st); if (st && st.enforced && !st.valid) setLicenseLockReason(st.reason || "License required"); else setLicenseLockReason(null); } catch (e) { } };
+        poll();
+        const iv = setInterval(poll, 5 * 60 * 1000);
+        return () => { dead = true; clearInterval(iv); };
+    }, [currentUser && currentUser.id, currentUser && currentUser.mustChangePassword]);
     const statusOptions = ["all", "Active", "Open", "In progress", "Awaiting part", "Part received", "Scheduled", "Overdue", "Completed", "Faulty part in store", "Returned to OEM", "Closed"];
     const isGlobalAdmin = !!isAdmin && !!currentUser && (currentUser.location_access === "All" || currentUser.location_access === "Both");
     if (!currentUser)
         return React.createElement(LoginScreen, { onLogin: handleLogin, error: loginError, loading: loginLoading, orgBrand });
     if (currentUser.mustChangePassword)
         return React.createElement(ForcedPasswordChange, { user: currentUser, onLogout: handleLogout });
+    if (licenseLockReason)
+        return React.createElement(LicenseLockScreen, { reason: licenseLockReason, isGlobalAdmin, user: currentUser, onLogout: handleLogout });
     return React.createElement("div", { className: "dcim-app-shell", style: { background: "transparent", minHeight: "100vh", padding: "28px 32px 54px", fontFamily: "Inter" } },
         orgBrand.footerText && React.createElement("div", { className: "dcim-official-use-footer", style: { position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 500, textAlign: "center", fontFamily: "Inter", fontSize: 11, color: "#475569", letterSpacing: 0.2, background: "rgba(248,250,252,0.92)", backdropFilter: "blur(4px)", padding: "4px 12px", borderTop: "1px solid rgba(148,163,184,0.25)", pointerEvents: "none" } }, orgBrand.footerText),
+        React.createElement(LicenseTrialBanner, { status: licenseStatus, canActivate: isGlobalAdmin, onOpenSettings: () => setTab("settings") }),
         React.createElement(FirmwareJobAlerts, { currentUser, onRunning: setFwRunning, onOpen: () => { window.__dcimOpenFwJobs = true; setTab("monitoring"); setTimeout(() => window.dispatchEvent(new Event("dcim-open-fwjobs")), 50); } }),
         React.createElement("div", { className: "dcim-app-header", style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 32, flexWrap: "wrap", gap: 16 } },
             React.createElement("div", { className: "dcim-brand-area" },

@@ -36,6 +36,8 @@ chmod 755 "$STAGE/usr/bin/dcim-service" "$STAGE/usr/bin/dcim-upgrade" "$STAGE/us
 
 cp -a "$REPO_ROOT/dcim/webapp" "$STAGE/usr/share/dcim/webapp"
 rm -rf "$STAGE/usr/share/dcim/webapp/.env" \
+       "$STAGE/usr/share/dcim/webapp/license.lic" \
+       "$STAGE/usr/share/dcim/webapp/.trial-state" \
        "$STAGE/usr/share/dcim/webapp/uploads" \
        "$STAGE/usr/share/dcim/webapp/backups" \
        "$STAGE/usr/share/dcim/webapp/logs"

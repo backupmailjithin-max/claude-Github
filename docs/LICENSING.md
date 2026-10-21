@@ -29,6 +29,31 @@ below. This document is for you, not your customers.
 See `dcim/webapp/lib/license.js` for the full verification logic and
 `docs/guides/` wherever you'd like to fold this into customer-facing docs.
 
+## 10-day free trial and auto-lock
+
+When licensing is on (a public key is configured) and no valid `license.lic`
+is present, the app starts a **10-day free trial** the first time the server
+runs. Everything works and a banner shows the days left. On day 11 the app
+**locks itself**: every API call except sign-out, change-password and the
+license routes returns `402 LICENSE_REQUIRED`, and the UI shows an
+"Application locked" screen with the machine ID and Activate / Upload .lic.
+Activating a valid license unlocks immediately, no restart; data is never
+touched.
+
+- The trial start is recorded in two places - `.trial-state` next to
+  `server.js` (HMAC-signed with the machine fingerprint) and the
+  `license.trialStartedAt` / `license.trialSig` keys in `app_settings`. The
+  earliest valid copy wins, so deleting one does not restart the clock.
+  An edited or copied record counts as an ended trial.
+- A changed hostname, first MAC address or machine-id invalidates the record
+  (same fingerprint the machine-locked license uses).
+- Known limits: wiping both records restarts the trial; moving the system
+  clock back is not detected.
+- Upgrade / repair keep `license.lic` and `.trial-state` (excluded from the
+  installers' sync/delete step). Do not ship either file in a package.
+- To restart the clock on a TEST machine: delete `.trial-state` and run
+  `DELETE FROM app_settings WHERE k LIKE 'license.%'`.
+
 ## One-time setup (do this once, ever)
 
 1. **Generate your signing keypair**, on a machine you control — never on a

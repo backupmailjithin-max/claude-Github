@@ -2123,7 +2123,7 @@ function mustChangeBlocked(req, res) {
 // can only reach license-management routes on an unlicensed/expired install -
 // same allow-list pattern as MUST_CHANGE_ALLOWED above. A no-op (never
 // blocks) until lib/license-public-key.js has a real key configured.
-const LICENSE_ALLOWED = new Set(['POST /api/auth/logout', 'POST /api/auth/heartbeat', 'GET /api/auth/me', 'GET /api/license/status', 'GET /api/license/fingerprint', 'POST /api/license/activate']);
+const LICENSE_ALLOWED = new Set(['POST /api/auth/logout', 'POST /api/auth/heartbeat', 'GET /api/auth/me', 'PATCH /api/auth/change-password', 'GET /api/license/status', 'GET /api/license/fingerprint', 'POST /api/license/activate']);
 function licenseBlocked(req, res) {
   const status = license.getLicenseStatus(LICENSE_FILE);
   if (!status.enforced || status.valid) return false;
@@ -7908,7 +7908,7 @@ async function buildBackup(kind, by) {
   try {
     await conn.query('SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ');
     await conn.query('START TRANSACTION WITH CONSISTENT SNAPSHOT');          // every table as of the same instant
-    for (const t of BACKUP_TABLES) { const [rows] = await conn.query({ sql: `SELECT * FROM \`${t}\``, typeCast: dateStringCast }); tables[t] = rows; }
+    for (const t of BACKUP_TABLES) { const [rows] = await conn.query({ sql: `SELECT * FROM \`${t}\`${t === 'app_settings' ? " WHERE k NOT LIKE 'license.%'" : ''}`, typeCast: dateStringCast }); tables[t] = rows; }   // license.* (trial record) stays per machine - never exported
     await conn.query('COMMIT');
   } finally { conn.release(); }
   const files = {}, skippedFiles = [];
@@ -8037,11 +8037,12 @@ async function restoreManifest(m, by) {
       const rows = m.tables[t];
       if (!rows) { untouched.push(t); continue; }                                   // an older backup without this table: leave the current one alone
       const [cols] = await conn.query(`SHOW COLUMNS FROM \`${t}\``); const known = new Set(cols.map((c) => c.Field));
-      await conn.query(`DELETE FROM \`${t}\``);
-      if (rows.length) {
-        const use = Object.keys(rows[0]).filter((c) => known.has(c));
-        for (let i = 0; i < rows.length; i += 300) {
-          const chunk = rows.slice(i, i + 300);
+      await conn.query(t === 'app_settings' ? "DELETE FROM `app_settings` WHERE k NOT LIKE 'license.%'" : `DELETE FROM \`${t}\``);   // keep this machine's own trial record
+      const rowsIn = t === 'app_settings' ? rows.filter((r) => !String(r && r.k || '').startsWith('license.')) : rows;
+      if (rowsIn.length) {
+        const use = Object.keys(rowsIn[0]).filter((c) => known.has(c));
+        for (let i = 0; i < rowsIn.length; i += 300) {
+          const chunk = rowsIn.slice(i, i + 300);
           await conn.query(`INSERT INTO \`${t}\` (${use.map((c) => `\`${c}\``).join(',')}) VALUES ?`, [chunk.map((r) => use.map((c) => (r[c] === undefined ? null : r[c])))]);
         }
       }
@@ -8790,6 +8791,20 @@ async function startServer() {
     await initDB();
     await setupRoutesModule.applyIntegrationEnv();
     await pduRoutesModule.ensureSchema();
+    // 10-day free trial + auto-lock (see lib/license.js). Only when licensing is enforced.
+    if (license.isLicensingConfigured()) {
+      try {
+        const t = await license.initTrial({ filePath: path.join(__dirname, '.trial-state'), dbGet: getSetting, dbSet: setSetting, log });
+        const st = license.getLicenseStatus(LICENSE_FILE);
+        log.info(`[license] mode=${st.mode}${t && st.mode === 'trial' ? `, ${t.daysLeft} day(s) left (ends ${t.endsAt.slice(0, 10)})` : ''}`);
+        let lastMode = st.mode;
+        const watcher = setInterval(() => {
+          const cur = license.getLicenseStatus(LICENSE_FILE).mode;
+          if (cur !== lastMode) { if (cur === 'locked') log.warn('[license] LOCKED - free trial ended and no valid license is active.'); lastMode = cur; }
+        }, 60 * 1000);
+        if (watcher.unref) watcher.unref();
+      } catch (e) { log.warn('[license] trial initialisation failed: ' + e.message); }
+    }
     // BIND_HOST (optional, e.g. 127.0.0.1 when nginx is the only entry point). Unset = all interfaces, exactly as before.
     httpServer = app.listen(...(process.env.BIND_HOST ? [PORT, process.env.BIND_HOST] : [PORT]), () => {
       log.info(`[startup] DCIM server v${APP_VERSION} listening on port ${PORT} (${IS_PRODUCTION ? 'production' : 'development'}, node ${process.version}, pid ${process.pid}, db ${DB_NAME})`);

@@ -18,3 +18,6 @@ dcim/webapp/license.lic
 
 # runtime output, not source - dcim/webapp/logs/.gitkeep keeps the folder
 dcim/webapp/logs/*.log
+
+# per-install 10-day trial record (see docs/LICENSING.md) - never ship or commit
+dcim/webapp/.trial-state

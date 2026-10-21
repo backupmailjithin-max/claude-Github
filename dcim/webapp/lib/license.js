@@ -110,28 +110,102 @@ function verifyLicenseFile(filePath) {
   return { valid: true, payload };
 }
 
+// ---------------------------------------------------------------------------
+// 10-day free trial + auto-lock.
+// The trial starts the first time the server runs with licensing enforced and
+// no valid license. Its start time is stored in TWO places (a signed state
+// file next to server.js and the app_settings table) and the EARLIEST valid
+// copy wins, so deleting one of them does not restart the clock. The file is
+// signed with a key derived from this machine's fingerprint, so editing it or
+// copying it to another machine is detected and the trial counts as ended.
+// When the trial runs out the app locks itself (every API call except the
+// license / sign-out routes returns 402) until a valid license is activated.
+// Limitation (same as any offline scheme): wiping BOTH stores restarts it.
+// ---------------------------------------------------------------------------
+const TRIAL_DAYS = 10;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const TRIAL_DB_KEY = 'license.trialStartedAt';
+const TRIAL_DB_SIG_KEY = 'license.trialSig';
+let trialState = { startedAt: null, tampered: false, filePath: null };
+
+function trialSig(startedAt) {
+  const key = crypto.createHash('sha256').update('dcim-trial-v1|' + computeMachineFingerprint()).digest();
+  return crypto.createHmac('sha256', key).update(String(startedAt)).digest('hex');
+}
+function sigOk(startedAt, sig) {
+  if (!startedAt || typeof sig !== 'string') return false;
+  const a = Buffer.from(trialSig(startedAt)); const b = Buffer.from(sig);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+// Call once at startup, after the database is ready. dbGet(key)/dbSet(key, value) are the app_settings helpers.
+async function initTrial({ filePath, dbGet, dbSet, log }) {
+  trialState = { startedAt: null, tampered: false, filePath };
+  const valid = [];
+  let tampered = false;
+  try {
+    if (filePath && fs.existsSync(filePath)) {
+      const f = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      if (sigOk(Number(f.startedAt), f.sig)) valid.push(Number(f.startedAt)); else tampered = true;
+    }
+  } catch (e) { tampered = true; }
+  try {
+    const d = await dbGet(TRIAL_DB_KEY, '');
+    if (d) {
+      const sig = await dbGet(TRIAL_DB_SIG_KEY, '');
+      if (sigOk(Number(d), sig)) valid.push(Number(d)); else tampered = true;
+    }
+  } catch (e) { /* database unavailable: the file alone decides */ }
+  let startedAt;
+  if (tampered) { startedAt = 1; if (log) log.warn('[license] trial record was altered or copied from another machine - trial treated as ended.'); }
+  else if (valid.length) startedAt = Math.min(...valid);
+  else { startedAt = Date.now(); if (log) log.info(`[license] ${TRIAL_DAYS}-day free trial started now.`); }
+  trialState.startedAt = startedAt; trialState.tampered = tampered;
+  if (!tampered) {
+    const sig = trialSig(startedAt);
+    try { if (filePath) fs.writeFileSync(filePath, JSON.stringify({ startedAt, sig })); } catch (e) { if (log) log.warn('[license] could not write trial state file: ' + e.message); }
+    try { await dbSet(TRIAL_DB_KEY, String(startedAt)); await dbSet(TRIAL_DB_SIG_KEY, sig); } catch (e) { /* ignore */ }
+  }
+  return getTrialInfo();
+}
+
+function getTrialInfo() {
+  if (!trialState.startedAt) return null;
+  const endsAt = trialState.startedAt + TRIAL_DAYS * DAY_MS;
+  const msLeft = endsAt - Date.now();
+  return {
+    days: TRIAL_DAYS,
+    startedAt: new Date(trialState.startedAt).toISOString(),
+    endsAt: new Date(endsAt).toISOString(),
+    daysLeft: Math.max(0, Math.ceil(msLeft / DAY_MS)),
+    active: msLeft > 0 && !trialState.tampered,
+    tampered: trialState.tampered,
+  };
+}
+
 function getLicenseStatus(licenseFilePath) {
   const fingerprint = formatFingerprint(computeMachineFingerprint());
   if (!isLicensingConfigured()) {
-    return { enforced: false, valid: true, reason: null, fingerprint, license: null };
+    return { enforced: false, valid: true, mode: 'off', reason: null, fingerprint, license: null, trial: null };
   }
   const result = verifyLicenseFile(licenseFilePath);
-  return {
-    enforced: true,
-    valid: result.valid,
-    reason: result.valid ? null : result.reason,
-    fingerprint,
-    license: result.payload
-      ? {
-          licenseId: result.payload.licenseId || null,
-          customer: result.payload.customer || null,
-          maxUsers: result.payload.maxUsers || null,
-          issuedAt: result.payload.issuedAt || null,
-          expiresAt: result.payload.expiresAt || null,
-          machineBound: !!result.payload.machineId,
-        }
-      : null,
-  };
+  const license = result.payload
+    ? {
+        licenseId: result.payload.licenseId || null,
+        customer: result.payload.customer || null,
+        maxUsers: result.payload.maxUsers || null,
+        issuedAt: result.payload.issuedAt || null,
+        expiresAt: result.payload.expiresAt || null,
+        machineBound: !!result.payload.machineId,
+      }
+    : null;
+  if (result.valid) return { enforced: true, valid: true, mode: 'licensed', reason: null, fingerprint, license, trial: null };
+  const trial = getTrialInfo();
+  if (trial && trial.active) return { enforced: true, valid: true, mode: 'trial', reason: null, fingerprint, license, trial };
+  const why = trial
+    ? (trial.tampered ? 'The free-trial record is invalid, so the trial is treated as ended.' : `The ${TRIAL_DAYS}-day free trial ended on ${trial.endsAt.slice(0, 10)}.`)
+    : result.reason;
+  return { enforced: true, valid: false, mode: 'locked', reason: `${why} Activate a license to continue.${result.payload ? ' (' + result.reason + ')' : ''}`, fingerprint, license, trial };
 }
 
 module.exports = {
@@ -140,4 +214,7 @@ module.exports = {
   formatFingerprint,
   verifyLicenseFile,
   getLicenseStatus,
+  initTrial,
+  getTrialInfo,
+  TRIAL_DAYS,
 };
