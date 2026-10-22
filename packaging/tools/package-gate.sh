@@ -21,11 +21,11 @@ package_gate() {
   if grep -q "INTEGRITY_PUBLIC_KEY_PEM: \`-----BEGIN" "$webapp/lib/integrity-public-key.js" 2>/dev/null; then pinned=1; fi
   if [ "$pinned" = "1" ]; then
     req_vendor="--require-vendor"
-    [ -n "$DCIM_INTEGRITY_SIGN_KEY_FILE" ] || { echo "ERROR: a vendor integrity key is pinned (lib/integrity-public-key.js) but DCIM_INTEGRITY_SIGN_KEY_FILE is not set - every build must be vendor-signed once pinned." >&2; return 1; }
-  elif [ "$DCIM_RELEASE_BUILD" = "1" ]; then
+    [ -n "${DCIM_INTEGRITY_SIGN_KEY_FILE:-}" ] || { echo "ERROR: a vendor integrity key is pinned (lib/integrity-public-key.js) but DCIM_INTEGRITY_SIGN_KEY_FILE is not set - every build must be vendor-signed once pinned." >&2; return 1; }
+  elif [ "${DCIM_RELEASE_BUILD:-}" = "1" ]; then
     echo "ERROR: DCIM_RELEASE_BUILD=1 but no vendor integrity key is pinned yet - run packaging/tools/integrity-keygen.js --install once before cutting a release (see docs/LICENSING.md)." >&2; return 1
   fi
-  if [ "$DCIM_BYTENODE" = "1" ]; then
+  if [ "${DCIM_BYTENODE:-}" = "1" ]; then
     [ -n "$bundled_node" ] && [ -x "$bundled_node" ] || { echo "ERROR: DCIM_BYTENODE=1 requires the bundled target node binary as package_gate's 4th argument (bytecode must match the exact Node build this package ships)." >&2; return 1; }
     "$node_bin" "$tools/bytenode-compile.js" --webapp "$webapp" --node "$bundled_node" || return 1
   fi
