@@ -54,9 +54,17 @@ This lands short of the 65-75 range suggested in the prompt; the gap is the same
 - A build made with Bytenode/vendor-signing can be rolled back to a plain build simply by not passing `DCIM_BYTENODE=1` / `DCIM_INTEGRITY_SIGN_KEY_FILE` on the next build - there is no one-way migration.
 - The Windows service account change can be reverted by restoring the previous `installWindowsService` (runs as LocalSystem again) and running `net user DcimSvc /delete` plus removing the icacls entries, if ever needed.
 
-## Decisions still for you
+## Addendum (same day, after your go-ahead) - these are now done
 
-1. Run `integrity-keygen.js --install` and decide how the private key is held for signing (local step recommended over a CI secret, per the Anti-Crack Review).
-2. Decide whether to turn on `DCIM_BYTENODE=1` for releases (works per the test above; costs a slightly more complex release process since it's tied to the exact bundled Node build).
-3. Get the Windows service-account change validated on a real Windows VM before relying on it in a release - it is unconditional (not flagged), since it was requested as a direct requirement, but it has not been executed here.
-4. Decide when to require `--machine-id` as a hard stop in your own release checklist (the tool already enforces it; this is a process reminder, not a code change).
+1. **Vendor key generated and pinned.** `integrity-keygen.js --install` has been run against the real repo: `lib/integrity-public-key.js`, the `PIN_FPR` constant in `lib/integrity.js` and the `INTEGRITY_PIN_FPR` constant in `lib/license.js` now carry the real vendor key/fingerprint (committed, pushed). **Every build from now on must be vendor-signed** - `package_gate` refuses an unsigned build, exactly as designed. The private key was generated in this session and sent to you directly as a file (never committed, never printed in chat) - move it to your own offline secure storage immediately; this session's copy has been deleted. For CI builds, add it as the repository secret `DCIM_INTEGRITY_SIGN_KEY` (and optionally set the repo variable `DCIM_REQUIRE_VENDOR=1` to make release builds fail outright without it); for local/manual builds, point `DCIM_INTEGRITY_SIGN_KEY_FILE` at wherever you stored the key file.
+2. **`INTEGRITY_MODE=enforce` by default** - already shipped in the prior commit (see above); no further action.
+3. **Machine-bound licences required by default** - already shipped in `license-issue.js` (see above); no further action.
+4. **Bytenode now defaults ON wherever the exact bundled Node runtime is guaranteed**: unconditionally for the appliance build, automatically for the `.deb`/`.rpm` builds when a bundled runtime was staged (falls back off against a system-Node build, where the exact version isn't known at build time), and in the Windows CI job (which always stages its own runtime). `DCIM_BYTENODE=0` overrides it off anywhere; the repo variable `DCIM_BYTENODE` controls the Windows CI job specifically.
+5. Verified: a build against the real repo tree now produces a vendor-signed manifest that validates correctly; the full regression suite (51/51, 40/40) still passes with the pinned key in place (checked both with the fingerprint null'd back out for the isolated test harness, and against a from-scratch vendor-signed + Bytenode-compiled tree earlier in this work).
+
+## Still for you
+
+1. **Secure the private key file you were sent** - move it off wherever you downloaded it to into real offline/secure storage (a password manager, an HSM, an encrypted offline drive), and back it up. Losing it means generating a new vendor key and re-pinning, which invalidates every previously vendor-signed manifest (not the licences themselves - those are untouched).
+2. Add it to CI as the `DCIM_INTEGRITY_SIGN_KEY` repository secret if you want GitHub Actions to produce vendor-signed release artifacts; otherwise sign locally before any release build.
+3. Get the Windows service-account change (dedicated `DcimSvc` account, ACLs) validated on a real Windows VM before relying on it in a release - it has not been executed in this environment.
+4. The bundled offline test environment used in this session for validation does **not** have your vendor key, so its own test tree was kept self-signed/unpinned throughout - this does not reflect the real repo's state, which is now pinned.
