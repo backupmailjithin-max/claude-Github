@@ -169,6 +169,23 @@ The licence generator, key tool and issue template (`tools/license-*.js`, `Run-L
      -d '{"code":"<the activation code>"}'
    ```
 
+## Vendor-signed integrity manifest (anti-tamper trust root)
+
+`integrity.manifest.json` lists the SHA-256 of `server.js`, `lib/license.js`, `lib/license-public-key.js`, `lib/integrity.js` and
+`lib/integrity-public-key.js`. Until you pin a vendor integrity key it is self-signed by the build (tamper evidence only, as before).
+Pinning the key makes it **vendor-signed**: only you can produce a manifest the app will accept.
+
+One-time, on your own machine (never in CI, never on a customer machine):
+
+1. `node packaging/tools/integrity-keygen.js --out ~/secure/dcim-integrity.pem --install` - writes the private key (mode 600, refused inside the repo) and pins the public key in `lib/integrity-public-key.js`, `lib/integrity.js` and `lib/license.js`. Commit those three files. Back the private key up offline.
+2. Every build signs with it: `export DCIM_INTEGRITY_SIGN_KEY_FILE=~/secure/dcim-integrity.pem` (Linux/appliance builds), or add the repo secret `DCIM_INTEGRITY_SIGN_KEY` (Windows job). Set `DCIM_REQUIRE_VENDOR_SIGNATURE=1` (or repo variable `DCIM_REQUIRE_VENDOR=1`) so a release build fails instead of falling back to a self-signed manifest.
+3. Hot-fix zips: after editing any protected file, re-run `node packaging/tools/make-integrity-manifest.js --webapp <dir> --sign-key <key>` and ship the new manifest with the files.
+
+The private key is never packaged: the build gate fails if a key file sits inside the package tree, and a vendor-signed manifest carries no key at all.
+Set `INTEGRITY_MODE=enforce` in the customer `.env` to refuse start-up on file tampering **and** on runtime hijacking (`NODE_OPTIONS` loading code,
+`NODE_PATH`, `LD_PRELOAD`, an open debugger/inspector, a SIGUSR1 inspector request, or a patched signature primitive).
+See `LICENSING-ANTI-CRACK-REVIEW-2026-10-22.md`.
+
 ## What this does and doesn't protect against
 
 **Stops:** casual copying of a license file to another machine or another

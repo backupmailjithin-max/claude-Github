@@ -99,10 +99,25 @@ jobs:
       # "success" while missing its output file.
       - name: Integrity manifest + package validation (fails on licence tools, signing material or private keys)
         shell: pwsh
+        env:
+          DCIM_INTEGRITY_SIGN_KEY: ${{ secrets.DCIM_INTEGRITY_SIGN_KEY }}
+          DCIM_REQUIRE_VENDOR: ${{ vars.DCIM_REQUIRE_VENDOR }}
         run: |
+          # Vendor-signed manifest: optional repo secret DCIM_INTEGRITY_SIGN_KEY (PEM of the vendor integrity private key).
+          # It is written outside the checkout, used in memory by the signer, and deleted. Without it a self-signed manifest
+          # is produced (only valid while no vendor key is pinned); set DCIM_REQUIRE_VENDOR=1 to make a release build demand it.
+          $req = @()
+          if ($env:DCIM_INTEGRITY_SIGN_KEY) {
+            $kf = Join-Path $env:RUNNER_TEMP 'integrity-sign.pem'
+            Set-Content -Path $kf -Value $env:DCIM_INTEGRITY_SIGN_KEY -NoNewline
+            $env:DCIM_INTEGRITY_SIGN_KEY_FILE = $kf
+          }
+          if ($env:DCIM_REQUIRE_VENDOR -eq '1') { $req = @('--require-vendor') }
           node packaging\tools\make-integrity-manifest.js --webapp dcim\webapp
-          if ($LASTEXITCODE -ne 0) { throw "integrity manifest creation failed" }
-          node packaging\tools\validate-package.js --root dcim\webapp --require-manifest `
+          $rc = $LASTEXITCODE
+          if ($env:DCIM_INTEGRITY_SIGN_KEY_FILE) { Remove-Item -Force $env:DCIM_INTEGRITY_SIGN_KEY_FILE -ErrorAction SilentlyContinue }
+          if ($rc -ne 0) { throw "integrity manifest creation failed" }
+          node packaging\tools\validate-package.js --root dcim\webapp --require-manifest @req `
             --iss packaging\windows\dcim-installer.iss --iss packaging\windows\dcim-upgrade-utility.iss --iss packaging\windows\dcim-repair-utility.iss
           if ($LASTEXITCODE -ne 0) { throw "package validation failed - installers NOT built" }
 

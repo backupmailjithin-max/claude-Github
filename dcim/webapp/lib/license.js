@@ -18,6 +18,8 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { LICENSE_PUBLIC_KEY_PEM } = require('./license-public-key');
 const integrity = require('./integrity');
+// SHA-256 of the vendor integrity public key (lib/integrity-public-key.js); must agree with lib/integrity.js. Set by integrity-keygen.js --install.
+const INTEGRITY_PIN_FPR = null; // @LICENSE_PIN_FPR@
 
 function isLicensingConfigured() {
   return !!LICENSE_PUBLIC_KEY_PEM;
@@ -392,10 +394,10 @@ function getTrialInfo() {
 
 // Verifies the signed manifest of the licensing code (once per process) and, at server start, begins
 // watching the licence file. See lib/integrity.js.
-function ensureIntegrity(opts) { return integrity.init(Object.assign({ root: path.join(__dirname, '..'), emit: securityEvent }, opts || {})); }
+function ensureIntegrity(opts) { return integrity.init(Object.assign({ root: path.join(__dirname, '..'), emit: securityEvent, peerPinFpr: INTEGRITY_PIN_FPR }, opts || {})); }
 function integrityEnforced() { ensureIntegrity(); return integrity.isEnforced(); }
 function startIntegrityMonitor(licenseFilePath, log) {
-  integrity.init({ root: path.join(__dirname, '..'), emit: securityEvent, log });
+  integrity.init({ root: path.join(__dirname, '..'), emit: securityEvent, log, peerPinFpr: INTEGRITY_PIN_FPR });
   integrity.startMonitor({ licenseFile: licenseFilePath, onLicenseChanged: () => { try { getLicenseStatus(licenseFilePath); } catch (e) { /* ignore */ } } });
 }
 

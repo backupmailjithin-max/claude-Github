@@ -6,6 +6,7 @@
 // --iss          an Inno Setup script: its "Excludes:" list is applied to --root first, so a source tree that the
 //                installer filters (Windows) is validated as the installer will ship it.
 // --require-manifest  the signed integrity manifest must exist, verify and match the files.
+// --require-vendor    (with --require-manifest) the manifest must be signed with the pinned VENDOR integrity key.
 // Third-party runtime bundles (runtime/) are checked by file name only: they contain upstream test fixtures
 // (e.g. MariaDB's mariadb-test certificates) that are not our key material and are not content-scanned.
 const fs = require('fs');
@@ -18,7 +19,7 @@ for (let i = 2; i < process.argv.length; i++) {
   const v = process.argv[i + 1] && !process.argv[i + 1].startsWith('--') ? process.argv[++i] : true;
   if (k === 'iss') args.iss.push(v); else args[k] = v;
 }
-if (!args.root) { console.error('usage: validate-package.js --root <dir> [--iss f.iss] [--require-manifest]'); process.exit(2); }
+if (!args.root) { console.error('usage: validate-package.js --root <dir> [--iss f.iss] [--require-manifest] [--require-vendor]'); process.exit(2); }
 const root = path.resolve(args.root);
 
 const FORBIDDEN_NAMES = [
@@ -105,9 +106,12 @@ if (args['require-manifest']) {
     else {
       const raw = fs.readFileSync(mp, 'utf8');
       if (/private/i.test(Object.keys(JSON.parse(raw)).join(' '))) problems.push(`${integ.MANIFEST_NAME}: contains a private-key field`);
-      const r = integ.checkIntegrity(wa);
+      let peer; try { const m = /INTEGRITY_PIN_FPR = (null|'([0-9a-f]{64})')/.exec(fs.readFileSync(path.join(wa, 'lib', 'license.js'), 'utf8')); peer = m ? (m[2] || null) : undefined; } catch (e) { peer = undefined; }
+      const r = integ.checkIntegrity(wa, { peerPinFpr: peer });
+      if (r.trustRootMismatch) problems.push('integrity trust root inconsistent (lib/integrity-public-key.js, lib/integrity.js and lib/license.js must carry the same vendor key)');
+      if (args['require-vendor'] && r.signer !== 'vendor') problems.push('release build requires a VENDOR-signed manifest (pin the key with integrity-keygen.js --install and sign with --sign-key / DCIM_INTEGRITY_SIGN_KEY_FILE)');
       if (r.state !== 'ok') problems.push(`${integ.MANIFEST_NAME}: integrity state "${r.state}" (${[...r.modified, ...r.missing].join(', ') || 'signature/key mismatch'})`);
-      else info.push(`manifest ${r.keyId} verified, ${integ.PROTECTED_FILES.length} files match`);
+      else info.push(`manifest ${r.keyId} (${r.signer}-signed) verified, ${integ.PROTECTED_FILES.length} files match`);
     }
   } catch (e) { problems.push(`manifest check failed: ${e.message}`); }
 }
