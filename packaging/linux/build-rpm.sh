@@ -32,6 +32,10 @@ cp -a "$REPO_ROOT/dcim/webapp" "$PAYLOAD/webapp"
 rm -f "$PAYLOAD"/webapp/tools/license-*.js "$PAYLOAD/webapp/tools/Run-License-Generator.bat" "$PAYLOAD/webapp/tools/LICENSE-ISSUE-TEMPLATE.txt"; rm -rf "$PAYLOAD/webapp/license.lic" "$PAYLOAD/webapp/.trial-state" "$PAYLOAD/webapp/.license-clock" "$PAYLOAD/webapp/.env" "$PAYLOAD/webapp/uploads" "$PAYLOAD/webapp/backups" "$PAYLOAD/webapp/logs"
 mkdir -p "$PAYLOAD/webapp/uploads" "$PAYLOAD/webapp/backups" "$PAYLOAD/webapp/logs"
 
+# Signed integrity manifest + build gate: FAILS the build on licence tools / signing material / private keys.
+. "$REPO_ROOT/packaging/tools/package-gate.sh"
+package_gate "$PAYLOAD/webapp" "$PAYLOAD" "$(sed -n 's/^Version: *//p' "$SCRIPT_DIR/rpm/dcim.spec" | head -1)" || exit 1
+
 rpmbuild --define "_topdir $TOPDIR" -bb "$SCRIPT_DIR/rpm/dcim.spec"
 
 mkdir -p "$OUT_DIR"

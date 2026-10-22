@@ -23,7 +23,16 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=@INSTALL_DIR@/webapp/uploads @INSTALL_DIR@/webapp/backups @INSTALL_DIR@/webapp/logs
+# Writable for the service: the webapp directory (license.lic is replaced atomically via a temp file in it;
+# .trial-state, .license-clock, .env and uploads/backups/logs live there too).
+ReadWritePaths=@INSTALL_DIR@/webapp
+# ...but the application code itself is mounted READ-ONLY for the service, so a compromised or misused
+# application process cannot rewrite the licensing code, the licence public key or the integrity manifest.
+# (More specific read-only mounts win over the writable parent. "-" = ignore if absent.)
+ReadOnlyPaths=-@INSTALL_DIR@/webapp/server.js -@INSTALL_DIR@/webapp/lib -@INSTALL_DIR@/webapp/ocr -@INSTALL_DIR@/webapp/libs -@INSTALL_DIR@/webapp/media -@INSTALL_DIR@/webapp/node_modules -@INSTALL_DIR@/webapp/tools -@INSTALL_DIR@/webapp/app-compiled.js -@INSTALL_DIR@/webapp/app-compiled.min.js -@INSTALL_DIR@/webapp/index.html -@INSTALL_DIR@/webapp/setup-wizard.html -@INSTALL_DIR@/webapp/deployment-dashboard.html -@INSTALL_DIR@/webapp/schema.sql -@INSTALL_DIR@/webapp/package.json -@INSTALL_DIR@/webapp/package-lock.json -@INSTALL_DIR@/webapp/integrity.manifest.json
+# Environment overrides that could inject code into the process are removed (older systemd ignores this line).
+UnsetEnvironment=NODE_PATH LD_PRELOAD LD_LIBRARY_PATH
+ProtectClock=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

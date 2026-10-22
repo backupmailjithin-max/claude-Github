@@ -60,7 +60,7 @@ jobs:
     container: fedora:latest
     steps:
       - name: Install build tools
-        run: dnf install -y rpm-build git tar which
+        run: dnf install -y rpm-build git tar which nodejs
 
       - uses: actions/checkout@v4
 
@@ -97,6 +97,15 @@ jobs:
       # combined step) so a failure in any single one fails the job loudly
       # with its own isolated log, instead of silently falling through to
       # "success" while missing its output file.
+      - name: Integrity manifest + package validation (fails on licence tools, signing material or private keys)
+        shell: pwsh
+        run: |
+          node packaging\tools\make-integrity-manifest.js --webapp dcim\webapp
+          if ($LASTEXITCODE -ne 0) { throw "integrity manifest creation failed" }
+          node packaging\tools\validate-package.js --root dcim\webapp --require-manifest `
+            --iss packaging\windows\dcim-installer.iss --iss packaging\windows\dcim-upgrade-utility.iss --iss packaging\windows\dcim-repair-utility.iss
+          if ($LASTEXITCODE -ne 0) { throw "package validation failed - installers NOT built" }
+
       - name: Compile main installer (dcim-installer.iss) with Inno Setup
         shell: pwsh
         run: |

@@ -17,6 +17,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { LICENSE_PUBLIC_KEY_PEM } = require('./license-public-key');
+const integrity = require('./integrity');
 
 function isLicensingConfigured() {
   return !!LICENSE_PUBLIC_KEY_PEM;
@@ -268,6 +269,7 @@ function installLicense(buffer, targetPath) {
     if (!post.valid) { fs.unlinkSync(tmp); return { ok: false, result: post }; }
     fs.renameSync(tmp, targetPath);
     try { fs.chmodSync(targetPath, 0o600); } catch (e) { /* e.g. Windows */ }
+    integrity.acknowledge(targetPath);   // our own change must not be reported as an unexpected modification
     return { ok: true, result: post };
   } catch (e) {
     try { fs.unlinkSync(tmp); } catch (e2) { /* ignore */ }
@@ -388,12 +390,22 @@ function getTrialInfo() {
   };
 }
 
+// Verifies the signed manifest of the licensing code (once per process) and, at server start, begins
+// watching the licence file. See lib/integrity.js.
+function ensureIntegrity() { return integrity.init({ root: path.join(__dirname, '..'), emit: securityEvent }); }
+function startIntegrityMonitor(licenseFilePath, log) {
+  integrity.init({ root: path.join(__dirname, '..'), emit: securityEvent, log });
+  integrity.startMonitor({ licenseFile: licenseFilePath, onLicenseChanged: () => { try { getLicenseStatus(licenseFilePath); } catch (e) { /* ignore */ } } });
+}
+
 function getLicenseStatus(licenseFilePath) {
+  ensureIntegrity();
   const fingerprint = formatFingerprint(computeMachineFingerprint());
   if (!isLicensingConfigured()) {
     return { enforced: false, valid: true, mode: 'off', reason: null, fingerprint, license: null, trial: null };
   }
   const result = verifyLicenseFile(licenseFilePath);
+  const integ = integrity.getStatus();
   const license = result.payload
     ? {
         licenseId: result.payload.licenseId || null,
@@ -404,13 +416,19 @@ function getLicenseStatus(licenseFilePath) {
         machineBound: !!result.payload.machineId,
       }
     : null;
-  if (result.valid) return { enforced: true, valid: true, mode: 'licensed', reason: null, fingerprint, license, trial: null, binding: result.binding || null };
+  // Opt-in restricted mode (INTEGRITY_MODE=restricted): a failed integrity check locks the app like an expired
+  // trial. Activation and sign-out stay reachable (LICENSE_ALLOWED), so nothing is lost and it is reversible.
+  if (integ.restricted) {
+    return { enforced: true, valid: false, mode: 'locked', reason: 'Application integrity check failed (restricted mode). Restore the packaged files or contact support.', fingerprint, license, trial: null, integrity: integ };
+  }
+  const extra = integ.warnings.length ? { integrity: integ } : {};
+  if (result.valid) return { enforced: true, valid: true, mode: 'licensed', reason: null, fingerprint, license, trial: null, binding: result.binding || null, ...extra };
   const trial = getTrialInfo();
-  if (trial && trial.active) return { enforced: true, valid: true, mode: 'trial', reason: null, fingerprint, license, trial };
+  if (trial && trial.active) return { enforced: true, valid: true, mode: 'trial', reason: null, fingerprint, license, trial, ...extra };
   const why = trial
     ? (trial.tampered ? 'The free-trial record is invalid, so the trial is treated as ended.' : `The ${TRIAL_DAYS}-day free trial ended on ${trial.endsAt.slice(0, 10)}.`)
     : result.reason;
-  return { enforced: true, valid: false, mode: 'locked', reason: `${why} Activate a license to continue.${result.payload ? ' (' + result.reason + ')' : ''}`, fingerprint, license, trial };
+  return { enforced: true, valid: false, mode: 'locked', reason: `${why} Activate a license to continue.${result.payload ? ' (' + result.reason + ')' : ''}`, fingerprint, license, trial, ...extra };
 }
 
 module.exports = {
@@ -425,6 +443,7 @@ module.exports = {
   secureLicenseFile,
   setSecurityListener,
   getLicenseStatus,
+  startIntegrityMonitor,
   initTrial,
   getTrialInfo,
   TRIAL_DAYS,

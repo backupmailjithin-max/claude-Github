@@ -8827,6 +8827,7 @@ async function startServer() {
     if (license.isLicensingConfigured()) {
       try {
         const t = await license.initTrial({ filePath: path.join(__dirname, '.trial-state'), dbGet: getSetting, dbSet: setSetting, log });
+        license.startIntegrityMonitor(LICENSE_FILE, log);   // signed-manifest check of the licensing code + licence-file watch (lib/integrity.js)
         const st = license.getLicenseStatus(LICENSE_FILE);
         log.info(`[license] mode=${st.mode}${t && st.mode === 'trial' ? `, ${t.daysLeft} day(s) left (ends ${t.endsAt.slice(0, 10)})` : ''}`);
         let lastMode = st.mode;

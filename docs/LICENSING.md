@@ -58,6 +58,18 @@ touched.
   does not revive an expired license or trial. Recovery if a wrong future clock
   poisoned it: stop the service, delete `.license-clock`, run
   `DELETE FROM app_settings WHERE k LIKE 'license.clock%';`, start the service.
+- **Startup integrity check.** Every package carries `integrity.manifest.json`: SHA-256 of
+  `server.js`, `lib/license.js`, `lib/license-public-key.js` and `lib/integrity.js`, signed with a throw-away
+  Ed25519 key created during the build (no signing material is stored or shipped). At startup, and when a
+  protected file changes (checked once a minute), the app verifies the manifest. A mismatch writes an
+  `INTEGRITY_VIOLATION` audit event (`LICENSE_PUBLIC_KEY_REPLACED` when the licence public key differs),
+  logs a warning and adds `integrity.warnings` to `GET /api/license/status`. Default mode is `warn` - nothing is
+  blocked. Optional: `INTEGRITY_MODE=restricted` in `.env` locks the app on a failed check (activation and
+  sign-out stay reachable). Risky service environment overrides (`NODE_OPTIONS` with `--require/--import/--inspect`,
+  `NODE_PATH`, `LD_PRELOAD`) are reported the same way. After hand-copying a changed file onto an install, the
+  warning stays until a manifest built for that file set is installed (`INTEGRITY_MODE=warn` meanwhile).
+- `license.lic` is watched while the service runs: an unexpected change or removal is audited once
+  (`LICENSE_FILE_MODIFIED` / `LICENSE_FILE_REMOVED`), a bad signature as `LICENSE_TAMPERED`.
 - Known limit: wiping both trial records restarts the trial.
 - Activation validates the upload first and only then atomically replaces
   `license.lic` (mode 600); a rejected upload leaves the installed license
