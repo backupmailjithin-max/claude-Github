@@ -27,7 +27,23 @@ jobs:
         run: bash packaging/linux/fetch-mariadb-runtime.sh packaging/linux/runtime
 
       - name: Build .deb
-        run: bash packaging/linux/build-deb.sh
+        env:
+          DCIM_INTEGRITY_SIGN_KEY: ${{ secrets.DCIM_INTEGRITY_SIGN_KEY }}
+          DCIM_REQUIRE_VENDOR: ${{ vars.DCIM_REQUIRE_VENDOR }}
+        run: |
+          # Vendor-signed manifest: optional repo secret DCIM_INTEGRITY_SIGN_KEY (PEM of the vendor
+          # integrity private key). Written outside the checkout, used in memory by package_gate, then
+          # deleted. Without it a self-signed manifest is produced (only valid while no vendor key is
+          # pinned); set DCIM_REQUIRE_VENDOR=1 to make a release build demand it.
+          if [ -n "$DCIM_INTEGRITY_SIGN_KEY" ]; then
+            kf="$RUNNER_TEMP/integrity-sign.pem"
+            printf '%s' "$DCIM_INTEGRITY_SIGN_KEY" > "$kf"
+            export DCIM_INTEGRITY_SIGN_KEY_FILE="$kf"
+          fi
+          bash packaging/linux/build-deb.sh
+          rc=$?
+          [ -n "${DCIM_INTEGRITY_SIGN_KEY_FILE:-}" ] && rm -f "$DCIM_INTEGRITY_SIGN_KEY_FILE"
+          exit $rc
 
       - name: Upload .deb
         uses: actions/upload-artifact@v4
@@ -47,7 +63,20 @@ jobs:
         run: bash packaging/linux/fetch-mariadb-runtime.sh packaging/linux/runtime
 
       - name: Build offline appliance (.run)
-        run: bash packaging/appliance/build-appliance.sh
+        env:
+          DCIM_INTEGRITY_SIGN_KEY: ${{ secrets.DCIM_INTEGRITY_SIGN_KEY }}
+          DCIM_REQUIRE_VENDOR: ${{ vars.DCIM_REQUIRE_VENDOR }}
+        run: |
+          # Vendor-signed manifest: see "Build .deb" step above for the full rationale.
+          if [ -n "$DCIM_INTEGRITY_SIGN_KEY" ]; then
+            kf="$RUNNER_TEMP/integrity-sign.pem"
+            printf '%s' "$DCIM_INTEGRITY_SIGN_KEY" > "$kf"
+            export DCIM_INTEGRITY_SIGN_KEY_FILE="$kf"
+          fi
+          bash packaging/appliance/build-appliance.sh
+          rc=$?
+          [ -n "${DCIM_INTEGRITY_SIGN_KEY_FILE:-}" ] && rm -f "$DCIM_INTEGRITY_SIGN_KEY_FILE"
+          exit $rc
 
       - name: Upload appliance
         uses: actions/upload-artifact@v4
@@ -65,7 +94,20 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build .rpm
-        run: bash packaging/linux/build-rpm.sh
+        env:
+          DCIM_INTEGRITY_SIGN_KEY: ${{ secrets.DCIM_INTEGRITY_SIGN_KEY }}
+          DCIM_REQUIRE_VENDOR: ${{ vars.DCIM_REQUIRE_VENDOR }}
+        run: |
+          # Vendor-signed manifest: see "Build .deb" step above for the full rationale.
+          if [ -n "$DCIM_INTEGRITY_SIGN_KEY" ]; then
+            kf="$RUNNER_TEMP/integrity-sign.pem"
+            printf '%s' "$DCIM_INTEGRITY_SIGN_KEY" > "$kf"
+            export DCIM_INTEGRITY_SIGN_KEY_FILE="$kf"
+          fi
+          bash packaging/linux/build-rpm.sh
+          rc=$?
+          [ -n "${DCIM_INTEGRITY_SIGN_KEY_FILE:-}" ] && rm -f "$DCIM_INTEGRITY_SIGN_KEY_FILE"
+          exit $rc
 
       - name: Upload .rpm
         uses: actions/upload-artifact@v4
