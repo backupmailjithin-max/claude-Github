@@ -49,6 +49,9 @@ fi
 mkdir -p "$PAYLOAD/webapp/uploads" "$PAYLOAD/webapp/backups" "$PAYLOAD/webapp/logs"
 
 # Signed integrity manifest + build gate: FAILS the build on licence tools / signing material / private keys.
+# Bytenode is on by default here: the appliance always bundles its own exact Node runtime (checked above),
+# so bytecode compiled against it is guaranteed to match what ships. Override with DCIM_BYTENODE=0 to disable.
+export DCIM_BYTENODE="${DCIM_BYTENODE:-1}"
 . "$REPO_ROOT/packaging/tools/package-gate.sh"
 package_gate "$PAYLOAD/webapp" "$PAYLOAD" "$VERSION" "$PAYLOAD/runtime/node/bin/node" || exit 1
 

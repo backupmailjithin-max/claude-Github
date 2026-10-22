@@ -97,6 +97,20 @@ jobs:
       # combined step) so a failure in any single one fails the job loudly
       # with its own isolated log, instead of silently falling through to
       # "success" while missing its output file.
+      - name: Bytenode-compile license.js/integrity.js (bundled runtime guarantees the exact Node build)
+        shell: pwsh
+        env:
+          DCIM_BYTENODE: ${{ vars.DCIM_BYTENODE }}
+        run: |
+          # Defaults ON here (unless the repo variable DCIM_BYTENODE is explicitly '0'): the Windows job always
+          # stages its own exact bundled Node runtime above, so bytecode compiled against it is guaranteed to match.
+          if ($env:DCIM_BYTENODE -ne '0') {
+            node packaging\tools\bytenode-compile.js --webapp dcim\webapp --node packaging\windows\runtime\node\node.exe
+            if ($LASTEXITCODE -ne 0) { throw "bytenode compile failed" }
+          } else {
+            Write-Host "DCIM_BYTENODE=0 - skipping (license.js/integrity.js ship as plain JS)."
+          }
+
       - name: Integrity manifest + package validation (fails on licence tools, signing material or private keys)
         shell: pwsh
         env:
