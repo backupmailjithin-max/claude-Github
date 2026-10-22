@@ -1095,6 +1095,12 @@ async function initDB() {
     // OneView devices. Always reflects the latest poll (live state), same
     // as health_status/power_state above - never COALESCE-protected.
     try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_alert_count INT NULL'); } catch (e) { /* already exists */ }
+    // Lets an admin exclude a device from the Multi-Vendor (Redfish) monitoring
+    // list without touching its Asset Inventory record - for devices that have
+    // a management IP captured (storage arrays, network switches, firewalls,
+    // etc.) but aren't meant to be polled over Redfish. Hidden from the default
+    // list view; still filterable back in with "Show ignored".
+    try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_monitor_ignored TINYINT(1) NOT NULL DEFAULT 0'); } catch (e) { /* already exists */ }
 
     // ---- Widen id columns (VARCHAR(20) -> VARCHAR(50)) ----
     // Bulk-upsert generates IDs like AST-<13-digit timestamp>-<batch index>,

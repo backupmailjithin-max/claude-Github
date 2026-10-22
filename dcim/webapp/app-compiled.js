@@ -364,7 +364,9 @@ const api = {
     importPdus: (payload) => apiFetch('/pdus/import', { method: 'POST', body: JSON.stringify(payload), timeoutMs: 60000 }),
     discoverPdus: () => apiFetch('/pdus/discover', { method: 'POST', timeoutMs: 90000 }),
     applyPduDiscovery: (ids) => apiFetch('/pdus/discover/apply', { method: 'POST', body: JSON.stringify({ ids }), timeoutMs: 60000 }),
-    getRedfishAssets: (site) => apiFetch('/monitoring/redfish/assets' + (site && site !== 'all' ? '?site=' + encodeURIComponent(site) : '')),
+    getRedfishAssets: (site, includeIgnored) => { const q = new URLSearchParams(); if (site && site !== 'all') q.set('site', site); if (includeIgnored) q.set('includeIgnored', '1'); const qs = q.toString(); return apiFetch('/monitoring/redfish/assets' + (qs ? '?' + qs : '')); },
+    setRedfishIgnored: (assetId, ignored) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/ignore', { method: 'PUT', body: JSON.stringify({ ignored }) }),
+    unconfigureRedfish: (assetIds) => apiFetch('/monitoring/redfish/unconfigure', { method: 'POST', body: JSON.stringify({ assetIds }) }),
     detectRedfish: (body) => apiFetch('/monitoring/redfish/detect', { method: 'POST', body: JSON.stringify(body), timeoutMs: 15000 }),
     saveRedfishCredentials: (assetId, body) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/credentials', { method: 'PUT', body: JSON.stringify(body) }),
     syncRedfishAsset: (assetId) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/sync', { method: 'POST', timeoutMs: 15000 }),
@@ -1490,6 +1492,18 @@ const MOVEMENT_COLUMNS = [
     { key: "movementDate", label: "Date", format: (v) => fmtDate(v) },
     { key: "hasDocument", label: "Document", format: (v, row) => (v ? (row.documentName || "Attached") : "—") },
     { key: "remarks", label: "Remarks" }, { key: "createdBy", label: "Recorded By" },
+];
+const REDFISH_COLUMNS = [
+    { key: "_asset", label: "Asset", format: (v, row) => row.deviceName || row.assetTag || row.id },
+    { key: "site", label: "Site" }, { key: "rackNo", label: "Rack" },
+    { key: "hardwareType", label: "Category", format: (v) => v || "Uncategorized" },
+    { key: "mgmtIp", label: "Mgmt IP" },
+    { key: "_vendorModel", label: "Vendor / Model", format: (v, row) => row.vendor ? `${row.vendor} ${row.model || ""}`.trim() : "—" },
+    { key: "healthStatus", label: "Health", format: (v) => v || "Unknown" },
+    { key: "powerState", label: "Power State" },
+    { key: "alertCount", label: "Alerts", format: (v) => (v == null ? "—" : String(v)) },
+    { key: "bmcFirmware", label: "BMC Firmware" },
+    { key: "lastSyncAt", label: "Last Sync", format: (v) => (v ? new Date(v).toLocaleString() : "Never") },
 ];
 function rowsFromColumns(items, columns) { return items.map((r) => { const obj = {}; columns.forEach((c) => { obj[c.label] = c.format ? c.format(r[c.key], r) : (r[c.key] != null ? r[c.key] : ""); }); return obj; }); }
 function aoaFromColumns(items, columns) { const aoa = [columns.map((c) => c.label)]; for (let i = 0; i < items.length; i++) { const r = items[i]; const line = new Array(columns.length); for (let j = 0; j < columns.length; j++) { const c = columns[j]; line[j] = c.format ? c.format(r[c.key], r) : (r[c.key] != null ? r[c.key] : ""); } aoa.push(line); } return aoa; }
@@ -7421,9 +7435,53 @@ function RedfishTab({ canEdit, allowedSites }) {
     const [modalAsset, setModalAsset] = useState(undefined); // undefined=closed, null=new/ad-hoc, object=existing asset
     const [discoverOpen, setDiscoverOpen] = useState(false);
     const [site, setSite] = useState("all");
-    const load = () => { api.getRedfishAssets(site).then((r) => { setAssets(r); setErr(""); }).catch((e) => setErr(e.message || "Could not load devices")); };
-    useEffect(() => { load(); }, [site]);
+    const [categoryFilter, setCategoryFilter] = useState("all");
+    const [showIgnored, setShowIgnored] = useState(false);
+    const [columnFilters, setColumnFilters] = useState(() => makeEmptyListColumnFilters(REDFISH_COLUMNS));
+    const [openFilter, setOpenFilter] = useState(null);
+    const [selectedIds, setSelectedIds] = useState(() => new Set());
+    const [busyAction, setBusyAction] = useState(false);
+    const load = () => { api.getRedfishAssets(site, showIgnored).then((r) => { setAssets(r); setErr(""); setSelectedIds(new Set()); }).catch((e) => setErr(e.message || "Could not load devices")); };
+    useEffect(() => { load(); }, [site, showIgnored]);
     const sel = { padding: "6px 10px", borderRadius: 8, border: "1px solid #CBD5E1", background: "#fff", fontFamily: "Inter", fontSize: 12, color: "#0F172A" };
+    // Category options reflect whatever is actually in Inventory for devices with a
+    // management IP (servers, storage, network switches, firewalls, ...), not a fixed list.
+    const categories = useMemo(() => { const set = new Set(); (assets || []).forEach((a) => set.add(a.hardwareType || "Uncategorized")); return Array.from(set).sort((x, y) => x.localeCompare(y)); }, [assets]);
+    const categoryRows = (assets || []).filter((a) => categoryFilter === "all" || (a.hardwareType || "Uncategorized") === categoryFilter);
+    const filtered = categoryRows.filter((row) => REDFISH_COLUMNS.every((col) => listColumnFilterMatches(columnFilters[col.key], col, row)));
+    const optionRowsForColumn = (key) => categoryRows.filter((row) => REDFISH_COLUMNS.every((col) => col.key === key || listColumnFilterMatches(columnFilters[col.key], col, row)));
+    const activeColumnFilterCount = countListColumnFilters(columnFilters);
+    const thBase = { textAlign: "left", padding: "8px 9px", borderBottom: "1px solid #E2E8F0", color: "#64748B", fontWeight: 700, fontSize: 10.5, textTransform: "uppercase", whiteSpace: "nowrap" };
+    const toggleIgnore = async (a) => { try { await api.setRedfishIgnored(a.id, !a.monitorIgnored); load(); } catch (e) { alert(e.message || "Could not update monitoring status"); } };
+    const deleteSelected = async () => {
+        const ids = Array.from(selectedIds); if (!ids.length) return;
+        if (!confirm(`Remove Redfish configuration from ${ids.length} selected device(s)? Saved BMC credentials and polled status will be cleared. The asset itself is NOT deleted from Inventory.`)) return;
+        setBusyAction(true);
+        try { await api.unconfigureRedfish(ids); await load(); }
+        catch (e) { alert(e.message || "Could not remove the selected devices' Redfish configuration"); }
+        finally { setBusyAction(false); }
+    };
+    const ignoreSelected = async (ignored) => {
+        const ids = Array.from(selectedIds); if (!ids.length) return;
+        setBusyAction(true);
+        try { await Promise.all(ids.map((id) => api.setRedfishIgnored(id, ignored))); await load(); }
+        catch (e) { alert(e.message || "Could not update the selected devices"); }
+        finally { setBusyAction(false); }
+    };
+    const renderCell = (col, a) => {
+        switch (col.key) {
+            case "_asset": return React.createElement("span", { style: { fontWeight: 600 } }, a.deviceName || a.assetTag || a.id);
+            case "mgmtIp": return a.mgmtIp ? React.createElement("a", { href: `https://${a.mgmtIp}`, target: "_blank", rel: "noopener", style: { color: "#2563EB", textDecoration: "underline", fontFamily: "'JetBrains Mono'" } }, a.mgmtIp) : "—";
+            case "healthStatus": return React.createElement(RedfishHealthPill, { status: a.healthStatus });
+            case "alertCount": return a.alertCount == null ? React.createElement("span", { style: { color: "#94A3B8" } }, "—") : a.alertCount === 0 ? React.createElement("span", { style: { color: "#059669", fontWeight: 700 } }, "0") : React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 5, color: "#DC2626", fontWeight: 700 } }, React.createElement("span", { style: { width: 6, height: 6, borderRadius: "50%", background: "#DC2626" } }), a.alertCount);
+            case "bmcFirmware": return React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontSize: 11.5 } }, a.bmcFirmware || "—");
+            case "lastSyncAt": return React.createElement("span", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748B" } }, a.lastSyncAt ? new Date(a.lastSyncAt).toLocaleString() : "Never");
+            case "rackNo": return a.rackNo || "—";
+            case "hardwareType": return a.hardwareType || "Uncategorized";
+            case "powerState": return a.powerState || "—";
+            default: { const v = col.format ? col.format(a[col.key], a) : a[col.key]; return v != null && v !== "" ? v : "—"; }
+        }
+    };
     return React.createElement("div", { className: "neu-card anim-in d1", style: { padding: 20 } },
         React.createElement("div", { style: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 16 } },
             React.createElement("div", null,
@@ -7432,29 +7490,46 @@ function RedfishTab({ canEdit, allowedSites }) {
             canEdit && React.createElement("div", { style: { display: "flex", gap: 8 } },
                 React.createElement("button", { onClick: () => setDiscoverOpen(true), className: "neu-btn-secondary" }, "Discover"),
                 React.createElement("button", { onClick: () => setModalAsset(null), className: "neu-btn-primary" }, "+ Test & Detect"))),
-        React.createElement("div", { style: { marginBottom: 14 } },
+        React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 14 } },
             React.createElement("select", { value: site, onChange: (e) => setSite(e.target.value), style: sel },
                 React.createElement("option", { value: "all" }, "All locations"),
-                (allowedSites || []).map((s) => React.createElement("option", { key: s, value: s }, s)))),
+                (allowedSites || []).map((s) => React.createElement("option", { key: s, value: s }, s))),
+            React.createElement("select", { value: categoryFilter, onChange: (e) => setCategoryFilter(e.target.value), style: sel, title: "Filter by device category, as captured in Asset Inventory" },
+                React.createElement("option", { value: "all" }, "All categories"),
+                categories.map((c) => React.createElement("option", { key: c, value: c }, c))),
+            React.createElement("label", { style: { display: "inline-flex", alignItems: "center", gap: 6, fontFamily: "Inter", fontSize: 12, color: "#475569", cursor: "pointer" } },
+                React.createElement("input", { type: "checkbox", checked: showIgnored, onChange: (e) => setShowIgnored(e.target.checked), style: { width: 14, height: 14, accentColor: "#6366F1", cursor: "pointer" } }),
+                "Show ignored"),
+            activeColumnFilterCount > 0 && React.createElement("button", { onClick: () => setColumnFilters(makeEmptyListColumnFilters(REDFISH_COLUMNS)), className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "8px 11px" } }, `Clear column filters (${activeColumnFilterCount})`)),
+        canEdit && selectedIds.size > 0 && React.createElement("div", { className: "neu-card", style: { display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", marginBottom: 10, flexWrap: "wrap" } },
+            React.createElement("strong", { style: { fontFamily: "Inter", fontSize: 12, color: "#4F46E5" } }, `${selectedIds.size} selected`),
+            React.createElement("button", { disabled: busyAction, onClick: deleteSelected, className: "neu-btn-secondary", style: { fontSize: 11.5, color: "#DC2626" } }, "Delete Selected (Remove Redfish Config)"),
+            React.createElement("button", { disabled: busyAction, onClick: () => ignoreSelected(true), className: "neu-btn-secondary", style: { fontSize: 11.5 } }, "Ignore Selected"),
+            React.createElement("button", { disabled: busyAction, onClick: () => ignoreSelected(false), className: "neu-btn-secondary", style: { fontSize: 11.5 } }, "Un-ignore Selected"),
+            React.createElement("button", { onClick: () => setSelectedIds(new Set()), className: "neu-btn-secondary", style: { fontSize: 11.5 } }, "Clear")),
         err && React.createElement("div", { style: { padding: "9px 12px", borderRadius: 9, background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.25)", color: "#B91C1C", fontFamily: "Inter", fontSize: 12, marginBottom: 14 } }, err),
         !assets && !err && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 13, color: "#64748B", padding: 20 } }, "Loading…"),
         assets && !assets.length && React.createElement("div", { style: { padding: "40px 20px", textAlign: "center", fontFamily: "Inter", fontSize: 13, color: "#64748B" } }, "No assets with a management IP yet. Add one from Asset Inventory, or click \"Discover\" to scan assets that already have one."),
-        assets && assets.length > 0 && React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12.5 } },
-            React.createElement("thead", null, React.createElement("tr", null, ["Asset", "Site", "Rack", "Mgmt IP", "Vendor / Model", "Health", "Power State", "Alerts", "BMC Firmware", "Last Sync", ""].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "8px 9px", borderBottom: "1px solid #E2E8F0", color: "#64748B", fontWeight: 700, fontSize: 10.5, textTransform: "uppercase" } }, h)))),
-            React.createElement("tbody", null, assets.map((a) => React.createElement("tr", { key: a.id, style: { borderBottom: "1px solid #F1F5F9" } },
-                React.createElement("td", { style: { padding: "8px 9px", fontWeight: 600 } }, a.deviceName || a.assetTag || a.id),
-                React.createElement("td", { style: { padding: "8px 9px" } }, a.site),
-                React.createElement("td", { style: { padding: "8px 9px" } }, a.rackNo || "—"),
-                React.createElement("td", { style: { padding: "8px 9px", fontFamily: "'JetBrains Mono'" } }, a.mgmtIp ? React.createElement("a", { href: `https://${a.mgmtIp}`, target: "_blank", rel: "noopener", style: { color: "#2563EB", textDecoration: "underline" } }, a.mgmtIp) : "—"),
-                React.createElement("td", { style: { padding: "8px 9px" } }, a.vendor ? `${a.vendor} ${a.model || ""}` : "—"),
-                React.createElement("td", { style: { padding: "8px 9px" } }, React.createElement(RedfishHealthPill, { status: a.healthStatus })),
-                React.createElement("td", { style: { padding: "8px 9px" } }, a.powerState || "—"),
-                React.createElement("td", { style: { padding: "8px 9px" } }, a.alertCount == null ? React.createElement("span", { style: { color: "#94A3B8" } }, "—") : a.alertCount === 0 ? React.createElement("span", { style: { color: "#059669", fontWeight: 700 } }, "0") : React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 5, color: "#DC2626", fontWeight: 700 } }, React.createElement("span", { style: { width: 6, height: 6, borderRadius: "50%", background: "#DC2626" } }), a.alertCount)),
-                React.createElement("td", { style: { padding: "8px 9px", fontFamily: "'JetBrains Mono'", fontSize: 11.5 } }, a.bmcFirmware || "—"),
-                React.createElement("td", { style: { padding: "8px 9px", fontFamily: "Inter", fontSize: 11, color: "#64748B" } }, a.lastSyncAt ? new Date(a.lastSyncAt).toLocaleString() : "Never"),
-                React.createElement("td", { style: { padding: "8px 9px", textAlign: "right" } }, React.createElement("button", { onClick: () => setModalAsset(a), className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px" } }, a.redfishConfigured ? "View / Sync" : "Configure")))))),
+        assets && assets.length > 0 && React.createElement("div", { style: { overflowX: "auto" } }, React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12.5 } },
+            React.createElement("thead", null, React.createElement("tr", null,
+                canEdit && React.createElement("th", { style: { ...thBase, width: 34 } },
+                    React.createElement("input", { type: "checkbox", checked: filtered.length > 0 && filtered.every((a) => selectedIds.has(a.id)), ref: (el) => { if (el)
+                            el.indeterminate = filtered.some((a) => selectedIds.has(a.id)) && !filtered.every((a) => selectedIds.has(a.id)); }, onChange: (e) => { const checked = e.target.checked; setSelectedIds((prev) => { const n = new Set(prev); filtered.forEach((a) => checked ? n.add(a.id) : n.delete(a.id)); return n; }); }, style: { width: 15, height: 15, accentColor: "#6366F1", cursor: "pointer" } })),
+                REDFISH_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, style: thBase })),
+                React.createElement("th", { style: { ...thBase, textAlign: "right" } }))),
+            React.createElement("tbody", null,
+                filtered.length === 0 && React.createElement("tr", null,
+                    React.createElement("td", { colSpan: REDFISH_COLUMNS.length + (canEdit ? 2 : 1), style: { padding: "40px 0", textAlign: "center", color: "#64748B", fontFamily: "Inter", fontSize: 13 } }, "No devices match these filters.")),
+                filtered.map((a, idx) => React.createElement("tr", { key: a.id, style: { borderBottom: "1px solid #F1F5F9", opacity: a.monitorIgnored ? 0.55 : 1, background: selectedIds.has(a.id) ? "rgba(99,102,241,0.08)" : (idx % 2 === 1 ? "rgba(255,255,255,0.25)" : "transparent") } },
+                    canEdit && React.createElement("td", { style: { padding: "8px 9px" } },
+                        React.createElement("input", { type: "checkbox", checked: selectedIds.has(a.id), onChange: (e) => setSelectedIds((prev) => { const n = new Set(prev); e.target.checked ? n.add(a.id) : n.delete(a.id); return n; }), style: { width: 15, height: 15, accentColor: "#6366F1", cursor: "pointer" } })),
+                    REDFISH_COLUMNS.map((col) => React.createElement("td", { key: col.key, style: { padding: "8px 9px", whiteSpace: "nowrap" } }, renderCell(col, a), col.key === "hardwareType" && a.monitorIgnored && React.createElement("span", { style: { marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#92400E", background: "#FEF3C7", borderRadius: 5, padding: "1px 6px" } }, "IGNORED"))),
+                    React.createElement("td", { style: { padding: "8px 9px", textAlign: "right", whiteSpace: "nowrap" } },
+                        canEdit && React.createElement("button", { onClick: () => toggleIgnore(a), className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px", marginRight: 6 }, title: a.monitorIgnored ? "Include this device in Redfish monitoring again" : "Exclude this device from Redfish monitoring (e.g. storage/network/firewall gear that doesn't need it)" }, a.monitorIgnored ? "Un-ignore" : "Ignore from Monitor"),
+                        React.createElement("button", { onClick: () => setModalAsset(a), className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px" } }, a.redfishConfigured ? "View / Sync" : "Configure"))))))),
         modalAsset !== undefined && React.createElement(RedfishDetectModal, { asset: modalAsset, onClose: () => setModalAsset(undefined), onSaved: load }),
-        discoverOpen && React.createElement(RedfishDiscoverModal, { onClose: () => setDiscoverOpen(false), onApplied: load }));
+        discoverOpen && React.createElement(RedfishDiscoverModal, { onClose: () => setDiscoverOpen(false), onApplied: load }),
+        openFilter && React.createElement(ValueListFilterPopup, { column: openFilter, currentFilter: columnFilters[openFilter.key], optionRows: optionRowsForColumn(openFilter.key), onApply: (value) => setColumnFilters((prev) => ({ ...prev, [openFilter.key]: value })), onClose: () => setOpenFilter(null) }));
 }
 function FirmwareJobsTab({ canEdit }) {
     const [scan, setScan] = useState(null);

@@ -215,10 +215,12 @@ module.exports = function registerRedfishRoutes(app, deps) {
 
   const assetPreview = (a) => ({
     id: a.id, site: a.site, zone: a.zone, rackNo: a.rack_no, deviceName: a.device_name, assetTag: a.asset_tag,
+    hardwareType: a.hardware_type,
     mgmtIp: a.mgmt_ip, vendor: a.manufacturer, model: a.model, serialNumber: a.serial_number, firmware: a.firmware,
     redfishConfigured: !!a.redfish_username, redfishVersion: a.redfish_version, bmcFirmware: a.bmc_firmware,
     healthStatus: a.health_status, powerState: a.power_state, alertCount: a.redfish_alert_count,
     lastSyncAt: a.last_redfish_sync_at, lastError: a.last_redfish_error,
+    monitorIgnored: !!a.redfish_monitor_ignored,
   });
 
   // Live, read-only test against any IP/credentials - does NOT save anything.
@@ -237,7 +239,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
   // last-known Redfish state - this powers the Monitoring page's preview list.
   app.get('/api/monitoring/redfish/assets', authenticateToken, async (req, res) => {
     try {
-      const { site } = req.query;
+      const { site, includeIgnored } = req.query;
       const allowed = await getAllowedSitesForUser(req.user);
       const conditions = ["mgmt_ip IS NOT NULL", "mgmt_ip <> ''"];
       const params = [];
@@ -247,6 +249,11 @@ module.exports = function registerRedfishRoutes(app, deps) {
       } else {
         await applySiteScope(allowed, conditions, params);
       }
+      // Devices marked "ignore from monitor" (storage/network/firewall gear
+      // that was swept up because it has a management IP, but isn't meant to
+      // be polled over Redfish) are hidden from the default list - pass
+      // includeIgnored=1 to show them again (used by the "Show ignored" toggle).
+      if (!(includeIgnored === '1' || includeIgnored === 'true')) conditions.push('redfish_monitor_ignored = 0');
       const [rows] = await pool.query(`SELECT * FROM assets WHERE ${conditions.join(' AND ')} ORDER BY site, rack_no`, params);
       res.json(rows.map(assetPreview));
     } catch (e) { sendErr(res, e); }
@@ -263,6 +270,48 @@ module.exports = function registerRedfishRoutes(app, deps) {
         [username, password || '', Number(port) > 0 ? Number(port) : 443, asset.id]);
       auditLog(req, 'REDFISH_CREDENTIALS_SET', { entity: 'asset', entityId: asset.id, site: asset.site, status: 'success' });
       res.json({ success: true });
+    } catch (e) { sendErr(res, e); }
+  });
+
+  // Mark/unmark a device as excluded from the Redfish monitoring list - for
+  // inventory devices (storage, network, firewall, etc.) that have a
+  // management IP captured but aren't meant to be polled over Redfish.
+  // Does not touch the asset's Inventory record or any saved credentials.
+  app.put('/api/monitoring/redfish/:assetId/ignore', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+    try {
+      const asset = await loadAssetForUser(req, res, req.params.assetId);
+      if (!asset) return;
+      const ignored = !!(req.body && req.body.ignored);
+      await pool.query('UPDATE assets SET redfish_monitor_ignored = ? WHERE id = ?', [ignored ? 1 : 0, asset.id]);
+      auditLog(req, ignored ? 'REDFISH_MONITOR_IGNORED' : 'REDFISH_MONITOR_UNIGNORED', { entity: 'asset', entityId: asset.id, site: asset.site, status: 'success' });
+      res.json({ success: true, ignored });
+    } catch (e) { sendErr(res, e); }
+  });
+
+  // Bulk "delete" for this list = remove the Redfish configuration from the
+  // selected devices (clears saved credentials + every polled field), taking
+  // them back to "not configured". This never deletes the underlying Asset
+  // Inventory record - that has its own delete flow on the Inventory page.
+  app.post('/api/monitoring/redfish/unconfigure', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+    try {
+      const { assetIds } = req.body;
+      if (!Array.isArray(assetIds) || !assetIds.length) return res.status(400).json({ error: 'assetIds array is required' });
+      const allowed = await getAllowedSitesForUser(req.user);
+      let removed = 0;
+      for (const assetId of assetIds.slice(0, 500)) {
+        const [rows] = await pool.query('SELECT id, site FROM assets WHERE id = ?', [assetId]);
+        if (!rows.length || !allowed.includes(rows[0].site)) continue;
+        await pool.query(
+          `UPDATE assets SET redfish_username = NULL, redfish_password = NULL, redfish_port = 443, redfish_version = NULL,
+             bmc_firmware = NULL, health_status = NULL, power_state = NULL, redfish_alert_count = NULL,
+             last_redfish_sync_at = NULL, last_redfish_error = NULL
+           WHERE id = ?`,
+          [rows[0].id]
+        );
+        removed++;
+      }
+      auditLog(req, 'REDFISH_UNCONFIGURED', { entity: 'asset', status: 'success' }, { count: removed });
+      res.json({ removed });
     } catch (e) { sendErr(res, e); }
   });
 
