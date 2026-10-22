@@ -35,6 +35,8 @@ fi
 # before /opt/dcim (its binaries and data) is removed.
 DB_SERVICE_NAME="dcim-mariadb"
 DB_UNIT_PATH="/etc/systemd/system/${DB_SERVICE_NAME}.service"
+EMBEDDED_DB_PRESENT=0
+if [ -f "$DB_UNIT_PATH" ] || [ -d "$INSTALL_DIR/mariadb/data" ]; then EMBEDDED_DB_PRESENT=1; fi
 if [ -f "$DB_UNIT_PATH" ]; then
   systemctl stop "$DB_SERVICE_NAME" 2>/dev/null || true
   systemctl disable "$DB_SERVICE_NAME" 2>/dev/null || true
@@ -46,10 +48,19 @@ fi
 if [ "$PURGE_DATA" -eq 1 ]; then
   log "Removing $INSTALL_DIR (application files, uploads, backups, logs, .env) ..."
   rm -rf "$INSTALL_DIR"
-  log "Note: the MySQL/MariaDB database itself was NOT touched. Drop it manually if desired:"
-  log "  mysql -u root -p -e \"DROP DATABASE dcim; DROP USER 'dcim'@'localhost';\""
+  if [ "$EMBEDDED_DB_PRESENT" -eq 1 ]; then
+    log "The bundled (embedded) database and all of its data were stored under $INSTALL_DIR and have been removed with it."
+    log "If you also used an external MySQL/MariaDB server for another install, it was NOT touched."
+  else
+    log "Note: the external MySQL/MariaDB database itself was NOT touched. Drop it manually if desired:"
+    log "  mysql -u root -p -e \"DROP DATABASE dcim; DROP USER 'dcim'@'localhost';\""
+  fi
 else
-  log "Application files left in place at $INSTALL_DIR (use --purge-data to remove them too)."
+  if [ "$EMBEDDED_DB_PRESENT" -eq 1 ]; then
+    log "Application files and the bundled database data are left in place at $INSTALL_DIR (the database service was stopped; use --purge-data to remove everything)."
+  else
+    log "Application files left in place at $INSTALL_DIR (use --purge-data to remove them too)."
+  fi
 fi
 
 log "Uninstall complete."
