@@ -392,7 +392,8 @@ function getTrialInfo() {
 
 // Verifies the signed manifest of the licensing code (once per process) and, at server start, begins
 // watching the licence file. See lib/integrity.js.
-function ensureIntegrity() { return integrity.init({ root: path.join(__dirname, '..'), emit: securityEvent }); }
+function ensureIntegrity(opts) { return integrity.init(Object.assign({ root: path.join(__dirname, '..'), emit: securityEvent }, opts || {})); }
+function integrityEnforced() { ensureIntegrity(); return integrity.isEnforced(); }
 function startIntegrityMonitor(licenseFilePath, log) {
   integrity.init({ root: path.join(__dirname, '..'), emit: securityEvent, log });
   integrity.startMonitor({ licenseFile: licenseFilePath, onLicenseChanged: () => { try { getLicenseStatus(licenseFilePath); } catch (e) { /* ignore */ } } });
@@ -419,7 +420,7 @@ function getLicenseStatus(licenseFilePath) {
   // Opt-in restricted mode (INTEGRITY_MODE=restricted): a failed integrity check locks the app like an expired
   // trial. Activation and sign-out stay reachable (LICENSE_ALLOWED), so nothing is lost and it is reversible.
   if (integ.restricted) {
-    return { enforced: true, valid: false, mode: 'locked', reason: 'Application integrity check failed (restricted mode). Restore the packaged files or contact support.', fingerprint, license, trial: null, integrity: integ };
+    return { enforced: true, valid: false, mode: 'locked', reason: integ.enforced ? `Strict integrity mode: the application refused normal startup because protected files failed verification. Reference ${integ.referenceId}.` : 'Application integrity check failed (restricted mode). Restore the packaged files or contact support.', fingerprint, license, trial: null, integrity: integ };
   }
   const extra = integ.warnings.length ? { integrity: integ } : {};
   if (result.valid) return { enforced: true, valid: true, mode: 'licensed', reason: null, fingerprint, license, trial: null, binding: result.binding || null, ...extra };
@@ -444,6 +445,9 @@ module.exports = {
   setSecurityListener,
   getLicenseStatus,
   startIntegrityMonitor,
+  flushIntegrityEvents: () => integrity.flushEvents(),
+  ensureIntegrity,
+  integrityEnforced,
   initTrial,
   getTrialInfo,
   TRIAL_DAYS,

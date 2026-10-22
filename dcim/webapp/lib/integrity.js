@@ -17,8 +17,15 @@
 // systemd hardening in the packaged service unit (code mounted read-only for the
 // service) is what stops a compromised application process from doing it.
 //
-// Default mode is "warn": nothing is blocked, so legitimate hot-fix copies of a
-// file only produce a warning until the manifest is regenerated.
+// INTEGRITY_MODE (in .env):
+//   warn      (default) audit + warning only; nothing is blocked, so a hot-fix copy of one file only
+//             produces a warning until a matching manifest is installed.
+//   restricted  a failed check locks the app through the licence layer (402 everywhere except the
+//             licence/sign-out routes).
+//   enforce   strict: if server.js, lib/license.js, lib/license-public-key.js or lib/integrity.js differ from the
+//             manifest, or the manifest is invalid/missing, the app REFUSES normal startup (no migrations, no
+//             background jobs) and an HTTP gate answers 503 to everything except /api/health, /api/license/* and
+//             the three sign-in routes needed to reach them. Every refusal carries a reference ID + recovery steps.
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -114,9 +121,13 @@ function emitOnce(type, details, key) {
   if (seen.has(k)) return;
   if (seen.size > 200) seen.clear();
   seen.add(k);
+  if (S.defer) { S.queue.push([type, details || {}]); return; }
   try { S.emit(type, details || {}); } catch (e) { /* auditing must never break the app */ }
 }
-const mode = () => (String(process.env.INTEGRITY_MODE || '').toLowerCase() === 'restricted' ? 'restricted' : 'warn');
+const mode = () => {
+  const m = String(process.env.INTEGRITY_MODE || '').toLowerCase();
+  return m === 'enforce' || m === 'restricted' ? m : 'warn';
+};
 
 function snapshotStats(root) {
   const out = {};
@@ -146,13 +157,81 @@ function evaluate(first) {
   } else if (first && S.log) {
     S.log.info(`[integrity] ok (${PROTECTED_FILES.length} protected files match manifest ${r.keyId}${r.version ? ', build ' + r.version : ''}).`);
   }
+  updateEnforcement();
   return r;
 }
 
+// ---------------------------------------------------------------------------
+// Strict mode (INTEGRITY_MODE=enforce)
+// ---------------------------------------------------------------------------
+const GATE_ALLOW_ANY = [/^\/api\/health$/, /^\/api\/license(\/.*)?$/];   // any method
+const GATE_ALLOW_METHOD = [['POST', /^\/api\/auth\/login$/], ['POST', /^\/api\/auth\/logout$/], ['GET', /^\/api\/auth\/me$/]];   // needed to reach the auth-protected licence routes
+const RECOVERY_STEPS = [
+  'Protected licensing files no longer match the signed manifest of this build (or the manifest is missing/invalid).',
+  'Find the affected files with the reference ID: audit log entry INTEGRITY_ENFORCED, or the service log (Linux: journalctl -u dcim | grep <reference>; Windows: <install folder>\\webapp\\logs).',
+  'Restore the packaged files: run the repair utility (Linux: sudo dcim-repair; Windows: DCIM-Repair-<version>.exe), or roll back with dcim-rollback / the pre-upgrade snapshot.',
+  'Only if the change was deliberate and trusted: set INTEGRITY_MODE=warn in the .env file next to server.js and restart the service.',
+  'License activation stays available: sign in as a Global Admin and use /api/license/* (status, fingerprint, activate). No license, trial or database data is changed by this protection.',
+];
+function newReference(files) {
+  const d = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+  return 'INT-' + d + '-' + sha256(d + '|' + files.join(',') + '|' + crypto.randomBytes(8).toString('hex')).slice(0, 8).toUpperCase();
+}
+function fileViolation() {
+  if (!S || !S.result) return false;
+  return S.result.state === 'modified' || S.result.state === 'invalid-manifest' || S.result.state === 'unsigned';
+}
+function gateAllows(req) {
+  const raw = String(req.url || '').split('?')[0];
+  if (/[%\\]|\.\./.test(raw) || raw.includes('//')) return false;       // no encoded / traversal tricks on the allow-list
+  const p = raw.toLowerCase().replace(/\/+$/, '') || '/';
+  if (GATE_ALLOW_ANY.some((re) => re.test(p))) return true;
+  return GATE_ALLOW_METHOD.some(([m, re]) => req.method === m && re.test(p));
+}
+function escapeHtml(t) { return String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function refuse(req, res) {
+  S.refused = (S.refused || 0) + 1;
+  const body = { error: 'integrity_enforced', message: 'This server refused to start normally because its protected licensing files failed the integrity check.', referenceId: S.refId, recovery: RECOVERY_STEPS };
+  try {
+    const wantsHtml = !/^\/api\//i.test(String(req.url || '')) && /text\/html/.test(String(req.headers && req.headers.accept || ''));
+    const headers = { 'Cache-Control': 'no-store', 'X-Integrity-Reference': S.refId };
+    if (wantsHtml) {
+      const html = `<!doctype html><meta charset="utf-8"><title>Integrity check failed</title><body style="font-family:system-ui,sans-serif;max-width:46rem;margin:3rem auto;padding:0 1rem;line-height:1.5"><h1>Integrity check failed</h1><p>${escapeHtml(body.message)}</p><p><b>Reference ID:</b> <code>${escapeHtml(S.refId)}</code></p><h2>Recovery</h2><ol>${RECOVERY_STEPS.map((x) => '<li>' + escapeHtml(x) + '</li>').join('')}</ol></body>`;
+      res.writeHead(503, Object.assign({ 'Content-Type': 'text/html; charset=utf-8' }, headers)); res.end(html);
+    } else {
+      res.writeHead(503, Object.assign({ 'Content-Type': 'application/json; charset=utf-8' }, headers)); res.end(JSON.stringify(body));
+    }
+  } catch (e) { try { res.destroy(); } catch (e2) { /* ignore */ } }
+}
+function installGate() {
+  if (S.gate) return;
+  S.gate = true;
+  for (const mod of ['http', 'https']) {
+    const Srv = require(mod).Server;
+    const orig = Srv.prototype.emit;
+    Srv.prototype.emit = function (ev, req, res) {
+      if (ev === 'request' && S && S.enforced && !gateAllows(req)) { refuse(req, res); return true; }
+      return orig.apply(this, arguments);
+    };
+  }
+}
+// Sticky: once enforcement starts it lasts until restart (the code already loaded in memory is what is suspect, so
+// restoring files on disk must be followed by a restart).
+function updateEnforcement() {
+  if (mode() !== 'enforce') return;
+  installGate();
+  if (S.enforced || !fileViolation()) return;
+  const r = S.result;
+  const files = r.state === 'unsigned' ? [MANIFEST_NAME + ' (missing)'] : r.state === 'invalid-manifest' ? [MANIFEST_NAME + ' (invalid)'] : [...r.modified, ...r.missing.map((f) => f + ' (missing)'), ...(r.memoryKeyMismatch ? ['loaded licence public key'] : [])];
+  S.enforced = true; S.refId = newReference(files); S.enforcedAt = new Date().toISOString(); S.enforcedFiles = files;
+  emitOnce('INTEGRITY_ENFORCED', { referenceId: S.refId, files, state: r.state, action: 'normal startup refused; only /api/health and /api/license/* (plus sign-in) are served', recovery: 'run the repair utility / restore packaged files, or set INTEGRITY_MODE=warn if the change was deliberate' }, S.refId);
+  if (S.log) S.log.error(`[integrity] ENFORCED - protected files failed verification (${files.join(', ')}). Reference ${S.refId}. Normal startup refused; serving only /api/health and /api/license/*. Recovery: ${RECOVERY_STEPS.slice(2, 4).join(' ')}`);
+}
+
 // Idempotent. First caller wins (license.js and server.js both call it).
-function init({ root, emit, log } = {}) {
+function init({ root, emit, log, defer } = {}) {
   if (S) { if (log && !S.log) S.log = log; if (emit && !S.emit) S.emit = emit; return S.result; }
-  S = { root: root || path.join(__dirname, '..'), emit: emit || null, log: log || null, result: null, env: [], snapshot: {}, licenseFile: null, licenseBase: null, timer: null };
+  S = { root: root || path.join(__dirname, '..'), emit: emit || null, log: log || null, result: null, env: [], snapshot: {}, licenseFile: null, licenseBase: null, timer: null, defer: !!defer, queue: [], enforced: false, refId: null };
   evaluate(true);
   S.env = envRisks(process.env, process.execArgv);
   if (S.env.length) {
@@ -172,13 +251,16 @@ function isRestricted() {
   if (!S || mode() !== 'restricted') return false;
   return compromised() || (S.result && S.result.state === 'unsigned');
 }
+function isEnforced() { return !!(S && S.enforced); }
 function getStatus() {
   if (!S || !S.result) return { state: 'unknown', mode: mode(), restricted: false, warnings: [] };
   const warnings = [];
   if (S.result.state === 'modified' || S.result.state === 'invalid-manifest') warnings.push('Application files that enforce licensing were modified after this build was packaged.');
   if (S.result.state === 'unsigned' && process.env.NODE_ENV === 'production') warnings.push('This install has no signed integrity manifest.');
   if (S.env.length) warnings.push('The service environment contains overrides that can change application behaviour.');
-  return { state: S.result.state, mode: mode(), restricted: isRestricted(), warnings };
+  const out = { state: S.result.state, mode: mode(), restricted: isRestricted() || S.enforced, warnings };
+  if (S.enforced) { out.enforced = true; out.referenceId = S.refId; out.recovery = RECOVERY_STEPS; warnings.unshift(`Strict integrity mode is active (reference ${S.refId}): normal operation is refused until the packaged files are restored.`); }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -217,8 +299,16 @@ function tick(onLicenseChanged) {
     }
   }
 }
+// Events raised before the database was ready (early init) are delivered now.
+function flushEvents() {
+  if (!S) return;
+  S.defer = false;
+  const q = S.queue.splice(0);
+  for (const [t, d] of q) { try { if (S.emit) S.emit(t, d); } catch (e) { /* ignore */ } }
+}
 function startMonitor({ licenseFile, onLicenseChanged, intervalMs } = {}) {
   if (!S) return;
+  flushEvents();
   if (licenseFile) monitorLicenseFile(licenseFile);
   if (S.timer) return;
   S.timer = setInterval(() => { try { tick(onLicenseChanged); } catch (e) { /* never throw from a timer */ } }, intervalMs || TICK_MS);
@@ -238,7 +328,17 @@ module.exports = {
   stopMonitor,
   acknowledge,
   isRestricted,
+  isEnforced,
+  flushEvents,
+  gateAllows,
   getStatus,
   tick,
   _resetForTests,
 };
+
+// Operator check:  node lib/integrity.js        (exit 0 = ok, 1 = failed)
+if (require.main === module) {
+  const r = checkIntegrity(path.join(__dirname, '..'));
+  console.log(JSON.stringify({ state: r.state, modified: r.modified, missing: r.missing, memoryKeyMismatch: r.memoryKeyMismatch, manifest: r.keyId, build: r.version }, null, 2));
+  process.exit(r.state === 'ok' ? 0 : 1);
+}

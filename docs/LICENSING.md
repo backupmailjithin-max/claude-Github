@@ -68,6 +68,14 @@ touched.
   sign-out stay reachable). Risky service environment overrides (`NODE_OPTIONS` with `--require/--import/--inspect`,
   `NODE_PATH`, `LD_PRELOAD`) are reported the same way. After hand-copying a changed file onto an install, the
   warning stays until a manifest built for that file set is installed (`INTEGRITY_MODE=warn` meanwhile).
+- **Strict mode (`INTEGRITY_MODE=enforce`).** If `server.js`, `lib/license.js`, `lib/license-public-key.js` or
+  `lib/integrity.js` differ from the manifest, or the manifest is invalid/missing, the server refuses normal
+  startup (no schema migrations, no background jobs) and an HTTP gate answers `503` to everything except
+  `/api/health`, `/api/license/*` and the sign-in routes needed to reach them (`POST /api/auth/login|logout`,
+  `GET /api/auth/me`). Each refusal carries a reference ID (`INT-<timestamp>-<8 hex>`), also in the
+  `INTEGRITY_ENFORCED` audit event, the service log and `GET /api/license/status`. Activation works as usual
+  through the API. Recovery: restore the packaged files (`dcim-repair` / the repair utility / `dcim-rollback`)
+  and restart; set `INTEGRITY_MODE=warn` only for a deliberate, trusted change.
 - `license.lic` is watched while the service runs: an unexpected change or removal is audited once
   (`LICENSE_FILE_MODIFIED` / `LICENSE_FILE_REMOVED`), a bad signature as `LICENSE_TAMPERED`.
 - Known limit: wiping both trial records restarts the trial.

@@ -117,6 +117,9 @@ async function auditLog(req, action, o = {}) {
     );
   } catch (e) { log.warn('[audit] could not write audit record:', e.message); }
 }
+// Integrity of the licensing code (lib/integrity.js). Verified here, as early as the logger exists, so INTEGRITY_MODE=enforce
+// can refuse normal startup. Audit events raised before the database is ready are queued and written once it is.
+license.ensureIntegrity({ log, defer: true });
 
 // ---- Upload security ----
 // extension -> accepted declared MIME types + file signature (magic bytes) check
@@ -8820,9 +8823,17 @@ async function startServer() {
       process.exitCode = 1;
       return;
     }
-    await initDB();
-    await setupRoutesModule.applyIntegrationEnv();
-    await pduRoutesModule.ensureSchema();
+    const integrityEnforced = license.integrityEnforced();
+    if (integrityEnforced) {
+      // INTEGRITY_MODE=enforce and a protected file failed verification: refuse normal startup. No schema migrations, no
+      // integration setup, no background jobs - only the HTTP gate's allow-list (/api/health, /api/license/*, sign-in) is served.
+      log.error('[startup] INTEGRITY ENFORCED - refusing normal startup (migrations and background jobs skipped). See the [integrity] message above for the reference ID and recovery steps.');
+    } else {
+      await initDB();
+      await setupRoutesModule.applyIntegrationEnv();
+      await pduRoutesModule.ensureSchema();
+    }
+    license.flushIntegrityEvents();   // audit rows queued before the database was ready
     // 10-day free trial + auto-lock (see lib/license.js). Only when licensing is enforced.
     if (license.isLicensingConfigured()) {
       try {
@@ -8841,6 +8852,11 @@ async function startServer() {
     // BIND_HOST (optional, e.g. 127.0.0.1 when nginx is the only entry point). Unset = all interfaces, exactly as before.
     httpServer = app.listen(...(process.env.BIND_HOST ? [PORT, process.env.BIND_HOST] : [PORT]), () => {
       log.info(`[startup] DCIM server v${APP_VERSION} listening on port ${PORT} (${IS_PRODUCTION ? 'production' : 'development'}, node ${process.version}, pid ${process.pid}, db ${DB_NAME})`);
+      if (license.integrityEnforced()) {   // strict integrity mode: stay minimal
+        auditLog(null, 'SERVER_START_REFUSED', { status: 'failure', username: 'system', entity: 'server', details: { reason: 'integrity enforce mode', port: Number(PORT) } });
+        log.error(`[startup] Listening in RESTRICTED integrity mode on port ${PORT}: only /api/health and /api/license/* (plus sign-in) are served.`);
+        return;
+      }
       if (IS_PRODUCTION) {   // production hygiene hints (log only, never blocks start)
         if (!CORS_ORIGIN || CORS_ORIGIN.split(',').map((v) => v.trim()).includes('*')) log.warn('[security] CORS_ORIGIN is unset or "*" - set it to this site\'s real URL (e.g. https://dcim.example.com) in .env.');
         if (CSP_MODE !== 'enforce') log.warn(`[security] CSP_MODE is "${CSP_MODE}" - "enforce" is recommended in production.`);
