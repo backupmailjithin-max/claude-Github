@@ -3,7 +3,7 @@
 // time and never leaves the vendor; it is not the licence key and not shipped.
 module.exports = {
   INTEGRITY_PUBLIC_KEY_PEM: `-----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEAzT4G9MfvXCWEoqWrChTWpbuAllmJN/aR44qUqm81Y2Q=
+MCowBQYDK2VwAyEA73MFDUABK5qrLDiK1fdeX9ZvmPcSr1JOgrVPqYwY2DU=
 -----END PUBLIC KEY-----
 `,
 };

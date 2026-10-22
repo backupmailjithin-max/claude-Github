@@ -19,7 +19,7 @@ const { execFileSync } = require('child_process');
 const { LICENSE_PUBLIC_KEY_PEM } = require('./license-public-key');
 const integrity = require('./integrity');
 // SHA-256 of the vendor integrity public key (lib/integrity-public-key.js); must agree with lib/integrity.js. Set by integrity-keygen.js --install.
-const INTEGRITY_PIN_FPR = 'd45272f48b97371e496c2753bd0c7f3746809512270180c2fb3832d27b2f1fd2'; // @LICENSE_PIN_FPR@
+const INTEGRITY_PIN_FPR = '3cbc2c478cf850026d50522efa077d02a207b1b5819c37ea64dfd5e5cc9dfa8d'; // @LICENSE_PIN_FPR@
 
 function isLicensingConfigured() {
   return !!LICENSE_PUBLIC_KEY_PEM;

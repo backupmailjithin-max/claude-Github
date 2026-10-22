@@ -34,7 +34,7 @@ const MANIFEST_NAME = 'integrity.manifest.json';
 const PROTECTED_FILES = ['server.js', 'lib/license.js', 'lib/license-public-key.js', 'lib/integrity.js', 'lib/integrity-public-key.js'];
 // SHA-256 of the vendor integrity public key. Written by packaging/tools/integrity-keygen.js --install, and mirrored in
 // lib/license.js, so replacing or removing the key file alone is detected (all three places must agree).
-const PIN_FPR = 'd45272f48b97371e496c2753bd0c7f3746809512270180c2fb3832d27b2f1fd2'; // @INTEGRITY_PIN_FPR@
+const PIN_FPR = '3cbc2c478cf850026d50522efa077d02a207b1b5819c37ea64dfd5e5cc9dfa8d'; // @INTEGRITY_PIN_FPR@
 const TICK_MS = 60 * 1000;
 
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');

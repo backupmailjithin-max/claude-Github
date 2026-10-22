@@ -9,7 +9,7 @@
 // the printed public key below to turn enforcement on.
 module.exports = {
   LICENSE_PUBLIC_KEY_PEM: `-----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEAIdp5YuQVI0Si7LtK/116XuTui9D6d0NGwdIwIla+jQI=
+MCowBQYDK2VwAyEATGuY/5iwQGHMzMjE0m92nsp9HY/c5Bscb1hJYBdsY3I=
 -----END PUBLIC KEY-----
 `,
 };
