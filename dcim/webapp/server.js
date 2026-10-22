@@ -7874,7 +7874,11 @@ const crypto = require('crypto'); // zlib is required once, near the top of the 
 // a restore). Encrypted credential values inside it only decrypt on a server with the same
 // JWT_SECRET they were encrypted under -- restoring to a different server still needs those
 // passwords re-entered via the wizard, exactly as Config Export/Import already documents.
-const BACKUP_TABLES = ['locations', 'rack_types', 'hardware_types', 'zones', 'racks', 'floor_plans', 'users', 'assets', 'rack_components', 'asset_movements', 'issues', 'dc_activities', 'material_movements', 'material_movement_documents', 'firmware_targets', 'firmware_model_targets', 'asset_connectivity', 'asset_hw_details', 'app_settings'];
+const BACKUP_TABLES = ['locations', 'rack_types', 'hardware_types', 'zones', 'racks', 'floor_plans', 'users', 'assets', 'rack_components', 'asset_movements', 'issues', 'dc_activities', 'material_movements', 'material_movement_documents', 'firmware_targets', 'firmware_model_targets', 'asset_connectivity', 'asset_hw_details', 'pdus', 'app_settings'];
+// Tables that may legitimately not exist yet on a given install (pdus is created by lib/pdu-routes.js at startup). A missing one is simply left out of a backup
+// and left alone by a restore - never an error, and never turned into an empty list that would wipe data.
+const BACKUP_OPTIONAL_TABLES = new Set(['pdus']);
+const isNoSuchTable = (e) => !!e && (e.code === 'ER_NO_SUCH_TABLE' || e.errno === 1146);
 const BACKUP_FORMAT = 'dc-dashboard-backup', BACKUP_VERSION = 1;
 const BACKUP_RETENTION_DAYS = Math.max(1, Number(process.env.BACKUP_RETENTION_DAYS) || 7); // configurable; default widened from the old hardcoded 3 to 7 per the packaging review
 const BACKUP_TIME = /^([01]\d|2[0-3]):([0-5]\d)$/.test(process.env.BACKUP_TIME || '') ? process.env.BACKUP_TIME : '23:00';   // HH:MM server time
@@ -7924,7 +7928,7 @@ async function buildBackup(kind, by) {
   try {
     await conn.query('SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ');
     await conn.query('START TRANSACTION WITH CONSISTENT SNAPSHOT');          // every table as of the same instant
-    for (const t of BACKUP_TABLES) { const [rows] = await conn.query({ sql: `SELECT * FROM \`${t}\`${t === 'app_settings' ? " WHERE k NOT LIKE 'license.%'" : ''}`, typeCast: dateStringCast }); tables[t] = rows; }   // license.* (trial record) stays per machine - never exported
+    for (const t of BACKUP_TABLES) { try { const [rows] = await conn.query({ sql: `SELECT * FROM \`${t}\`${t === 'app_settings' ? " WHERE k NOT LIKE 'license.%'" : ''}`, typeCast: dateStringCast }); tables[t] = rows; } catch (e) { if (BACKUP_OPTIONAL_TABLES.has(t) && isNoSuchTable(e)) continue; throw e; } }   // license.* (trial record) stays per machine - never exported
     await conn.query('COMMIT');
   } finally { conn.release(); }
   const files = {}, skippedFiles = [];
@@ -7937,7 +7941,7 @@ async function buildBackup(kind, by) {
     }
   } catch (e) { /* no uploads folder yet */ }
   const sha256 = crypto.createHash('sha256').update(JSON.stringify({ tables, files })).digest('hex');
-  const counts = {}; BACKUP_TABLES.forEach((t) => { counts[t] = tables[t].length; });
+  const counts = {}; BACKUP_TABLES.forEach((t) => { if (tables[t]) counts[t] = tables[t].length; });
   const manifest = { format: BACKUP_FORMAT, version: BACKUP_VERSION, appVersion: APP_VERSION, createdAt: new Date().toISOString(), createdBy: by || 'system', kind, counts, fileCount: Object.keys(files).length, skippedFiles, sha256, tables, files };
   return { buffer: zlib.gzipSync(Buffer.from(JSON.stringify(manifest)), { level: 6 }), manifest };
 }
@@ -8039,7 +8043,7 @@ function parseBackupBuffer(buf) {
   if (m.fileCount != null && Number(m.fileCount) !== Object.keys(files).length) throw httpErr(400, 'The backup file list is incomplete (attachment count mismatch). Nothing was changed.');
   return m;
 }
-async function currentCounts() { const out = {}; for (const t of BACKUP_TABLES) { const [[r]] = await pool.query(`SELECT COUNT(*) AS c FROM \`${t}\``); out[t] = r.c; } return out; }
+async function currentCounts() { const out = {}; for (const t of BACKUP_TABLES) { try { const [[r]] = await pool.query(`SELECT COUNT(*) AS c FROM \`${t}\``); out[t] = r.c; } catch (e) { if (BACKUP_OPTIONAL_TABLES.has(t) && isNoSuchTable(e)) continue; throw e; } } return out; }
 
 // ---- restore: all or nothing ----
 async function restoreManifest(m, by) {
@@ -8052,7 +8056,8 @@ async function restoreManifest(m, by) {
     for (const t of BACKUP_TABLES) {
       const rows = m.tables[t];
       if (!rows) { untouched.push(t); continue; }                                   // an older backup without this table: leave the current one alone
-      const [cols] = await conn.query(`SHOW COLUMNS FROM \`${t}\``); const known = new Set(cols.map((c) => c.Field));
+      let cols; try { [cols] = await conn.query(`SHOW COLUMNS FROM \`${t}\``); } catch (e) { if (BACKUP_OPTIONAL_TABLES.has(t) && isNoSuchTable(e)) { untouched.push(t); continue; } throw e; }
+      const known = new Set(cols.map((c) => c.Field));
       await conn.query(t === 'app_settings' ? "DELETE FROM `app_settings` WHERE k NOT LIKE 'license.%'" : `DELETE FROM \`${t}\``);   // keep this machine's own trial record
       const rowsIn = t === 'app_settings' ? rows.filter((r) => !String(r && r.k || '').startsWith('license.')) : rows;
       if (rowsIn.length) {

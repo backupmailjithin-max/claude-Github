@@ -10047,7 +10047,7 @@ function BackupRestorePanel() {
     const sub = { fontFamily: "Inter", fontSize: 12, color: "#64748B", margin: "0 0 14px", lineHeight: 1.5 };
     const btn = (bg, fg, dis) => ({ padding: "8px 16px", borderRadius: 10, border: "none", cursor: dis ? "not-allowed" : "pointer", fontFamily: "Inter", fontSize: 12.5, fontWeight: 700, background: dis ? "#E2E8F0" : bg, color: dis ? "#94A3B8" : fg, display: "inline-flex", alignItems: "center", gap: 6 });
     const kindBadge = (k) => { const c = { auto: ["#DBEAFE", "#1D4ED8", "Automatic"], manual: ["#DCFCE7", "#166534", "Manual"], prerestore: ["#FEF3C7", "#92400E", "Before restore"] }[k] || ["#E2E8F0", "#475569", k]; return React.createElement("span", { style: { background: c[0], color: c[1], fontSize: 10.5, fontWeight: 800, padding: "2px 8px", borderRadius: 20 } }, c[2]); };
-    const TABLE_LABELS = { users: "Users", locations: "Locations", zones: "Zones", racks: "Racks", floor_plans: "Floor plans", assets: "Assets", issues: "Issues", dc_activities: "DC activities", material_movements: "Material movements", hardware_types: "Hardware types", rack_types: "Rack types" };
+    const TABLE_LABELS = { users: "Users", locations: "Locations", zones: "Zones", racks: "Racks", floor_plans: "Floor plans", assets: "Assets", issues: "Issues", dc_activities: "DC activities", material_movements: "Material movements", hardware_types: "Hardware types", rack_types: "Rack types", pdus: "PDUs" };
     if (loadErr)
         return React.createElement("div", { className: "neu-card", style: card },
             React.createElement("div", { style: { color: "#B91C1C", fontWeight: 700 } }, loadErr),

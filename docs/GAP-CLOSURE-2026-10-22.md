@@ -72,7 +72,7 @@ Tester / date / signature: ______________________
 | F1–F5 | High/Medium | Embedded-DB snapshot and rollback, uninstall, `.env` permissions (see CERTIFICATION-2026-10-22) | Fixed, retested on Linux |
 | F6 | Low | Rollback left newer files | Fixed (PKG-001) |
 | F7 | Low | Uninstall embedded-DB wording | Fixed (PKG-002) |
-| F8 | Medium | PDU inventory not in backup | Open, awaiting approval |
+| F8 | Medium | PDU inventory not in backup | Fixed 2026-10-22 (see PDU-BACKUP-COVERAGE-2026-10-22) |
 | F9 | Info | Windows copies of the F1/F2 fixes are untested | Open until Gap 1 |
 
 ## Scores
