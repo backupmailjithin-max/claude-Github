@@ -40,9 +40,17 @@ jobs:
             printf '%s' "$DCIM_INTEGRITY_SIGN_KEY" > "$kf"
             export DCIM_INTEGRITY_SIGN_KEY_FILE="$kf"
           fi
-          bash packaging/linux/build-deb.sh
-          rc=$?
+          set +e
+          bash packaging/linux/build-deb.sh 2>&1 | tee "$RUNNER_TEMP/build-deb.log"
+          rc=${PIPESTATUS[0]}
           [ -n "${DCIM_INTEGRITY_SIGN_KEY_FILE:-}" ] && rm -f "$DCIM_INTEGRITY_SIGN_KEY_FILE"
+          if [ "$rc" -ne 0 ]; then
+            echo "::group::build-deb.sh failed (rc=$rc) - last 60 lines as annotations"
+            tail -n 60 "$RUNNER_TEMP/build-deb.log" | while IFS= read -r line; do
+              printf '::error::%s\n' "${line//$'\r'/}"
+            done
+            echo "::endgroup::"
+          fi
           exit $rc
 
       - name: Upload .deb
@@ -73,9 +81,17 @@ jobs:
             printf '%s' "$DCIM_INTEGRITY_SIGN_KEY" > "$kf"
             export DCIM_INTEGRITY_SIGN_KEY_FILE="$kf"
           fi
-          bash packaging/appliance/build-appliance.sh
-          rc=$?
+          set +e
+          bash packaging/appliance/build-appliance.sh 2>&1 | tee "$RUNNER_TEMP/build-appliance.log"
+          rc=${PIPESTATUS[0]}
           [ -n "${DCIM_INTEGRITY_SIGN_KEY_FILE:-}" ] && rm -f "$DCIM_INTEGRITY_SIGN_KEY_FILE"
+          if [ "$rc" -ne 0 ]; then
+            echo "::group::build-appliance.sh failed (rc=$rc) - last 60 lines as annotations"
+            tail -n 60 "$RUNNER_TEMP/build-appliance.log" | while IFS= read -r line; do
+              printf '::error::%s\n' "${line//$'\r'/}"
+            done
+            echo "::endgroup::"
+          fi
           exit $rc
 
       - name: Upload appliance
