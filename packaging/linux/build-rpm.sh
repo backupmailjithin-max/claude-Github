@@ -34,7 +34,7 @@ mkdir -p "$PAYLOAD/webapp/uploads" "$PAYLOAD/webapp/backups" "$PAYLOAD/webapp/lo
 
 # Signed integrity manifest + build gate: FAILS the build on licence tools / signing material / private keys.
 . "$REPO_ROOT/packaging/tools/package-gate.sh"
-package_gate "$PAYLOAD/webapp" "$PAYLOAD" "$(sed -n 's/^Version: *//p' "$SCRIPT_DIR/rpm/dcim.spec" | head -1)" || exit 1
+package_gate "$PAYLOAD/webapp" "$PAYLOAD" "$(sed -n 's/^Version: *//p' "$SCRIPT_DIR/rpm/dcim.spec" | head -1)" "$PAYLOAD/runtime/node/bin/node" || exit 1
 
 rpmbuild --define "_topdir $TOPDIR" -bb "$SCRIPT_DIR/rpm/dcim.spec"
 

@@ -50,7 +50,7 @@ mkdir -p "$PAYLOAD/webapp/uploads" "$PAYLOAD/webapp/backups" "$PAYLOAD/webapp/lo
 
 # Signed integrity manifest + build gate: FAILS the build on licence tools / signing material / private keys.
 . "$REPO_ROOT/packaging/tools/package-gate.sh"
-package_gate "$PAYLOAD/webapp" "$PAYLOAD" "$VERSION" || exit 1
+package_gate "$PAYLOAD/webapp" "$PAYLOAD" "$VERSION" "$PAYLOAD/runtime/node/bin/node" || exit 1
 
 TARBALL="$STAGE/payload.tar.gz"
 tar -czf "$TARBALL" -C "$STAGE" "$(basename "$PAYLOAD")"

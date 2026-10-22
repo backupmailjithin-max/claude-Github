@@ -70,7 +70,7 @@ sed -i "/^Description:/i Installed-Size: ${installed_kb}" "$STAGE/DEBIAN/control
 mkdir -p "$OUT_DIR"
 # Signed integrity manifest + build gate: FAILS the build on licence tools / signing material / private keys.
 . "$REPO_ROOT/packaging/tools/package-gate.sh"
-package_gate "$STAGE/usr/share/dcim/webapp" "$STAGE/usr/share/dcim" "$VERSION" || exit 1
+package_gate "$STAGE/usr/share/dcim/webapp" "$STAGE/usr/share/dcim" "$VERSION" "$STAGE/usr/share/dcim/runtime/node/bin/node" || exit 1
 
 dpkg-deb --build --root-owner-group "$STAGE" "$OUT_DIR/${PKG_NAME}.deb"
 echo "Built $OUT_DIR/${PKG_NAME}.deb"

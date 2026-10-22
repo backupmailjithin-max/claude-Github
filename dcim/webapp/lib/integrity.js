@@ -56,9 +56,22 @@ const pinFingerprint = (root) => { const p = loadPin(root || path.join(__dirname
 
 // signKeyPem: the vendor integrity PRIVATE key (PEM text read by the build tool from a file outside the package tree).
 // With a pinned vendor key the key is mandatory and must match the pin; without a pin the manifest is self-signed.
+// A protected lib/<name>.js file may have been replaced by a compiled-loader stub (bytenode-compile.js),
+// with the real logic in lib/<name>.jsc next to it. Both are hashed - the stub (so swapping back to a
+// patched plain-JS file is caught) and the bytecode (so swapping just the .jsc behind an untouched
+// stub is caught too). See docs/LICENSING-ANTI-CRACK-REVIEW-2026-10-22.md section 4 for its limits.
+function jscSibling(root, rel) {
+  if (!rel.endsWith('.js')) return null;
+  const jsc = rel.slice(0, -3) + '.jsc';
+  return fs.existsSync(path.join(root, jsc)) ? jsc : null;
+}
 function buildManifest(root, opts = {}) {
   const files = {};
-  for (const rel of PROTECTED_FILES) files[rel] = sha256(fs.readFileSync(path.join(root, rel)));
+  for (const rel of PROTECTED_FILES) {
+    files[rel] = sha256(fs.readFileSync(path.join(root, rel)));
+    const jsc = jscSibling(root, rel);
+    if (jsc) files[jsc] = sha256(fs.readFileSync(path.join(root, jsc)));
+  }
   const keyModule = path.join(root, 'lib', 'license-public-key.js');
   delete require.cache[require.resolve(keyModule)];
   const pem = String(require(keyModule).LICENSE_PUBLIC_KEY_PEM || '');
@@ -179,6 +192,9 @@ function checkIntegrity(root, opts = {}) {
   }
   // A manifest that does not cover the protected set is itself suspicious.
   for (const rel of PROTECTED_FILES) if (!(payload.files || {})[rel]) res.missing.push(rel);
+  // A .jsc now present on disk next to a protected stub, but never covered by the signed manifest, is
+  // exactly the "swap the bytecode behind an untouched stub" attack - treat it as a missing/tampered file.
+  for (const rel of PROTECTED_FILES) { const jsc = jscSibling(root, rel); if (jsc && !(payload.files || {})[jsc]) res.missing.push(jsc); }
   try {
     const mem = String(require('./license-public-key').LICENSE_PUBLIC_KEY_PEM || '');
     if (sha256(mem) !== payload.licenseKeySha256) res.memoryKeyMismatch = true;
