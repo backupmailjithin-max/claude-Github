@@ -185,13 +185,29 @@ jobs:
             $env:DCIM_INTEGRITY_SIGN_KEY_FILE = $kf
           }
           if ($env:DCIM_REQUIRE_VENDOR -eq '1') { $req = @('--require-vendor') }
-          node packaging\tools\make-integrity-manifest.js --webapp dcim\webapp
+          # If the Bytenode-compile step ran, lib/integrity.js and lib/license.js are now loader stubs
+          # whose .jsc bytecode is tied to the EXACT Node/V8 build that compiled it (the bundled runtime
+          # staged above) - NOT whatever "node" resolves to on this runner's PATH. Both scripts below
+          # require() lib/integrity.js directly, so they must run under that same bundled node, or the
+          # runner's own node rejects the cached bytecode ("Invalid or incompatible cached data").
+          $manifestNode = "node"
+          if (Test-Path "packaging\windows\runtime\node\node.exe") { $manifestNode = "packaging\windows\runtime\node\node.exe" }
+          $out1 = & $manifestNode packaging\tools\make-integrity-manifest.js --webapp dcim\webapp 2>&1
           $rc = $LASTEXITCODE
+          $out1 | ForEach-Object { Write-Host $_ }
           if ($env:DCIM_INTEGRITY_SIGN_KEY_FILE) { Remove-Item -Force $env:DCIM_INTEGRITY_SIGN_KEY_FILE -ErrorAction SilentlyContinue }
-          if ($rc -ne 0) { throw "integrity manifest creation failed" }
-          node packaging\tools\validate-package.js --root dcim\webapp --require-manifest @req `
-            --iss packaging\windows\dcim-installer.iss --iss packaging\windows\dcim-upgrade-utility.iss --iss packaging\windows\dcim-repair-utility.iss
-          if ($LASTEXITCODE -ne 0) { throw "package validation failed - installers NOT built" }
+          if ($rc -ne 0) {
+            $out1 | Select-Object -Last 60 | ForEach-Object { Write-Host "::error::$_" }
+            throw "integrity manifest creation failed"
+          }
+          $out2 = & $manifestNode packaging\tools\validate-package.js --root dcim\webapp --require-manifest @req `
+            --iss packaging\windows\dcim-installer.iss --iss packaging\windows\dcim-upgrade-utility.iss --iss packaging\windows\dcim-repair-utility.iss 2>&1
+          $rc2 = $LASTEXITCODE
+          $out2 | ForEach-Object { Write-Host $_ }
+          if ($rc2 -ne 0) {
+            $out2 | Select-Object -Last 60 | ForEach-Object { Write-Host "::error::$_" }
+            throw "package validation failed - installers NOT built"
+          }
 
       - name: Compile main installer (dcim-installer.iss) with Inno Setup
         shell: pwsh
@@ -199,7 +215,12 @@ jobs:
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { throw "Inno Setup (ISCC.exe) not found on this runner image." }
           & $iscc packaging\windows\dcim-installer.iss
-          if ($LASTEXITCODE -ne 0) { throw "ISCC failed compiling dcim-installer.iss (exit $LASTEXITCODE)" }
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::group::ISCC failed - re-running with /V9 for verbose output as annotations"
+            & $iscc /V9 packaging\windows\dcim-installer.iss 2>&1 | Select-Object -Last 60 | ForEach-Object { Write-Host "::error::$_" }
+            Write-Host "::endgroup::"
+            throw "ISCC failed compiling dcim-installer.iss (exit $LASTEXITCODE)"
+          }
 
       - name: Compile upgrade utility (dcim-upgrade-utility.iss) with Inno Setup
         shell: pwsh
