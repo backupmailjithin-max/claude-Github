@@ -25,10 +25,16 @@ package_gate() {
   elif [ "${DCIM_RELEASE_BUILD:-}" = "1" ]; then
     echo "ERROR: DCIM_RELEASE_BUILD=1 but no vendor integrity key is pinned yet - run packaging/tools/integrity-keygen.js --install once before cutting a release (see docs/LICENSING.md)." >&2; return 1
   fi
+  local manifest_node="$node_bin"
   if [ "${DCIM_BYTENODE:-}" = "1" ]; then
     [ -n "$bundled_node" ] && [ -x "$bundled_node" ] || { echo "ERROR: DCIM_BYTENODE=1 requires the bundled target node binary as package_gate's 4th argument (bytecode must match the exact Node build this package ships)." >&2; return 1; }
     "$node_bin" "$tools/bytenode-compile.js" --webapp "$webapp" --node "$bundled_node" || return 1
+    # lib/integrity.js (and lib/license.js) are now bytenode loader stubs whose .jsc is tied to the
+    # EXACT Node/V8 build that compiled it. make-integrity-manifest.js and validate-package.js both
+    # require() lib/integrity.js directly, so they must run under that same bundled node from here on
+    # - the build machine's own node (node_bin) rejects the cached bytecode (cachedDataRejected).
+    manifest_node="$bundled_node"
   fi
-  "$node_bin" "$tools/make-integrity-manifest.js" --webapp "$webapp" ${ver:+--version "$ver"} || return 1
-  "$node_bin" "$tools/validate-package.js" --root "$scan" --require-manifest $req_vendor || { echo "ERROR: package validation failed - package NOT created." >&2; return 1; }
+  "$manifest_node" "$tools/make-integrity-manifest.js" --webapp "$webapp" ${ver:+--version "$ver"} || return 1
+  "$manifest_node" "$tools/validate-package.js" --root "$scan" --require-manifest $req_vendor || { echo "ERROR: package validation failed - package NOT created." >&2; return 1; }
 }
