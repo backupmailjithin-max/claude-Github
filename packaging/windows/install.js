@@ -332,7 +332,7 @@ function syncPayload(opts, paths) {
   if (srcFull === destFull) {
     log(`Application payload is already staged directly at ${dest}; nothing to copy.`);
   } else {
-    mirrorTree(paths.payloadWebapp, dest, new Set(['uploads', 'backups', 'logs', '.env', 'license.lic', '.trial-state']));
+    mirrorTree(paths.payloadWebapp, dest, new Set(['uploads', 'backups', 'logs', '.env', 'license.lic', '.trial-state', '.license-clock']));
   }
   for (const d of ['uploads', 'backups', 'logs']) {
     fs.mkdirSync(path.join(dest, d), { recursive: true });

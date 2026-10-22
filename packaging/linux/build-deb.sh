@@ -38,7 +38,7 @@ cp -a "$REPO_ROOT/dcim/webapp" "$STAGE/usr/share/dcim/webapp"
 rm -f "$STAGE"/usr/share/dcim/webapp/tools/license-*.js "$STAGE/usr/share/dcim/webapp/tools/Run-License-Generator.bat" "$STAGE/usr/share/dcim/webapp/tools/LICENSE-ISSUE-TEMPLATE.txt"
 rm -rf "$STAGE/usr/share/dcim/webapp/.env" \
        "$STAGE/usr/share/dcim/webapp/license.lic" \
-       "$STAGE/usr/share/dcim/webapp/.trial-state" \
+       "$STAGE/usr/share/dcim/webapp/.trial-state" "$STAGE/usr/share/dcim/webapp/.license-clock" \
        "$STAGE/usr/share/dcim/webapp/uploads" \
        "$STAGE/usr/share/dcim/webapp/backups" \
        "$STAGE/usr/share/dcim/webapp/logs"

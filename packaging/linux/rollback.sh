@@ -34,7 +34,7 @@ if [ -f "$SNAPSHOT_DIR/webapp-files.tar.gz" ]; then
   snap_list="$(mktemp)"; cur_list="$(mktemp)"
   if tar -tzf "$SNAPSHOT_DIR/webapp-files.tar.gz" 2>/dev/null | sed 's#/$##' | sort -u > "$snap_list" && [ -s "$snap_list" ]; then
     ( cd "$INSTALL_DIR" && find webapp \( -path webapp/node_modules -o -path webapp/ocr/vendor/node_modules -o -path webapp/uploads -o -path webapp/backups -o -path webapp/logs \) -prune -o \( -type f -o -type l \) -print | sort -u ) > "$cur_list"
-    comm -13 "$snap_list" "$cur_list" | grep -vE '^webapp/(\.env|\.trial-state|license\.lic)$' | while IFS= read -r extra; do
+    comm -13 "$snap_list" "$cur_list" | grep -vE '^webapp/(\.env|\.trial-state|\.license-clock|license\.lic)$' | while IFS= read -r extra; do
       rm -f -- "$INSTALL_DIR/$extra" && log "Removed file introduced by the newer version: $extra"
     done || true
   fi

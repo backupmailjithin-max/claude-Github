@@ -45,11 +45,27 @@ touched.
   `license.trialStartedAt` / `license.trialSig` keys in `app_settings`. The
   earliest valid copy wins, so deleting one does not restart the clock.
   An edited or copied record counts as an ended trial.
-- A changed hostname, first MAC address or machine-id invalidates the record
-  (same fingerprint the machine-locked license uses).
-- Known limits: wiping both records restarts the trial; moving the system
-  clock back is not detected.
-- Upgrade / repair keep `license.lic` and `.trial-state` (excluded from the
+- The machine ID shown in the app is now derived from the OS **machine-id**
+  (Linux `/etc/machine-id`, Windows MachineGuid), so a hostname or network-card
+  change no longer breaks a license or trial bound to it. Licenses issued
+  earlier against the old ID (machine-id + MAC + hostname) are still accepted
+  unchanged; those keep the old sensitivity to hostname/NIC changes until the
+  vendor re-issues them against the new ID. If a host has no OS machine-id the
+  composite ID is used.
+- The latest time the install has ever seen is kept (signed) in `.license-clock`
+  and in `app_settings` (`license.clockSeen*`, excluded from backup/restore) and
+  is used for license-expiry and trial checks, so winding the system clock back
+  does not revive an expired license or trial. Recovery if a wrong future clock
+  poisoned it: stop the service, delete `.license-clock`, run
+  `DELETE FROM app_settings WHERE k LIKE 'license.clock%';`, start the service.
+- Known limit: wiping both trial records restarts the trial.
+- Activation validates the upload first and only then atomically replaces
+  `license.lic` (mode 600); a rejected upload leaves the installed license
+  untouched. Rejected uploads, tampered stored licenses, clock rollback and
+  tampered trial/clock state are written to the audit log
+  (`LICENSE_UPLOAD_INVALID`, `LICENSE_UPLOAD_TAMPERED`, `LICENSE_ACTIVATE_FAILED`,
+  `LICENSE_TAMPERED`, `LICENSE_CLOCK_ROLLBACK`, `LICENSE_TRIAL_TAMPERED`).
+- Upgrade / repair keep `license.lic`, `.trial-state` and `.license-clock` (excluded from the
   installers' sync/delete step). Do not ship either file in a package.
 - To restart the clock on a TEST machine: delete `.trial-state` and run
   `DELETE FROM app_settings WHERE k LIKE 'license.%'`.

@@ -366,13 +366,13 @@ sync_payload() {
   install -d -m 755 "$INSTALL_DIR"
   if command -v rsync >/dev/null 2>&1; then
     rsync -a --delete \
-      --exclude '.env' --exclude 'uploads' --exclude 'backups' --exclude 'logs' --exclude 'license.lic' --exclude '.trial-state' \
+      --exclude '.env' --exclude 'uploads' --exclude 'backups' --exclude 'logs' --exclude 'license.lic' --exclude '.trial-state' --exclude '.license-clock' \
       "$source_webapp/" "$INSTALL_DIR/webapp/"
   else
     mkdir -p "$INSTALL_DIR/webapp"
     for item in "$source_webapp"/*; do
       base="$(basename "$item")"
-      case "$base" in .env|uploads|backups|logs|license.lic|.trial-state) continue ;; esac
+      case "$base" in .env|uploads|backups|logs|license.lic|.trial-state|.license-clock) continue ;; esac
       rm -rf "${INSTALL_DIR:?}/webapp/${base}"
       cp -a "$item" "$INSTALL_DIR/webapp/$base"
     done
@@ -594,7 +594,7 @@ install_cli_utilities() {
   if [ -f "$PAYLOAD_WEBAPP/server.js" ] && [ "$(cd "$PAYLOAD_WEBAPP" 2>/dev/null && pwd)" != "$(cd "$INSTALL_DIR/webapp" 2>/dev/null && pwd)" ]; then
     install -d -m 755 "$CACHED_WEBAPP_DIR"
     if command -v rsync >/dev/null 2>&1; then
-      rsync -a --delete --exclude '.env' --exclude 'uploads' --exclude 'backups' --exclude 'logs' --exclude 'license.lic' --exclude '.trial-state' \
+      rsync -a --delete --exclude '.env' --exclude 'uploads' --exclude 'backups' --exclude 'logs' --exclude 'license.lic' --exclude '.trial-state' --exclude '.license-clock' \
         "$PAYLOAD_WEBAPP/" "$CACHED_WEBAPP_DIR/"
     else
       cp -a "$PAYLOAD_WEBAPP/." "$CACHED_WEBAPP_DIR/"

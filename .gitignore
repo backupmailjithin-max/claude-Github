@@ -21,3 +21,4 @@ dcim/webapp/logs/*.log
 
 # per-install 10-day trial record (see docs/LICENSING.md) - never ship or commit
 dcim/webapp/.trial-state
+dcim/webapp/.license-clock

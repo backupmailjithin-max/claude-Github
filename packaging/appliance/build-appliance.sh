@@ -39,6 +39,13 @@ fi
 
 cp -a "$REPO_ROOT/dcim/webapp" "$PAYLOAD/webapp"
 rm -rf "$PAYLOAD/webapp/.env" "$PAYLOAD/webapp/uploads" "$PAYLOAD/webapp/backups" "$PAYLOAD/webapp/logs"
+# Vendor-only licence tooling (keypair generator, issuer, wizard, template) must never ship to customers,
+# and no developer licence/trial state may leak into the package.
+rm -f "$PAYLOAD"/webapp/tools/license-*.js "$PAYLOAD/webapp/tools/Run-License-Generator.bat" "$PAYLOAD/webapp/tools/LICENSE-ISSUE-TEMPLATE.txt" \
+      "$PAYLOAD/webapp/license.lic" "$PAYLOAD/webapp/.trial-state" "$PAYLOAD/webapp/.license-clock"
+if find "$PAYLOAD/webapp" \( -name 'license-keygen*' -o -name 'license-issue*' -o -name 'license-generator*' -o -name 'license-fingerprint*' -o -name 'Run-License-Generator*' -o -name 'LICENSE-ISSUE-TEMPLATE*' \) | grep -q .; then
+  echo "ERROR: vendor licence tooling is still present in the appliance payload." >&2; exit 1
+fi
 mkdir -p "$PAYLOAD/webapp/uploads" "$PAYLOAD/webapp/backups" "$PAYLOAD/webapp/logs"
 
 TARBALL="$STAGE/payload.tar.gz"

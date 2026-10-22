@@ -22,6 +22,9 @@ if (IS_PRODUCTION && !JWT_SECRET) throw new Error('JWT_SECRET is required when N
 // see docs/LICENSING.md. LICENSE_FILE lets an install point at a license
 // dropped somewhere other than its default location next to .env.
 const LICENSE_FILE = process.env.LICENSE_FILE || path.join(__dirname, 'license.lic');
+// Security events raised inside lib/license.js (tampered license file, clock rollback, ...) go to the audit log.
+license.setSecurityListener((type, details) => auditLog(null, type, { status: 'failure', username: 'system', entity: 'license', details }));
+license.secureLicenseFile(LICENSE_FILE);   // older versions wrote license.lic world-readable; content is never changed
 
 // =====================================================================
 // PHASE-1 HARDENING - shared infrastructure
@@ -2273,22 +2276,30 @@ function decodeLicenseInput(req) {
 
 app.post('/api/license/activate', authenticateToken, requireGlobalAdmin, licenseUpload.single('license'), async (req, res) => {
   try {
+    const upBytes = req.file ? req.file.size : (req.body && typeof req.body.code === 'string' ? req.body.code.length : 0);
+    const rejectUpload = (action, reason, extra) => auditLog(req, action, { status: 'failure', entity: 'license', details: Object.assign({ reason, bytes: upBytes }, extra || {}) });
     const decoded = decodeLicenseInput(req);
-    if (decoded.error) return res.status(400).json({ error: decoded.error });
+    if (decoded.error) { await rejectUpload('LICENSE_UPLOAD_INVALID', decoded.error); return res.status(400).json({ error: decoded.error }); }
     const parsed = decoded.parsed;
     if (!parsed || parsed.alg !== 'Ed25519' || typeof parsed.payloadJson !== 'string' || typeof parsed.signature !== 'string') {
+      await rejectUpload('LICENSE_UPLOAD_INVALID', 'not a recognized license');
       return res.status(400).json({ error: 'That is not a recognized license.' });
     }
-    await fs.promises.writeFile(LICENSE_FILE, decoded.buffer);
-    const status = license.getLicenseStatus(LICENSE_FILE);
-    if (!status.valid) {
-      // Keep the file either way (so the admin/support can see exactly what
-      // was uploaded and why it failed), just report the real reason.
-      return res.status(400).json({ error: `License file saved, but is not valid: ${status.reason}`, status });
+    // Validate FIRST; only a fully valid license is written (temp file, mode 600, atomic rename).
+    // A rejected upload never touches the license that is currently installed.
+    const installed = license.installLicense(decoded.buffer, LICENSE_FILE);
+    if (!installed.ok) {
+      const r = installed.result;
+      const tampered = r.code === 'BAD_SIGNATURE' || r.code === 'CORRUPT_PAYLOAD' || r.code === 'NOT_JSON' || r.code === 'MALFORMED';
+      await rejectUpload(tampered ? 'LICENSE_UPLOAD_TAMPERED' : 'LICENSE_ACTIVATE_FAILED', r.reason,
+        r.payload ? { code: r.code, licenseId: r.payload.licenseId || null, customer: r.payload.customer || null } : { code: r.code });
+      return res.status(400).json({ error: `License not applied (your existing license, if any, is unchanged): ${r.reason}`, status: license.getLicenseStatus(LICENSE_FILE) });
     }
+    const status = license.getLicenseStatus(LICENSE_FILE);
     auditLog(req, 'LICENSE_ACTIVATE', { entity: 'license', details: { licenseId: status.license && status.license.licenseId, customer: status.license && status.license.customer } });
     res.json({ success: true, status });
   } catch (e) {
+    auditLog(req, 'LICENSE_ACTIVATE_FAILED', { status: 'failure', entity: 'license', details: { reason: 'server error: ' + (e && e.message) } });
     sendErr(res, e);
   }
 });
