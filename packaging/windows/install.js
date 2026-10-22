@@ -590,7 +590,11 @@ function backupBeforeChange(opts) {
       const m = line.match(/^([A-Z_]+)=(.*)$/);
       if (m) env[m[1]] = m[2];
     }
-    const args = ['-h', env.DB_HOST, '-u', env.DB_USER];
+    const args = ['-h', env.DB_HOST];
+    // The embedded database listens on its own port (not 3306); without -P the
+    // snapshot silently had no database dump.
+    if (env.DB_PORT) args.push('-P', env.DB_PORT);
+    args.push('-u', env.DB_USER);
     if (env.DB_PASSWORD) args.push(`-p${env.DB_PASSWORD}`);
     let gtidFlag = [];
     try {
@@ -600,6 +604,8 @@ function backupBeforeChange(opts) {
       // feature-detect instead of assuming either engine.
       const help = execFileSync(dump, ['--help'], { encoding: 'utf8' });
       if (help.includes('--set-gtid-purged')) gtidFlag = ['--set-gtid-purged=OFF'];
+      // MySQL 8's mysqldump reads information_schema.COLUMN_STATISTICS, which MariaDB servers (incl. the bundled DB) lack.
+      if (help.includes('--column-statistics')) gtidFlag.push('--column-statistics=0');
     } catch { /* ignore */ }
     args.push('--single-transaction', ...gtidFlag, '--routines', '--triggers', env.DB_NAME);
     const sqlPath = path.join(backupDir, 'database.sql');

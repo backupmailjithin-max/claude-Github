@@ -43,8 +43,9 @@ if [ -f "$SNAPSHOT_DIR/database.sql.gz" ]; then
     host="$(sed -n 's/^DB_HOST=//p' "$ENV_FILE")"; user="$(sed -n 's/^DB_USER=//p' "$ENV_FILE")"
     pass="$(sed -n 's/^DB_PASSWORD=//p' "$ENV_FILE")"; name="$(sed -n 's/^DB_NAME=//p' "$ENV_FILE")"
     pw_arg=(); [ -n "$pass" ] && pw_arg=(-p"$pass")
+    dbport="$(sed -n 's/^DB_PORT=//p' "$ENV_FILE")"; port_arg=(); [ -n "$dbport" ] && port_arg=(-P "$dbport")
     log "Restoring database '$name' from $SNAPSHOT_DIR/database.sql.gz ..."
-    gunzip -c "$SNAPSHOT_DIR/database.sql.gz" | "$mysql_bin" -h "${host:-localhost}" -u "${user:-dcim}" "${pw_arg[@]}" "${name:-dcim}"
+    gunzip -c "$SNAPSHOT_DIR/database.sql.gz" | "$mysql_bin" -h "${host:-localhost}" "${port_arg[@]}" -u "${user:-dcim}" "${pw_arg[@]}" "${name:-dcim}"
     log "Database restored."
   fi
 else

@@ -30,6 +30,19 @@ else
   log "No '$SERVICE_NAME' systemd unit found; nothing to disable."
 fi
 
+# Embedded (bundled) MariaDB service, when the install used --embedded-db.
+# Stopped after the app so no connections are cut mid-request, and always
+# before /opt/dcim (its binaries and data) is removed.
+DB_SERVICE_NAME="dcim-mariadb"
+DB_UNIT_PATH="/etc/systemd/system/${DB_SERVICE_NAME}.service"
+if [ -f "$DB_UNIT_PATH" ]; then
+  systemctl stop "$DB_SERVICE_NAME" 2>/dev/null || true
+  systemctl disable "$DB_SERVICE_NAME" 2>/dev/null || true
+  rm -f "$DB_UNIT_PATH"
+  systemctl daemon-reload
+  log "Embedded database service '$DB_SERVICE_NAME' stopped, disabled, and unit file removed."
+fi
+
 if [ "$PURGE_DATA" -eq 1 ]; then
   log "Removing $INSTALL_DIR (application files, uploads, backups, logs, .env) ..."
   rm -rf "$INSTALL_DIR"

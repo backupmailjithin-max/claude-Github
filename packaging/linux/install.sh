@@ -386,6 +386,8 @@ sync_payload() {
     cp -a "$PAYLOAD_RUNTIME" "$INSTALL_DIR/runtime/node"
   fi
   chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
+  # Re-assert the secret-bearing .env permissions on every install/upgrade/repair.
+  [ -f "$ENV_FILE" ] && chmod 600 "$ENV_FILE" && chown "$SERVICE_USER:$SERVICE_USER" "$ENV_FILE" || true
 }
 
 install_systemd_unit() {
@@ -618,6 +620,10 @@ backup_before_change() {
     host="$(sed -n 's/^DB_HOST=//p' "$ENV_FILE")"; user="$(sed -n 's/^DB_USER=//p' "$ENV_FILE")"
     pass="$(sed -n 's/^DB_PASSWORD=//p' "$ENV_FILE")"; name="$(sed -n 's/^DB_NAME=//p' "$ENV_FILE")"
     local pw_arg=(); [ -n "$pass" ] && pw_arg=(-p"$pass")
+    # The embedded database listens on its own port (3307), not the default
+    # 3306 - without -P the pre-change snapshot silently had no database dump.
+    local dbport port_arg=()
+    dbport="$(sed -n 's/^DB_PORT=//p' "$ENV_FILE")"; [ -n "$dbport" ] && port_arg=(-P "$dbport")
     # --set-gtid-purged=OFF: found via real execution against MySQL 8 (choco's
     # mysql package on the Windows path) - mysqldump failed outright with
     # "Couldn't execute 'FLUSH TABLES': Access denied; you need (at least one
@@ -631,8 +637,15 @@ backup_before_change() {
     # all ("unknown option"), which broke the previously-working MariaDB path
     # outright the first time this was added unconditionally.
     local gtid_flag=()
-    "$dump_bin" --help 2>/dev/null | grep -q -- '--set-gtid-purged' && gtid_flag=(--set-gtid-purged=OFF)
-    if "$dump_bin" -h "${host:-localhost}" -u "${user:-dcim}" "${pw_arg[@]}" --single-transaction "${gtid_flag[@]}" --routines --triggers "${name:-dcim}" 2>"$backup_dir/mysqldump.err" | gzip > "$backup_dir/database.sql.gz"; then
+    # Capture --help once: `... | grep -q` under pipefail can report failure when
+    # grep exits early and the client gets SIGPIPE, silently dropping the flag.
+    local dump_help; dump_help="$("$dump_bin" --help 2>/dev/null || true)"
+    case "$dump_help" in *--set-gtid-purged*) gtid_flag=(--set-gtid-purged=OFF) ;; esac
+    # MySQL 8's mysqldump queries information_schema.COLUMN_STATISTICS, which
+    # MariaDB servers (including the bundled embedded DB) do not have - the dump
+    # then aborts. Feature-detected: MariaDB's own client does not know the flag.
+    case "$dump_help" in *--column-statistics*) gtid_flag+=(--column-statistics=0) ;; esac
+    if "$dump_bin" -h "${host:-localhost}" "${port_arg[@]}" -u "${user:-dcim}" "${pw_arg[@]}" --single-transaction "${gtid_flag[@]}" --routines --triggers "${name:-dcim}" 2>"$backup_dir/mysqldump.err" | gzip > "$backup_dir/database.sql.gz"; then
       log "Database snapshot saved to $backup_dir/database.sql.gz"
     else
       rm -f "$backup_dir/database.sql.gz"

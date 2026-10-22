@@ -65,7 +65,9 @@ if (fs.existsSync(sqlPath)) {
       if (m) envMap[m[1]] = m[2];
     }
     log(`Restoring database '${envMap.DB_NAME}' ...`);
-    const dbArgs = ['-h', envMap.DB_HOST, '-u', envMap.DB_USER];
+    const dbArgs = ['-h', envMap.DB_HOST];
+    if (envMap.DB_PORT) dbArgs.push('-P', envMap.DB_PORT); // embedded DB is not on 3306
+    dbArgs.push('-u', envMap.DB_USER);
     if (envMap.DB_PASSWORD) dbArgs.push(`-p${envMap.DB_PASSWORD}`);
     dbArgs.push(envMap.DB_NAME);
     const sqlBytes = fs.readFileSync(sqlPath);
