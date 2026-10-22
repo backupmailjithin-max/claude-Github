@@ -552,7 +552,10 @@ function grantServiceLogonRight(accountName) {
   const tmp = path.join(os.tmpdir(), `dcim-secpol-${process.pid}.inf`);
   const db = path.join(os.tmpdir(), `dcim-secpol-${process.pid}.sdb`);
   runOrDie('secedit', ['/export', '/cfg', tmp, '/areas', 'USER_RIGHTS'], 'secedit /export (reading current local security policy)');
-  let cfg = fs.readFileSync(tmp, 'utf8');
+  // secedit writes its .inf as UTF-16LE (with a BOM), not UTF-8/ASCII - reading it as 'utf8' would
+  // misinterpret every other byte as a null and corrupt every regex match/replace below, and writing
+  // the result back as 'utf8' would then give secedit /configure a file it (at best) rejects outright.
+  let cfg = fs.readFileSync(tmp, 'utf16le');
   const sidRes = spawnSync('powershell', ['-NoProfile', '-Command', `(New-Object System.Security.Principal.NTAccount('${accountName}')).Translate([System.Security.Principal.SecurityIdentifier]).Value`], { encoding: 'utf8' });
   const sid = sidRes.status === 0 ? sidRes.stdout.trim() : null;
   if (!sid) die(`could not resolve the SID of local account '${accountName}' (needed to grant it the "log on as a service" right).`);
@@ -570,7 +573,7 @@ function grantServiceLogonRight(accountName) {
   grant('SeDenyInteractiveLogonRight');
   grant('SeDenyNetworkLogonRight');
   grant('SeDenyRemoteInteractiveLogonRight');
-  fs.writeFileSync(tmp, cfg, 'utf8');
+  fs.writeFileSync(tmp, cfg, 'utf16le');
   runOrDie('secedit', ['/configure', '/db', db, '/cfg', tmp, '/areas', 'USER_RIGHTS'], 'secedit /configure (granting "log on as a service")');
   try { fs.unlinkSync(tmp); fs.unlinkSync(db); } catch { /* best effort cleanup */ }
 }
@@ -595,12 +598,20 @@ function applyServiceAccountAcls(accountName, appDir) {
   runOrDie('icacls', [appDir, '/grant', `${accountName}:(OI)(CI)(RX,AD,WD)`], `granting '${accountName}' access to ${appDir}`);
   // AD/WD (add subdirectory/write data, i.e. create+write files) covers uploads/backups/logs/.env/license.lic/
   // .trial-state/.license-clock living directly under webapp/, without granting Modify on the code paths below.
+  // (OI)(CI) (object-inherit/container-inherit) are DIRECTORY-only inheritance flags - icacls rejects them on a
+  // plain file target ("The parameter is incorrect"), which would otherwise make every one of the several
+  // file-level denies below (server.js, package.json, integrity.manifest.json, the HTML entry points, ...)
+  // silently fail. Pick the right ACE form per target instead of assuming every protected name is a directory.
+  let locked = 0, failed = [];
   for (const name of CODE_READONLY_NAMES) {
     const p = path.join(appDir, name);
-    if (!fs.existsSync(p)) continue;
-    spawnSync('icacls', [p, '/deny', `${accountName}:(OI)(CI)(WD,AD,WA,DE,DC)`], { encoding: 'utf8' });
+    let st; try { st = fs.statSync(p); } catch { continue; }
+    const ace = st.isDirectory() ? `${accountName}:(OI)(CI)(WD,AD,WA,DE,DC)` : `${accountName}:(WD,AD,WA,DE,DC)`;
+    const res = spawnSync('icacls', [p, '/deny', ace], { encoding: 'utf8' });
+    if (res.status === 0) locked++; else failed.push(name);
   }
-  log(`Applied read-only-code ACLs for '${accountName}' on ${appDir} (${CODE_READONLY_NAMES.filter((n) => fs.existsSync(path.join(appDir, n))).length} paths locked).`);
+  if (failed.length) log(`WARNING: could not apply the read-only-code deny ACL to: ${failed.join(', ')} - these paths may remain writable by '${accountName}'. Check manually with: icacls "${appDir}\\<name>"`);
+  log(`Applied read-only-code ACLs for '${accountName}' on ${appDir} (${locked} paths locked${failed.length ? `, ${failed.length} failed` : ''}).`);
 }
 
 function installWindowsService(opts, paths) {
