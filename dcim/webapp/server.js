@@ -1107,6 +1107,13 @@ async function initDB() {
     // which can exceed 20 chars and fail with "Data too long for column 'id'".
     try { await conn.query('ALTER TABLE assets MODIFY id VARCHAR(50)'); } catch (e) { /* already migrated */ }
     try { await conn.query('ALTER TABLE issues MODIFY id VARCHAR(50)'); } catch (e) { /* already migrated */ }
+
+    // ---- Issue Tracker: Cancelled status ----
+    // A cancelled issue is a terminal, closed state distinct from "Completed" -
+    // it never went through repair, it was called off (duplicate, mis-reported,
+    // no longer applicable, etc.) and always needs a short reason on record.
+    try { await conn.query('ALTER TABLE issues ADD COLUMN cancelled_date DATETIME NULL'); } catch (e) { /* already exists */ }
+    try { await conn.query('ALTER TABLE issues ADD COLUMN cancel_reason TEXT NULL'); } catch (e) { /* already exists */ }
     try { await conn.query('ALTER TABLE dc_activities MODIFY id VARCHAR(50)'); } catch (e) { /* already migrated */ }
     try { await conn.query('ALTER TABLE material_movements MODIFY id VARCHAR(50)'); } catch (e) { /* already migrated */ }
     try { await conn.query('ALTER TABLE locations MODIFY id VARCHAR(50)'); } catch (e) { /* already migrated */ }
@@ -1715,7 +1722,7 @@ async function syncIssuesForAsset(conn, oldSerial, a) {
   if (a.serial && a.serial !== oldSerial) await conn.query('UPDATE issues SET asset_id = ? WHERE asset_id = ?', [a.serial, oldSerial]);
   const key = a.serial || oldSerial;
   await conn.query(
-    'UPDATE issues SET site = ?, zone = ?, rack_no = ?, u_position = ? WHERE asset_id = ? AND completed_date IS NULL',
+    'UPDATE issues SET site = ?, zone = ?, rack_no = ?, u_position = ? WHERE asset_id = ? AND completed_date IS NULL AND cancelled_date IS NULL',
     [a.site, a.zone || 'AZ-1', a.rackNo || null, a.position || null, key]
   );
 }
@@ -1826,7 +1833,7 @@ async function normalizeAllUFormat(conn) {
     const nf = normalizeUFormat(r.position, r.height);
     if (!nf.changed) continue;
     await conn.query('UPDATE assets SET position = ?, height = ? WHERE id = ?', [nf.position, nf.height, r.id]);
-    if (r.serial_number) await conn.query('UPDATE issues SET u_position = ? WHERE asset_id = ? AND completed_date IS NULL', [nf.position, r.serial_number]);
+    if (r.serial_number) await conn.query('UPDATE issues SET u_position = ? WHERE asset_id = ? AND completed_date IS NULL AND cancelled_date IS NULL', [nf.position, r.serial_number]);
     fixedU++;
   }
   return fixedU;
@@ -2116,7 +2123,7 @@ async function assertSiteAccess(user, site) {const allowed = await getAllowedSit
   return allowed;
 }
 
-const ISSUE_DATE_FIELDS = ['reportedDate', 'diagnosedDate', 'receivedDate', 'scheduledDate', 'completedDate', 'movedToStoreDate', 'returnedToOemDate'];
+const ISSUE_DATE_FIELDS = ['reportedDate', 'diagnosedDate', 'receivedDate', 'scheduledDate', 'completedDate', 'movedToStoreDate', 'returnedToOemDate', 'cancelledDate'];
 
 // Auth middleware
 // PERF: the dashboard fires several API calls in parallel per page load, and
@@ -5409,7 +5416,7 @@ app.delete('/api/assets/:id', authenticateToken, requireRole(['Admin','Operator'
     const [[{ movementCount }]] = await pool.query('SELECT COUNT(*) AS movementCount FROM asset_movements WHERE asset_id = ?', [req.params.id]);
     if (Number(movementCount) > 0) return res.status(409).json({ error: 'This asset has lifecycle history and cannot be permanently deleted. Use Decommission / Archive instead.' });
     if (rows[0].serial_number) {
-      const [[{ cnt }]] = await pool.query('SELECT COUNT(*) AS cnt FROM issues WHERE asset_id = ? AND completed_date IS NULL', [rows[0].serial_number]);
+      const [[{ cnt }]] = await pool.query('SELECT COUNT(*) AS cnt FROM issues WHERE asset_id = ? AND completed_date IS NULL AND cancelled_date IS NULL', [rows[0].serial_number]);
       if (cnt > 0) return res.status(409).json({ error: `This asset still has ${cnt} open issue(s). Close or delete them in the Issue Tracker first.` });
     }
     await pool.query('DELETE FROM assets WHERE id = ?', [req.params.id]);
@@ -5775,7 +5782,7 @@ app.post('/api/assets/bulk-upsert', authenticateToken, requireRole(['Admin','Ope
         col === 'site' ? r.site : col === 'zone' ? (r.zone || 'AZ-1') : col === 'rack_no' ? (r.rackNo || null) : (r.position || null),
       ]));
       await conn.query(
-        `UPDATE issues SET ${caseSql} WHERE asset_id IN (?) AND completed_date IS NULL`,
+        `UPDATE issues SET ${caseSql} WHERE asset_id IN (?) AND completed_date IS NULL AND cancelled_date IS NULL`,
         [...caseParams, openIssueRefresh.map((r) => r.serial)]
       );
     }
@@ -6214,7 +6221,8 @@ app.get('/api/issues', authenticateToken, async (req, res) => {
       description: r.description, severity: r.severity, partRequired: !!r.part_required, partName: r.part_name,
       reportedDate: toDateTimeStr(r.reported_date), diagnosedDate: toDateTimeStr(r.diagnosed_date), receivedDate: toDateTimeStr(r.received_date),
       scheduledDate: toDateTimeStr(r.scheduled_date), completedDate: toDateTimeStr(r.completed_date),
-      movedToStoreDate: toDateTimeStr(r.moved_to_store_date), returnedToOemDate: toDateTimeStr(r.returned_to_oem_date), notes: r.notes
+      movedToStoreDate: toDateTimeStr(r.moved_to_store_date), returnedToOemDate: toDateTimeStr(r.returned_to_oem_date), notes: r.notes,
+      cancelledDate: toDateTimeStr(r.cancelled_date), cancelReason: r.cancel_reason
     }));
     res.json(mapped);
   } catch (e) {
@@ -6241,6 +6249,9 @@ app.post('/api/issues', authenticateToken, requireRole(['Admin','Operator']), as
     await assertSiteAccess(req.user, i.site);
     if (!i.title || !String(i.title).trim()) return res.status(400).json({ error: 'Issue title is required' });
     i.severity = normalizeSeverity(i.severity);
+    if (i.cancelledDate && !(i.cancelReason && String(i.cancelReason).trim())) {
+      return res.status(400).json({ error: 'A reason is required to cancel an issue.' });
+    }
 
     await applyIssueAssetLink(i);
     releaseTicketLock = await acquireTicketLock();
@@ -6257,9 +6268,9 @@ app.post('/api/issues', authenticateToken, requireRole(['Admin','Operator']), as
     const assetId = (i.assetId && String(i.assetId).trim() !== '') ? String(i.assetId).trim() : null;
     const id = genId('INC');
     await pool.query(
-      `INSERT INTO issues (id, ticket_no, asset_id, asset_type, site, zone, rack_no, u_position, location_detail, title, description, severity, part_required, part_name, reported_date, diagnosed_date, received_date, scheduled_date, completed_date, moved_to_store_date, returned_to_oem_date, notes)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [id, i.ticketNo, assetId, i.assetType, i.site, i.zone || 'AZ-1', i.rackNo, i.uPosition, i.locationDetail, i.title, i.description, i.severity, i.partRequired, i.partName, i.reportedDate, i.diagnosedDate, i.receivedDate, i.scheduledDate, i.completedDate, i.movedToStoreDate, i.returnedToOemDate, i.notes]
+      `INSERT INTO issues (id, ticket_no, asset_id, asset_type, site, zone, rack_no, u_position, location_detail, title, description, severity, part_required, part_name, reported_date, diagnosed_date, received_date, scheduled_date, completed_date, moved_to_store_date, returned_to_oem_date, notes, cancelled_date, cancel_reason)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [id, i.ticketNo, assetId, i.assetType, i.site, i.zone || 'AZ-1', i.rackNo, i.uPosition, i.locationDetail, i.title, i.description, i.severity, i.partRequired, i.partName, i.reportedDate, i.diagnosedDate, i.receivedDate, i.scheduledDate, i.completedDate, i.movedToStoreDate, i.returnedToOemDate, i.notes, i.cancelledDate, i.cancelReason]
     );
     res.json({ id, ...i, assetId: assetId });
   } catch (e) {
@@ -6278,12 +6289,15 @@ app.patch('/api/issues/:id', authenticateToken, requireRole(['Admin','Operator']
     await assertSiteAccess(req.user, i.site);
     if (!i.title || !String(i.title).trim()) return res.status(400).json({ error: 'Issue title is required' });
     i.severity = normalizeSeverity(i.severity);
+    if (i.cancelledDate && !(i.cancelReason && String(i.cancelReason).trim())) {
+      return res.status(400).json({ error: 'A reason is required to cancel an issue.' });
+    }
     const keepExistingLink = i.site === existingRows[0].site && String(i.assetId || '').trim() === String(existingRows[0].asset_id || '').trim();
     await applyIssueAssetLink(i, { keepExistingLink });
 
     await pool.query(
-      `UPDATE issues SET ticket_no=?, asset_id=?, asset_type=?, site=?, zone=?, rack_no=?, u_position=?, location_detail=?, title=?, description=?, severity=?, part_required=?, part_name=?, reported_date=?, diagnosed_date=?, received_date=?, scheduled_date=?, completed_date=?, moved_to_store_date=?, returned_to_oem_date=?, notes=? WHERE id=?`,
-      [i.ticketNo, i.assetId, i.assetType, i.site, i.zone, i.rackNo, i.uPosition, i.locationDetail, i.title, i.description, i.severity, i.partRequired, i.partName, i.reportedDate, i.diagnosedDate, i.receivedDate, i.scheduledDate, i.completedDate, i.movedToStoreDate, i.returnedToOemDate, i.notes, req.params.id]
+      `UPDATE issues SET ticket_no=?, asset_id=?, asset_type=?, site=?, zone=?, rack_no=?, u_position=?, location_detail=?, title=?, description=?, severity=?, part_required=?, part_name=?, reported_date=?, diagnosed_date=?, received_date=?, scheduled_date=?, completed_date=?, moved_to_store_date=?, returned_to_oem_date=?, notes=?, cancelled_date=?, cancel_reason=? WHERE id=?`,
+      [i.ticketNo, i.assetId, i.assetType, i.site, i.zone, i.rackNo, i.uPosition, i.locationDetail, i.title, i.description, i.severity, i.partRequired, i.partName, i.reportedDate, i.diagnosedDate, i.receivedDate, i.scheduledDate, i.completedDate, i.movedToStoreDate, i.returnedToOemDate, i.notes, i.cancelledDate, i.cancelReason, req.params.id]
     );
     res.json({ success: true });
   } catch (e) {
@@ -7313,7 +7327,7 @@ app.post('/api/racks/move', authenticateToken, requireRole(['Admin']), async (re
       if (!sameSpot) {
         // Issues keep a copy of zone / rack no. - keep the open ones pointing at the rack's new name.
         await conn.query(
-          'UPDATE issues SET zone = ?, rack_no = ? WHERE site = ? AND zone = ? AND UPPER(TRIM(rack_no)) = UPPER(TRIM(?)) AND completed_date IS NULL',
+          'UPDATE issues SET zone = ?, rack_no = ? WHERE site = ? AND zone = ? AND UPPER(TRIM(rack_no)) = UPPER(TRIM(?)) AND completed_date IS NULL AND cancelled_date IS NULL',
           [targetZone, targetRackNo, site, zone, rackNo]
         );
         // Floor View positions are keyed by rack number: carry the tile position across a rename in the

@@ -1217,6 +1217,10 @@ function fmtDateTimeVal(v) {
 }
 const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000);
 function getStatus(issue) {
+    // Cancellation is a terminal override: once an issue has been called off,
+    // that's its status regardless of how far the repair pipeline had gotten.
+    if (issue.cancelledDate)
+        return { label: "Cancelled", color: "#6B7280", cls: "neu-badge--gray" };
     if (issue.partRequired && issue.returnedToOemDate)
         return { label: "Returned to OEM", color: "#7C3AED", cls: "neu-badge--purple" };
     if (issue.partRequired && issue.movedToStoreDate)
@@ -1240,7 +1244,7 @@ function getStatus(issue) {
 // DC Capacity critical-rack markers and the Report. An issue is CLOSED once the
 // replacement/repair is completed - including the post-completion faulty-part
 // logistics stages (in store / returned to OEM).
-const CLOSED_ISSUE_LABELS = ["Completed", "Faulty part in store", "Returned to OEM"];
+const CLOSED_ISSUE_LABELS = ["Completed", "Faulty part in store", "Returned to OEM", "Cancelled"];
 const isIssueOpen = (i) => !CLOSED_ISSUE_LABELS.includes(getStatus(i).label);
 const ISSUE_GRID_COLS = "28px 30px 40px minmax(100px,0.8fr) minmax(70px,0.5fr) minmax(130px,1fr) minmax(180px,1.7fr) 128px minmax(120px,0.9fr) 150px 150px minmax(110px,0.8fr) 118px 24px";
 const ISSUE_GRID_MIN = 1560;
@@ -2275,6 +2279,21 @@ function IssueRow({ issue, index, onUpdate, onDelete, expanded, onToggle, canEdi
     const handleSave = async (e) => { e && e.stopPropagation(); const ok = await onUpdate(draft); if (ok !== false)
     onToggle(); }; // keep the row open (and the typed edits) when the server rejected the save
     const handleCancel = (e) => { e && e.stopPropagation(); setDraft(issue); onToggle(); };
+    // ===== Cancel issue (any status, admin/operator) - requires a short reason =====
+    const [showCancelPanel, setShowCancelPanel] = useState(false);
+    const [cancelReasonDraft, setCancelReasonDraft] = useState("");
+    const handleCancelIssue = async (e) => {
+        e && e.stopPropagation();
+        const reason = cancelReasonDraft.trim();
+        if (!reason) return;
+        const updated = { ...draft, cancelledDate: nowDateTimeStr(), cancelReason: reason };
+        const ok = await onUpdate(updated);
+        if (ok !== false) {
+            setShowCancelPanel(false);
+            setCancelReasonDraft("");
+            onToggle();
+        }
+    };
     return React.createElement("div", { style: { borderBottom: "0.5px solid rgba(163,177,198,0.3)", transition: "background 0.2s" } },
         React.createElement("div", { onClick: onToggle, className: selectedIds.has(issue.id) ? "selected-row" : "", style: { display: "grid", gridTemplateColumns: ISSUE_GRID_COLS, gap: 12, alignItems: "center", justifyItems: "start", minWidth: ISSUE_GRID_MIN, padding: "14px 18px", cursor: "pointer", background: selectedIds.has(issue.id) ? undefined : (expanded ? "rgba(241,245,249,0.8)" : "transparent"), borderRadius: expanded ? 0 : 0 } },
             React.createElement("div", { onClick: (e) => e.stopPropagation() },
@@ -2353,6 +2372,17 @@ function IssueRow({ issue, index, onUpdate, onDelete, expanded, onToggle, canEdi
                             draft.movedToStoreDate && React.createElement("div", { style: { display: "grid", gridTemplateColumns: draft.returnedToOemDate ? "1fr 1fr" : "1fr", gap: 12, marginTop: 4 } },
                                 React.createElement(DateField, { label: "Moved to store on", value: draft.movedToStoreDate, onChange: (v) => setField("movedToStoreDate", v), mode: "datetime" }),
                                 draft.returnedToOemDate && React.createElement(DateField, { label: "Returned to OEM on", value: draft.returnedToOemDate, onChange: (v) => setField("returnedToOemDate", v), mode: "datetime" }))),
+                        draft.cancelledDate && React.createElement("div", { className: "neu-pressed", style: { marginTop: 16, padding: "14px 16px", borderRadius: 14 } },
+                            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#6B7280", fontWeight: 700, marginBottom: 6, display: "flex", alignItems: "center", gap: 6 } },
+                                React.createElement(X, { s: 14, c: "#6B7280" }),
+                                " Cancelled " + (fmtDateTime(draft.cancelledDate) || "")),
+                            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#475569" } }, "Reason: " + (draft.cancelReason || "—"))),
+                        showCancelPanel && !draft.cancelledDate && React.createElement("div", { className: "neu-pressed", style: { marginTop: 16, padding: "14px 16px", borderRadius: 14 } },
+                            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#DC2626", fontWeight: 600, marginBottom: 10 } }, "Cancel this issue - a reason is required"),
+                            React.createElement("textarea", { value: cancelReasonDraft, onChange: (e) => setCancelReasonDraft(e.target.value), placeholder: "Why is this issue being cancelled? (e.g. duplicate ticket, mis-reported, no longer applicable)", rows: 2, className: "neu-input", style: { fontSize: 12, padding: "10px 12px", resize: "vertical", width: "100%" }, onClick: (e) => e.stopPropagation() }),
+                            React.createElement("div", { style: { display: "flex", gap: 10, marginTop: 10 } },
+                                React.createElement("button", { onClick: handleCancelIssue, disabled: !cancelReasonDraft.trim(), className: "neu-btn-primary", style: { fontSize: 12.5, padding: "8px 16px", background: "linear-gradient(135deg,#6B7280 0,#4B5563 100%)", opacity: cancelReasonDraft.trim() ? 1 : 0.5, cursor: cancelReasonDraft.trim() ? "pointer" : "not-allowed" } }, "Confirm cancellation"),
+                                React.createElement("button", { onClick: (e) => { e.stopPropagation(); setShowCancelPanel(false); setCancelReasonDraft(""); }, className: "neu-btn-secondary", style: { fontSize: 12.5, padding: "8px 16px" } }, "Back"))),
                         React.createElement("div", { style: { display: "flex", gap: 12, marginTop: 20, flexWrap: "wrap" } },
                             React.createElement("button", { onClick: (e) => { e.stopPropagation(); handleSave(e); }, className: "neu-btn-primary", style: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, padding: "10px 18px" } },
                                 React.createElement(CheckCircle2, { s: 14 }),
@@ -2360,6 +2390,9 @@ function IssueRow({ issue, index, onUpdate, onDelete, expanded, onToggle, canEdi
                             React.createElement("button", { onClick: (e) => { e.stopPropagation(); handleCancel(e); }, className: "neu-btn-secondary", style: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, padding: "10px 18px" } },
                                 React.createElement(X, { s: 14 }),
                                 " Cancel"),
+                            !draft.cancelledDate && React.createElement("button", { onClick: (e) => { e.stopPropagation(); setShowCancelPanel(true); }, className: "neu-btn-secondary", style: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, padding: "10px 18px", color: "#6B7280" } },
+                                React.createElement(X, { s: 14 }),
+                                " Cancel issue"),
                             React.createElement("button", { onClick: (e) => { e.stopPropagation(); onDelete(issue.id); }, className: "neu-btn-secondary", style: { marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, fontSize: 13, padding: "8px 14px", color: "#DC2626" } },
                                 React.createElement(Trash2, { s: 13 }),
                                 " Remove"))),
@@ -12199,7 +12232,11 @@ function ReportModal({ assets, issues = [], activities, movements = [], onClose 
     const byHw = groupByHardwareType(assets);
     const total = assets.length;
     const openIssues = issues.filter(isIssueOpen);
-    const completedIssues = issues.length - openIssues.length;
+    // Narrow to the literal "Completed" status only - cancelled issues (and the
+    // faulty-part-logistics closed states) are closed too but must never be
+    // counted as "Completed" in the report.
+    const completedIssues = issues.filter(i => getStatus(i).label === "Completed").length;
+    const cancelledIssues = issues.filter(i => getStatus(i).label === "Cancelled").length;
     const criticalOpen = openIssues.filter(i => i.severity === "critical").length;
     const warningOpen = openIssues.filter(i => i.severity === "warning").length;
     const infoOpen = openIssues.filter(i => i.severity === "info").length;
@@ -12373,7 +12410,7 @@ td{padding:8px 10px;border-bottom:1px solid #1E293B;color:#E2E8F0}
 <div class="two-col">
   <div class="card"><div class="chart-title">Open Issues by Severity</div>
     ${issueSeverityEntries.map(([k, v], i) => `<div class="bar-wrap"><div class="bar-label">${k}</div><div class="bar-track"><div class="bar-fill" style="width:${Math.round(v / maxIssueSeverity * 100)}%;background:${["#EF4444", "#F59E0B", "#06B6D4"][i]}">${v}</div></div></div>`).join("")}
-    <div style="margin-top:12px;color:#94A3B8;font-size:11px">Total issues: ${issues.length} · Completed: ${completedIssues}</div>
+    <div style="margin-top:12px;color:#94A3B8;font-size:11px">Total issues: ${issues.length} · Completed: ${completedIssues} · Cancelled: ${cancelledIssues}</div>
   </div>
   <div class="card"><div class="chart-title">Activity Trend by Month</div>
     ${activityMonthEntries.length ? activityMonthEntries.map(([k, v], i) => `<div class="bar-wrap"><div class="bar-label">${esc(k)}</div><div class="bar-track"><div class="bar-fill" style="width:${Math.round(v / maxActivityMonth * 100)}%;background:${colors[i % colors.length]}">${v}</div></div></div>`).join("") : `<div style="color:#64748B;font-size:12px">No dated activity records available.</div>`}
@@ -12527,7 +12564,9 @@ td{padding:8px 10px;border-bottom:1px solid #1E293B;color:#E2E8F0}
                         "Total issues: ",
                         issues.length,
                         " \u00B7 Completed: ",
-                        completedIssues)),
+                        completedIssues,
+                        " \u00B7 Cancelled: ",
+                        cancelledIssues)),
                 React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 18, border: "1px solid #334155" } },
                     React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 14, fontWeight: 700, marginBottom: 14, color: "#fff" } }, "Activity Trend by Month"),
                     activityMonthEntries.length ? bar(activityMonthEntries, maxActivityMonth, 6, 100) : React.createElement("div", { style: { fontSize: 11, color: "#64748B" } }, "No dated activity records available."))),
@@ -15041,7 +15080,7 @@ function DataCenterDashboard() {
         const iv = setInterval(poll, 5 * 60 * 1000);
         return () => { dead = true; clearInterval(iv); };
     }, [currentUser && currentUser.id, currentUser && currentUser.mustChangePassword]);
-    const statusOptions = ["all", "Active", "Open", "In progress", "Awaiting part", "Part received", "Scheduled", "Overdue", "Completed", "Faulty part in store", "Returned to OEM", "Closed"];
+    const statusOptions = ["all", "Active", "Open", "In progress", "Awaiting part", "Part received", "Scheduled", "Overdue", "Completed", "Faulty part in store", "Returned to OEM", "Cancelled", "Closed"];
     const isGlobalAdmin = !!isAdmin && !!currentUser && (currentUser.location_access === "All" || currentUser.location_access === "Both");
     if (!currentUser)
         return React.createElement(LoginScreen, { onLogin: handleLogin, error: loginError, loading: loginLoading, orgBrand });
@@ -15139,9 +15178,9 @@ function DataCenterDashboard() {
                 React.createElement("div", { className: "neu-card anim-in d5 issue-kpi-card", style: { padding: "14px 15px", background: "linear-gradient(135deg, #FFFFFF 0%, #D1FAE5 100%)", cursor: "pointer" }, onClick: () => { setSearch(""); setStatusFilter("Closed"); setSeverityFilter("all"); setSiteFilter("all"); } },
                     React.createElement("div", { className: "floating-icon compact-module-icon green", style: { width: 32, height: 32, borderRadius: 10, marginBottom: 12, background: "#E4F9F0", boxShadow: "inset 2px 2px 4px rgba(255,255,255,.7), 0 6px 13px rgba(5,150,105,.20)" } },
                         React.createElement(CheckCircle2, { s: 16, c: "#059669" })),
-                    React.createElement("div", { style: { fontSize: 12, color: "#065F46", fontWeight: 600, marginBottom: 6 } }, "Total Completed"),
+                    React.createElement("div", { style: { fontSize: 12, color: "#065F46", fontWeight: 600, marginBottom: 6 } }, "Total Closed"),
                     React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 30, fontWeight: 800, color: "#047857" } }, overallStats.completed30),
-                    React.createElement("div", { style: { fontFamily: "'JetBrains Mono'", fontSize: 11, color: "#64748B", marginTop: 6 } }, "closed out")),
+                    React.createElement("div", { style: { fontFamily: "'JetBrains Mono'", fontSize: 11, color: "#64748B", marginTop: 6 } }, "completed, in-store, returned or cancelled")),
                 React.createElement("div", { className: "neu-card anim-in d6 issue-kpi-card", style: { padding: "14px 15px", background: "linear-gradient(135deg, #FFFFFF 0%, #E0F2FE 100%)", cursor: "pointer" }, onClick: () => { setSearch(""); setStatusFilter("Active"); setSeverityFilter("all"); setSiteFilter("all"); }, title: "Distinct assets (by serial number) with at least one open issue" },
                     React.createElement("div", { className: "floating-icon compact-module-icon", style: { width: 32, height: 32, borderRadius: 10, marginBottom: 12, background: "#E0F2FE", boxShadow: "inset 2px 2px 4px rgba(255,255,255,.7), 0 6px 13px rgba(2,132,199,.20)" } },
                         React.createElement(Server, { s: 16, c: "#0284C7" })),
