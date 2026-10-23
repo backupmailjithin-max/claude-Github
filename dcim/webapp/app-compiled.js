@@ -8532,7 +8532,15 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
         setGLoad(null);
         runGlobalSearch(gq.trim());
     };
-    const openZoneFromSearch = (site, zone) => { setGq(""); setTab("status"); loadZone(site, zone); };
+    const openZoneFromSearch = async (result) => {
+        setGq("");
+        setTab("status");
+        await loadZone(result.site, result.zone);
+        const key = result.id != null ? String(result.id) : (result.uri || null);
+        if (!key) return; // older cached search result with no id/uri - nothing to select
+        if (result.vendor === "Dell OME") setSelOme(new Set([key]));
+        else if (result.vendor === "HPE OneView") setSelOv(new Set([key]));
+    };
     const loadZoneSeqRef = useRef(0);
     const loadZone = async (site, zone, forceRefresh = false) => {
         const mySeq = ++loadZoneSeqRef.current; // a slower answer for a previously clicked zone must never overwrite the zone now selected
@@ -8702,7 +8710,7 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
                         React.createElement("div", { style: { overflowX: "auto", border: "1px solid rgba(163,177,198,0.25)", borderRadius: 10 } },
                             React.createElement("table", { style: { borderCollapse: "collapse", width: "100%", minWidth: 900 } },
                                 React.createElement("thead", null, React.createElement("tr", null, ["Zone", "Vendor", "Name", "Model", "Serial", "Health", "Power", "IP", "System BIOS", "Last synced"].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "7px 9px", background: "#F8FAFC", fontFamily: "Inter", fontSize: 10.5, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: .4, whiteSpace: "nowrap" } }, h)))),
-                                React.createElement("tbody", null, gRes.results.map((r, i) => React.createElement("tr", { key: i, "data-mon-result": r.serialNumber || r.name, onClick: () => openZoneFromSearch(r.site, r.zone), title: "Open " + r.site + " \u00B7 " + r.zone, style: { cursor: "pointer", borderTop: i ? "0.5px solid rgba(163,177,198,0.2)" : "none" } },
+                                React.createElement("tbody", null, gRes.results.map((r, i) => React.createElement("tr", { key: i, "data-mon-result": r.serialNumber || r.name, onClick: () => openZoneFromSearch(r), title: "Open " + r.site + " \u00B7 " + r.zone + " and select this server", style: { cursor: "pointer", borderTop: i ? "0.5px solid rgba(163,177,198,0.2)" : "none" } },
                                     React.createElement("td", { style: { padding: "7px 9px", fontFamily: "Inter", fontSize: 12, fontWeight: 700, color: "#4338CA", whiteSpace: "nowrap" } }, r.site, " \u00B7 ", r.zone),
                                     React.createElement("td", { style: { padding: "7px 9px", fontFamily: "Inter", fontSize: 11.5, color: "#475569", whiteSpace: "nowrap" } }, r.vendor),
                                     React.createElement("td", { style: { padding: "7px 9px", fontFamily: "Inter", fontSize: 12, fontWeight: 600, color: "#0F172A", whiteSpace: "nowrap" } }, r.name || "\u2014"),

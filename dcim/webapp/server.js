@@ -3026,7 +3026,7 @@ app.get('/api/monitoring/search', authenticateToken, async (req, res) => {
         for (const d of snap.devices || []) {
           if (![d.name, d.model, d.serialNumber, d.ipAddress].some((f) => norm(f).includes(q))) continue;
           total++;
-          if (results.length < LIMIT) results.push({ site: z.site, zone: z.zone, vendor: label, name: d.name || null, model: d.model || null, serialNumber: d.serialNumber || null, ipAddress: d.ipAddress || null, healthStatus: d.healthStatus || null, powerState: d.powerState || null, firmwareVersion: d.firmwareVersion || null, fetchedAt: snap.fetchedAt });
+          if (results.length < LIMIT) results.push({ site: z.site, zone: z.zone, vendor: label, id: d.id != null ? d.id : null, uri: d.uri || null, name: d.name || null, model: d.model || null, serialNumber: d.serialNumber || null, ipAddress: d.ipAddress || null, healthStatus: d.healthStatus || null, powerState: d.powerState || null, firmwareVersion: d.firmwareVersion || null, fetchedAt: snap.fetchedAt });
         }
       }
     }
