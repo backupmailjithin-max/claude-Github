@@ -3887,17 +3887,6 @@ app.post('/api/monitoring/firmware/apply', authenticateToken, requireRole(['Admi
       Object.assign(res.locals.auditExtra, { jobRef: String(r.jobRef || '').slice(0, 500), submitted: toSubmit.length - ((r.failed && r.failed.length) || 0), failedToSubmit: (r.failed && r.failed.length) || 0, skippedBusy: skipped.length,
         ...(r.failed && r.failed.length ? { failedDetail: r.failed.slice(0, 20).map((f) => ({ id: f.uri, error: String(f.error).slice(0, 160) })) } : {}) });
 
-      // Audit trail — this is a privileged action against production hardware.
-      await pool.query(
-        `INSERT INTO dc_activities (id, site, zone, hardware_type, activity_type, description, start_date, completion_date, created_by)
-         VALUES (?,?,?,?,?,?,?,?,?)`,
-        [genId('ACT'), site, zone, vendor === 'ome' ? 'DellServer' : 'HPServer', 'Firmware Update',
-         `Firmware update submitted via Monitoring for ${toSubmit.length} device(s) against ${baselineId} (job ref: ${r.jobRef || 'pending'})` +
-         (r.failed && r.failed.length ? ` — ${r.failed.length} of ${toSubmit.length} device(s) failed to submit and were not included` : '') +
-         (skipped.length ? ` — ${skipped.length} other device(s) in the original selection were skipped (already had an update in progress)` : ''),
-         normalizeDateInput(new Date()), null, user.name || user.username]
-      );
-
       try {
         const failedSet = new Set((r.failed || []).map((f) => String(f.uri)));
         const outSet = new Set([...(r.skippedUpToDate || []), ...(r.notInBaseline || [])].map(String));
