@@ -16,6 +16,11 @@ license-private-key*.pem
 *.lic
 dcim/webapp/license.lic
 
+# standalone license-generator build output (tools/Build-License-Generator-Exe.bat)
+# - built locally by a vendor, never meant to be committed or shipped to customers
+dcim/webapp/tools/sea-prep.blob
+dcim/webapp/tools/dcim-license-generator-v2*.exe
+
 # runtime output, not source - dcim/webapp/logs/.gitkeep keeps the folder
 dcim/webapp/logs/*.log
 

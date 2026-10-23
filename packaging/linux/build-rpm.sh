@@ -29,7 +29,9 @@ cp "$SCRIPT_DIR/nginx-dcim.conf" "$PAYLOAD/nginx-dcim.conf"
 chmod 755 "$PAYLOAD/install.sh" "$PAYLOAD/uninstall.sh" "$PAYLOAD/rollback.sh"
 
 cp -a "$REPO_ROOT/dcim/webapp" "$PAYLOAD/webapp"
-rm -f "$PAYLOAD"/webapp/tools/license-*.js "$PAYLOAD/webapp/tools/Run-License-Generator.bat" "$PAYLOAD/webapp/tools/LICENSE-ISSUE-TEMPLATE.txt"; rm -rf "$PAYLOAD/webapp/license.lic" "$PAYLOAD/webapp/.trial-state" "$PAYLOAD/webapp/.license-clock" "$PAYLOAD/webapp/.env" "$PAYLOAD/webapp/uploads" "$PAYLOAD/webapp/backups" "$PAYLOAD/webapp/logs"
+rm -f "$PAYLOAD"/webapp/tools/license-*.js "$PAYLOAD/webapp/tools/Run-License-Generator.bat" "$PAYLOAD/webapp/tools/LICENSE-ISSUE-TEMPLATE.txt" \
+      "$PAYLOAD/webapp/tools/Build-License-Generator-Exe.bat" "$PAYLOAD/webapp/tools/sea-config.json" "$PAYLOAD/webapp/tools/sea-prep.blob" \
+      "$PAYLOAD"/webapp/tools/dcim-license-generator-v2*.exe; rm -rf "$PAYLOAD/webapp/license.lic" "$PAYLOAD/webapp/.trial-state" "$PAYLOAD/webapp/.license-clock" "$PAYLOAD/webapp/.env" "$PAYLOAD/webapp/uploads" "$PAYLOAD/webapp/backups" "$PAYLOAD/webapp/logs"
 mkdir -p "$PAYLOAD/webapp/uploads" "$PAYLOAD/webapp/backups" "$PAYLOAD/webapp/logs"
 
 # Signed integrity manifest + build gate: FAILS the build on licence tools / signing material / private keys.

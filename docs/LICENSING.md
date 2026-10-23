@@ -96,7 +96,18 @@ The server remembers the latest time it has seen (signed, stored next to the tri
 
 ### What customer packages leave out
 
-The licence generator, key tool and issue template (`tools/license-*.js`, `Run-License-Generator.bat`, `LICENSE-ISSUE-TEMPLATE.txt`) are vendor-only and are not included in the Windows, deb or rpm packages.
+The licence generator, key tool and issue template (`tools/license-*.js`, `Run-License-Generator.bat`, `LICENSE-ISSUE-TEMPLATE.txt`) are vendor-only and are not included in the Windows, deb or rpm packages. The same applies to the standalone-executable build step (`tools/Build-License-Generator-Exe.bat`, `tools/sea-config.json`) and its output (`tools/dcim-license-generator-v2.exe`) - see "Generating a license remotely, without Node.js" below.
+
+### Generating a license remotely, without Node.js
+
+`tools/license-generator-wizard.js` needs Node.js on the machine that runs it. For a vendor who travels, or works from a machine where installing Node isn't practical, build it once into a single standalone `.exe` (Node's built-in "Single Executable Application" feature - no paid tools, no network access needed by the resulting file):
+
+1. On any Windows machine that **does** have Node.js installed, run `tools\Build-License-Generator-Exe.bat` once. It produces `tools\dcim-license-generator-v2.exe`.
+2. Copy that one `.exe` file anywhere - a USB drive, a laptop with no internet, a customer site. It needs nothing else installed to run, not even Node.js.
+3. `Run-License-Generator.bat` automatically prefers the `.exe` when present, so nothing about day-to-day use changes.
+4. Rebuild it only when `license-generator-wizard.js` itself changes.
+
+This `.exe` is exactly as powerful as the licence generator script it was built from - it can mint a valid license file with any private key it's pointed at. Treat it like the `.js` tool it replaces: **never** ship it, or the build script that makes it, to a customer. It is stripped from every package by the same build-gate and installer exclusions that strip `Run-License-Generator.bat` (see `packaging/appliance/build-appliance.sh`, `packaging/linux/build-deb.sh`, `packaging/linux/build-rpm.sh`, the Windows `.iss` scripts, and `packaging/tools/validate-package.js`).
 
 ## One-time setup (do this once, ever)
 

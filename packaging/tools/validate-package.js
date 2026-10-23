@@ -25,6 +25,10 @@ const root = path.resolve(args.root);
 const FORBIDDEN_NAMES = [
   [/^license-(keygen|issue|generator|fingerprint)/i, 'vendor licence tool'],
   [/^Run-License-Generator/i, 'vendor licence tool'],
+  [/^Build-License-Generator-Exe/i, 'vendor licence tool build script'],
+  [/^sea-config\.json$/i, 'vendor licence tool build config'],
+  [/^sea-prep\.blob$/i, 'vendor licence tool build artifact'],
+  [/^dcim-license-generator-v2.*\.exe$/i, 'vendor licence tool (standalone build)'],
   [/^LICENSE-ISSUE-TEMPLATE/i, 'vendor licence template'],
   [/^license\.lic$/i, 'an installed licence'],
   [/^\.trial-state$/, 'per-install trial state'],

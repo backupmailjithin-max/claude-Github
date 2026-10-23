@@ -42,8 +42,10 @@ rm -rf "$PAYLOAD/webapp/.env" "$PAYLOAD/webapp/uploads" "$PAYLOAD/webapp/backups
 # Vendor-only licence tooling (keypair generator, issuer, wizard, template) must never ship to customers,
 # and no developer licence/trial state may leak into the package.
 rm -f "$PAYLOAD"/webapp/tools/license-*.js "$PAYLOAD/webapp/tools/Run-License-Generator.bat" "$PAYLOAD/webapp/tools/LICENSE-ISSUE-TEMPLATE.txt" \
+      "$PAYLOAD/webapp/tools/Build-License-Generator-Exe.bat" "$PAYLOAD/webapp/tools/sea-config.json" "$PAYLOAD/webapp/tools/sea-prep.blob" \
+      "$PAYLOAD"/webapp/tools/dcim-license-generator-v2*.exe \
       "$PAYLOAD/webapp/license.lic" "$PAYLOAD/webapp/.trial-state" "$PAYLOAD/webapp/.license-clock"
-if find "$PAYLOAD/webapp" \( -name 'license-keygen*' -o -name 'license-issue*' -o -name 'license-generator*' -o -name 'license-fingerprint*' -o -name 'Run-License-Generator*' -o -name 'LICENSE-ISSUE-TEMPLATE*' \) | grep -q .; then
+if find "$PAYLOAD/webapp" \( -name 'license-keygen*' -o -name 'license-issue*' -o -name 'license-generator*' -o -name 'license-fingerprint*' -o -name 'Run-License-Generator*' -o -name 'LICENSE-ISSUE-TEMPLATE*' -o -name 'Build-License-Generator-Exe*' -o -name 'sea-config.json' -o -name 'sea-prep.blob' -o -name 'dcim-license-generator-v2*' \) | grep -q .; then
   echo "ERROR: vendor licence tooling is still present in the appliance payload." >&2; exit 1
 fi
 mkdir -p "$PAYLOAD/webapp/uploads" "$PAYLOAD/webapp/backups" "$PAYLOAD/webapp/logs"
