@@ -1,0 +1,59 @@
+name: Software backup to release
+
+# One-off utility: snapshots the repo at a given ref as a zip (git archive,
+# built entirely on GitHub's own infrastructure - no local file transfer
+# needed) and publishes it as a dated GitHub Release asset, served from
+# objects.githubusercontent.com (reachable from more network environments
+# than the Actions artifact storage on *.blob.core.windows.net).
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or commit SHA to back up"
+        required: true
+        type: string
+      release_tag:
+        description: "Tag to publish/update the release under"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Build the source archive
+        run: |
+          set -e
+          SHA="$(git rev-parse HEAD)"
+          NAME="dcim-software-backup-${{ inputs.release_tag }}"
+          mkdir -p dist-backup
+          git archive --format=zip --prefix="${NAME}/" -o "dist-backup/${NAME}.zip" HEAD
+          echo "sha=$SHA" >> "$GITHUB_ENV"
+          ls -la dist-backup/
+
+      - name: Create or update the release with this archive attached
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          NOTES="Full source backup of the DCIM webapp + packaging repo.
+
+          Ref: ${{ inputs.ref }}
+          Commit: ${{ env.sha }}
+          Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          if gh release view "${{ inputs.release_tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "${{ inputs.release_tag }}" dist-backup/* --clobber --repo "${{ github.repository }}"
+          else
+            gh release create "${{ inputs.release_tag }}" dist-backup/* \
+              --title "Software Backup - ${{ inputs.release_tag }}" \
+              --notes "$NOTES" \
+              --repo "${{ github.repository }}"
+          fi
