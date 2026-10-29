@@ -1,0 +1,506 @@
+'use strict';
+// Vendor-agnostic hardware monitoring via DMTF Redfish - talks directly to
+// any server's BMC (Dell iDRAC, HPE iLO, Lenovo XCC, Cisco standalone IMC,
+// NVIDIA DGX BMC, or any other Redfish-conformant management controller),
+// instead of requiring a per-vendor management appliance like Dell OME or
+// HPE OneView. This is additive: it does not replace or touch the existing
+// OME/OneView integration, which stays the system of record for firmware
+// job orchestration on the vendors it already covers.
+//
+// Design, following the same discipline used throughout this app's other
+// out-of-band integrations (PDU SNMP, OME/OneView):
+//  - Never fabricate a field. If a BMC doesn't expose something (its resource
+//    tree is walked dynamically from ServiceRoot, not hardcoded - different
+//    vendors/generations expose different optional collections), that field
+//    comes back null/omitted, not guessed.
+//  - COALESCE-safe identity fields (vendor/model/serial/firmware/bmcFirmware):
+//    same never-overwrite-a-set-value rule as every other auto-fill in this
+//    app. Live state fields (health/power) always reflect the latest poll,
+//    since those represent current reality, not something an admin sets.
+//  - Firmware PUSH (not just read) is the one area where Redfish is
+//    genuinely less uniform across vendors (see docs/REDFISH-NOTES.md) - it
+//    is implemented generically against the standard UpdateService
+//    SimpleUpdate action + TaskService polling, with a clear per-vendor
+//    "not supported here" result rather than a silent failure, and reuses
+//    the SAME firmware_jobs table/"Firmware Update Jobs" panel OME/OneView
+//    jobs already show up in.
+
+const DISCOVERY_CONCURRENCY = 10;
+
+function redfishBaseUrl(ip, port) {
+  const p = port && Number(port) !== 443 ? `:${port}` : '';
+  return `https://${ip}${p}`;
+}
+function authHeader(username, password) {
+  if (!username) return {};
+  return { Authorization: 'Basic ' + Buffer.from(`${username}:${password || ''}`).toString('base64') };
+}
+
+// A thin wrapper around the app's existing monitorFetch (same TLS-relaxed-
+// for-known-appliance-style-self-signed-certs dispatcher already used for
+// OME/OneView) - BMCs are the same story: almost universally self-signed.
+async function redfishGet(monitorFetch, ip, port, username, password, path) {
+  const url = `${redfishBaseUrl(ip, port)}${path}`;
+  const res = await monitorFetch(url, { headers: { Accept: 'application/json', ...authHeader(username, password) } });
+  if (!res.ok) { const err = new Error(`Redfish ${path} returned ${res.status}`); err.statusCode = res.status; throw err; }
+  return res.json();
+}
+async function redfishPost(monitorFetch, ip, port, username, password, path, body) {
+  const url = `${redfishBaseUrl(ip, port)}${path}`;
+  const res = await monitorFetch(url, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...authHeader(username, password) },
+    body: JSON.stringify(body || {}),
+  });
+  const location = res.headers.get('location');
+  let json = null; try { json = await res.json(); } catch (e) { /* some BMCs return an empty 202 body */ }
+  if (!res.ok && res.status !== 202) { const err = new Error(`Redfish ${path} POST returned ${res.status}${json && json.error ? ': ' + JSON.stringify(json.error) : ''}`); err.statusCode = res.status; throw err; }
+  return { status: res.status, location, body: json };
+}
+
+// Pulls a readable vendor name out of whatever the BMC actually reports -
+// System.Manufacturer is the standard field, but we also check the Oem key
+// present on ServiceRoot/System as a fallback for BMCs that leave
+// Manufacturer blank (seen on some minimal/early OpenBMC-based implementations).
+function normalizeVendor(manufacturer, oemKeys) {
+  const m = String(manufacturer || '').trim();
+  if (m) return m;
+  const keys = (oemKeys || []).map((k) => String(k).toLowerCase());
+  if (keys.includes('dell')) return 'Dell';
+  if (keys.includes('hpe') || keys.includes('hp')) return 'HPE';
+  if (keys.includes('lenovo')) return 'Lenovo';
+  if (keys.includes('cisco')) return 'Cisco';
+  if (keys.includes('nvidia')) return 'NVIDIA';
+  if (keys.includes('supermicro') || keys.includes('smc')) return 'Supermicro';
+  return null;
+}
+
+// The capability-discovery pattern: read ServiceRoot, only follow the
+// collection links that are actually present (DSP0266 behavior - the
+// resource tree is NOT uniform across vendors/generations), then pull the
+// four fields confirmed reliable across every vendor researched: Systems
+// (identity/health), Chassis/Thermal+Power (sensors), Managers (BMC itself).
+async function detectRedfish(monitorFetch, ip, port, username, password) {
+  const out = {
+    reachable: false, redfishVersion: null, vendor: null, model: null, serialNumber: null,
+    biosVersion: null, bmcFirmware: null, healthStatus: null, powerState: null,
+    powerWatts: null, temperatures: [], fans: [], systemPath: null, chassisPath: null,
+    managerPath: null, updateServicePath: null, error: null, alertCount: null,
+  };
+  let root;
+  try { root = await redfishGet(monitorFetch, ip, port, username, password, '/redfish/v1/'); }
+  catch (e) { out.error = e.statusCode === 401 ? 'Authentication failed - check the BMC username/password.' : `Could not reach Redfish service: ${e.message}`; return out; }
+  out.redfishVersion = root.RedfishVersion || null;
+  out.updateServicePath = (root.UpdateService && root.UpdateService['@odata.id']) || null;
+
+  // NOTE: the service root above is unauthenticated on most real BMCs (and on this one), so it
+  // responding proves nothing about the credentials - a wrong password looks identical to a right
+  // one until an actually-protected resource is fetched. Systems is that check: it's present on
+  // every server BMC this function targets, so a 401/403 here is a genuine bad-credentials result
+  // (returned immediately, not "reachable"), distinct from the collection merely being absent or
+  // slow, which the rest of this function already treats as non-fatal. This matters most for
+  // detectRedfishAnyCredential() below, which relies on `reachable` to mean "these credentials work".
+  let authConfirmed = false;
+
+  // Systems collection -> first member's detail
+  try {
+    const sysLink = root.Systems && root.Systems['@odata.id'];
+    if (sysLink) {
+      const sysColl = await redfishGet(monitorFetch, ip, port, username, password, sysLink);
+      authConfirmed = true;
+      const firstSys = sysColl.Members && sysColl.Members[0] && sysColl.Members[0]['@odata.id'];
+      if (firstSys) {
+        out.systemPath = firstSys;
+        const sys = await redfishGet(monitorFetch, ip, port, username, password, firstSys);
+        out.vendor = normalizeVendor(sys.Manufacturer, Object.keys(sys.Oem || {}));
+        out.model = sys.Model || null;
+        out.serialNumber = sys.SerialNumber || null;
+        out.biosVersion = sys.BiosVersion || null;
+        out.healthStatus = (sys.Status && sys.Status.Health) || null;
+        out.powerState = sys.PowerState || null;
+      }
+    }
+  } catch (e) {
+    if (e.statusCode === 401 || e.statusCode === 403) { out.error = 'Authentication failed - check the BMC username/password.'; return out; }
+    /* Systems collection missing/unreachable for some other reason - leave identity fields null, not fatal */
+  }
+  out.reachable = true; // credentials confirmed via Systems above, or no Systems collection to check against (best effort)
+
+  // Chassis collection -> first member's Thermal + Power subresources
+  try {
+    const chLink = root.Chassis && root.Chassis['@odata.id'];
+    if (chLink) {
+      const chColl = await redfishGet(monitorFetch, ip, port, username, password, chLink);
+      const firstCh = chColl.Members && chColl.Members[0] && chColl.Members[0]['@odata.id'];
+      if (firstCh) {
+        out.chassisPath = firstCh;
+        try {
+          const thermal = await redfishGet(monitorFetch, ip, port, username, password, `${firstCh}/Thermal`);
+          out.temperatures = (thermal.Temperatures || []).map((t) => ({ name: t.Name, readingCelsius: t.ReadingCelsius != null ? t.ReadingCelsius : null, status: (t.Status && t.Status.Health) || null }));
+          out.fans = (thermal.Fans || []).map((f) => ({ name: f.Name, readingRpm: f.Reading != null ? f.Reading : null, status: (f.Status && f.Status.Health) || null }));
+        } catch (e) { /* not every BMC exposes Thermal (older/minimal implementations) */ }
+        try {
+          const power = await redfishGet(monitorFetch, ip, port, username, password, `${firstCh}/Power`);
+          const pc = power.PowerControl && power.PowerControl[0];
+          if (pc && pc.PowerConsumedWatts != null) out.powerWatts = pc.PowerConsumedWatts;
+        } catch (e) { /* not every BMC exposes Power */ }
+      }
+    }
+  } catch (e) { /* Chassis collection missing - leave sensor fields empty, not fatal */ }
+
+  // Managers collection -> first member's firmware version (the BMC's own version, distinct from host BIOS)
+  try {
+    const mgrLink = root.Managers && root.Managers['@odata.id'];
+    if (mgrLink) {
+      const mgrColl = await redfishGet(monitorFetch, ip, port, username, password, mgrLink);
+      authConfirmed = true;
+      const firstMgr = mgrColl.Members && mgrColl.Members[0] && mgrColl.Members[0]['@odata.id'];
+      if (firstMgr) {
+        out.managerPath = firstMgr;
+        const mgr = await redfishGet(monitorFetch, ip, port, username, password, firstMgr);
+        out.bmcFirmware = mgr.FirmwareVersion || null;
+        if (!out.vendor) out.vendor = normalizeVendor(mgr.Manufacturer, Object.keys(mgr.Oem || {}));
+      }
+    }
+  } catch (e) {
+    // Belt-and-braces: if Systems was absent so the check above never ran, still don't let a bad
+    // password through just because a protected-but-optional collection responded 401.
+    if (!authConfirmed && (e.statusCode === 401 || e.statusCode === 403)) { out.error = 'Authentication failed - check the BMC username/password.'; out.reachable = false; return out; }
+    /* Managers collection missing - leave bmcFirmware null, not fatal */
+  }
+
+  // Alert count: every sensor reporting Health != OK, plus the overall
+  // system health itself if it's not OK - the Redfish-side equivalent of
+  // the critical/warning counts already shown for OME/OneView devices.
+  // null (not 0) when the device wasn't reachable, so the UI can tell
+  // "no alerts" apart from "never checked".
+  if (out.reachable) {
+    const abnormal = (s) => s && String(s).toUpperCase() !== 'OK';
+    let count = out.temperatures.filter((t) => abnormal(t.status)).length + out.fans.filter((f) => abnormal(f.status)).length;
+    if (abnormal(out.healthStatus)) count += 1;
+    out.alertCount = count;
+  } else {
+    out.alertCount = null;
+  }
+
+  return out;
+}
+
+async function getFirmwareInventory(monitorFetch, ip, port, username, password, updateServicePath) {
+  const base = updateServicePath || '/redfish/v1/UpdateService';
+  const svc = await redfishGet(monitorFetch, ip, port, username, password, base);
+  const invLink = svc.FirmwareInventory && svc.FirmwareInventory['@odata.id'];
+  if (!invLink) return { supported: false, components: [] };
+  const coll = await redfishGet(monitorFetch, ip, port, username, password, invLink);
+  const members = coll.Members || [];
+  const components = [];
+  for (const m of members.slice(0, 50)) { // bounded - some BMCs enumerate 100+ sub-components
+    try {
+      const c = await redfishGet(monitorFetch, ip, port, username, password, m['@odata.id']);
+      components.push({ name: c.Name || c.Id, version: c.Version || null, updateable: c.Updateable !== false, status: (c.Status && c.Status.Health) || null });
+    } catch (e) { /* skip a component that fails to read rather than aborting the whole inventory */ }
+  }
+  return { supported: true, simpleUpdateSupported: !!(svc.Actions && svc.Actions['#UpdateService.SimpleUpdate']), components };
+}
+
+function mapTaskStateToJobStatus(taskState, percent) {
+  // DSP0266 TaskState values, mapped onto the same {status, percent} shape
+  // persistFirmwareJobStatus() already uses for OME/OneView jobs, so this
+  // plugs into the existing "Firmware Update Jobs" panel without UI changes.
+  const s = String(taskState || '').toLowerCase();
+  if (['completed'].includes(s)) return 'Completed';
+  if (['exception', 'killed', 'cancelled', 'interrupted'].includes(s)) return 'Failed';
+  return 'Running'; // New, Starting, Running, Pending, Service, Stopping - all still in-flight
+}
+async function getRedfishTaskStatus(monitorFetch, ip, port, username, password, taskPath) {
+  try {
+    const task = await redfishGet(monitorFetch, ip, port, username, password, taskPath);
+    const percent = typeof task.PercentComplete === 'number' ? task.PercentComplete : null;
+    return { status: mapTaskStateToJobStatus(task.TaskState, percent), percent, step: task.Messages && task.Messages[0] && task.Messages[0].Message || null, error: null };
+  } catch (e) { return { status: 'Failed', percent: null, step: null, error: e.message }; }
+}
+
+// A site may have several hundred/thousand BMCs sharing one of a handful of common credential
+// pairs (e.g. Dell's default root/calvin plus a couple of site-specific passwords, HPE's
+// hpadmin/hpinvent), with no record of which device uses which. REDFISH_CREDENTIALS in .env lists
+// every candidate pair, tried in order until one authenticates - so Discover configures all of
+// them in one pass instead of the admin testing each IP by hand. Format: "user:pass,user:pass,...";
+// a literal ":" or "," inside a password is not supported (use REDFISH_DEFAULT_USERNAME/_PASSWORD
+// for that one pair instead). Falls back to the single legacy pair when REDFISH_CREDENTIALS is unset.
+function redfishCredentialCandidates() {
+  const list = String(process.env.REDFISH_CREDENTIALS || '').split(',').map((s) => s.trim()).filter(Boolean)
+    .map((pair) => { const i = pair.indexOf(':'); return i === -1 ? null : { username: pair.slice(0, i), password: pair.slice(i + 1) }; })
+    .filter(Boolean);
+  if (list.length) return list;
+  const u = process.env.REDFISH_DEFAULT_USERNAME, p = process.env.REDFISH_DEFAULT_PASSWORD;
+  return u ? [{ username: u, password: p || '' }] : [];
+}
+// Tries each candidate credential in turn against one IP; returns the first that authenticates
+// (reachable:true), tagged with which credential worked, or the last attempt's result if none did.
+async function detectRedfishAnyCredential(monitorFetch, ip, port, candidates) {
+  let last = null;
+  for (const cred of candidates) {
+    const r = await detectRedfish(monitorFetch, ip, port, cred.username, cred.password);
+    if (r.reachable) return { ...r, credential: cred };
+    last = r;
+  }
+  return last || { reachable: false, error: 'No candidate credentials configured' };
+}
+
+module.exports = function registerRedfishRoutes(app, deps) {
+  const { pool, log, httpErr, sendErr, authenticateToken, requireRole, getAllowedSitesForUser, applySiteScope, assertSiteAccess, genId, auditLog, monitorFetch } = deps;
+
+  async function loadAssetForUser(req, res, assetId) {
+    const [rows] = await pool.query('SELECT * FROM assets WHERE id = ?', [assetId]);
+    if (!rows.length) { res.status(404).json({ error: 'Asset not found' }); return null; }
+    const asset = rows[0];
+    const allowed = await getAllowedSitesForUser(req.user);
+    if (!allowed.includes(asset.site)) { res.status(403).json({ error: 'Access denied for this site' }); return null; }
+    return asset;
+  }
+
+  const assetPreview = (a) => ({
+    id: a.id, site: a.site, zone: a.zone, rackNo: a.rack_no, deviceName: a.device_name, assetTag: a.asset_tag,
+    mgmtIp: a.mgmt_ip, vendor: a.manufacturer, model: a.model, serialNumber: a.serial_number, firmware: a.firmware,
+    redfishConfigured: !!a.redfish_username, redfishVersion: a.redfish_version, bmcFirmware: a.bmc_firmware,
+    healthStatus: a.health_status, powerState: a.power_state, alertCount: a.redfish_alert_count,
+    powerWatts: a.redfish_power_watts, hardwareType: a.hardware_type, monitorIgnored: !!a.redfish_monitor_ignored,
+    lastSyncAt: a.last_redfish_sync_at, lastError: a.last_redfish_error,
+  });
+
+  // Live, read-only test against any IP/credentials - does NOT save anything.
+  // Used for the "Test & Detect" preview before an admin commits to saving
+  // credentials against an asset.
+  app.post('/api/monitoring/redfish/detect', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+    try {
+      const { ip, port, username, password } = req.body;
+      if (!ip) return res.status(400).json({ error: 'IP address is required' });
+      const result = await detectRedfish(monitorFetch, ip, port, username, password);
+      res.json(result);
+    } catch (e) { sendErr(res, e); }
+  });
+
+  // List assets with a management IP (candidates for Redfish), with their
+  // last-known Redfish state - this powers the Monitoring page's preview list.
+  app.get('/api/monitoring/redfish/assets', authenticateToken, async (req, res) => {
+    try {
+      const { site, includeIgnored } = req.query;
+      const allowed = await getAllowedSitesForUser(req.user);
+      const conditions = ["mgmt_ip IS NOT NULL", "mgmt_ip <> ''"];
+      const params = [];
+      if (site && site !== 'all') {
+        if (!allowed.includes(site)) return res.status(403).json({ error: 'Access denied for this site' });
+        conditions.push('site = ?'); params.push(site);
+      } else {
+        await applySiteScope(allowed, conditions, params);
+      }
+      // Devices manually marked "Ignore from Monitor" are hidden from the default list -
+      // pass includeIgnored=1 ("Show ignored") to see them too.
+      if (includeIgnored !== '1') conditions.push('redfish_monitor_ignored = 0');
+      const [rows] = await pool.query(`SELECT * FROM assets WHERE ${conditions.join(' AND ')} ORDER BY site, rack_no`, params);
+      res.json(rows.map(assetPreview));
+    } catch (e) { sendErr(res, e); }
+  });
+
+  // Exclude/include a device in the Multi-Vendor (Redfish) monitoring list without
+  // touching its Asset Inventory record or its saved credentials - polling and sync
+  // for an ignored device just stop running until it's un-ignored.
+  app.put('/api/monitoring/redfish/:assetId/ignore', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+    try {
+      const asset = await loadAssetForUser(req, res, req.params.assetId);
+      if (!asset) return;
+      const ignored = req.body && typeof req.body.ignored !== 'undefined' ? (req.body.ignored ? 1 : 0) : (asset.redfish_monitor_ignored ? 0 : 1);
+      await pool.query('UPDATE assets SET redfish_monitor_ignored = ? WHERE id = ?', [ignored, asset.id]);
+      auditLog(req, 'REDFISH_IGNORE_SET', { entity: 'asset', entityId: asset.id, site: asset.site, status: 'success' }, { ignored: !!ignored });
+      res.json({ success: true, ignored: !!ignored });
+    } catch (e) { sendErr(res, e); }
+  });
+
+  // Bulk "Delete Selected (Remove Redfish Config)": clears saved BMC credentials and
+  // polled Redfish state for the given assets. The asset itself stays in Inventory -
+  // only its Redfish configuration is wiped, so it drops out of this page until
+  // re-configured (Test & Detect or Discover).
+  app.post('/api/monitoring/redfish/unconfigure', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+    try {
+      const { assetIds } = req.body;
+      if (!Array.isArray(assetIds) || !assetIds.length) return res.status(400).json({ error: 'assetIds array is required' });
+      const allowed = await getAllowedSitesForUser(req.user);
+      let cleared = 0;
+      for (const assetId of assetIds.slice(0, 500)) {
+        const [rows] = await pool.query('SELECT id, site FROM assets WHERE id = ?', [assetId]);
+        if (!rows.length || !allowed.includes(rows[0].site)) continue;
+        await pool.query(
+          `UPDATE assets SET redfish_username = NULL, redfish_password = NULL, redfish_port = NULL,
+             redfish_version = NULL, bmc_firmware = NULL, health_status = NULL, power_state = NULL,
+             redfish_alert_count = NULL, redfish_power_watts = NULL, redfish_monitor_ignored = 0,
+             last_redfish_sync_at = NULL, last_redfish_error = NULL
+           WHERE id = ?`,
+          [rows[0].id]
+        );
+        cleared++;
+      }
+      auditLog(req, 'REDFISH_UNCONFIGURE', { entity: 'asset', status: 'success' }, { count: cleared });
+      res.json({ cleared });
+    } catch (e) { sendErr(res, e); }
+  });
+
+  // Save BMC credentials for a specific asset (never returned back in any GET).
+  app.put('/api/monitoring/redfish/:assetId/credentials', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+    try {
+      const asset = await loadAssetForUser(req, res, req.params.assetId);
+      if (!asset) return;
+      const { username, password, port } = req.body;
+      if (!username) return res.status(400).json({ error: 'Username is required' });
+      await pool.query('UPDATE assets SET redfish_username = ?, redfish_password = ?, redfish_port = ? WHERE id = ?',
+        [username, password || '', Number(port) > 0 ? Number(port) : 443, asset.id]);
+      auditLog(req, 'REDFISH_CREDENTIALS_SET', { entity: 'asset', entityId: asset.id, site: asset.site, status: 'success' });
+      res.json({ success: true });
+    } catch (e) { sendErr(res, e); }
+  });
+
+  // Re-poll an asset's BMC with its saved credentials and persist the
+  // result: identity fields (vendor/model/serial/firmware/bmcFirmware) are
+  // COALESCE-safe (filled only if currently blank); health/power/sync time
+  // always reflect the latest poll, since they are live state, not identity.
+  app.post('/api/monitoring/redfish/:assetId/sync', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+    try {
+      const asset = await loadAssetForUser(req, res, req.params.assetId);
+      if (!asset) return;
+      if (!asset.mgmt_ip) return res.status(400).json({ error: 'This asset has no management IP set' });
+      if (!asset.redfish_username) return res.status(400).json({ error: 'No Redfish credentials saved for this asset yet - use Test & Detect first' });
+      const r = await detectRedfish(monitorFetch, asset.mgmt_ip, asset.redfish_port, asset.redfish_username, asset.redfish_password);
+      if (!r.reachable) {
+        await pool.query('UPDATE assets SET last_redfish_error = ?, last_redfish_sync_at = NOW() WHERE id = ?', [String(r.error || 'Unreachable').slice(0, 255), asset.id]);
+        return res.json({ reachable: false, error: r.error });
+      }
+      await pool.query(
+        `UPDATE assets SET
+           manufacturer = COALESCE(NULLIF(manufacturer, ''), ?), model = COALESCE(NULLIF(model, ''), ?),
+           serial_number = COALESCE(NULLIF(serial_number, ''), ?), firmware = COALESCE(NULLIF(firmware, ''), ?),
+           bmc_firmware = ?, redfish_version = ?, health_status = ?, power_state = ?, redfish_alert_count = ?,
+           redfish_power_watts = ?, last_redfish_sync_at = NOW(), last_redfish_error = NULL
+         WHERE id = ?`,
+        [r.vendor, r.model, r.serialNumber, r.biosVersion, r.bmcFirmware, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
+      );
+      res.json({ reachable: true, ...r });
+    } catch (e) { sendErr(res, e); }
+  });
+
+  // Dry-run discovery: tries every candidate credential pair (REDFISH_CREDENTIALS,
+  // or the single legacy REDFISH_DEFAULT_* pair - see redfishCredentialCandidates
+  // above) against every asset that has a management IP but no Redfish credentials
+  // saved yet, in order, stopping at the first one that authenticates. This is how
+  // 1000s of devices sharing a handful of common passwords (e.g. Dell's root/calvin,
+  // root/calvin@123, root/Calvin@123, HPE's hpadmin/hpinvent) get configured without
+  // anyone typing credentials in one IP at a time. Reports what it found and which
+  // credential matched; saves nothing until /apply.
+  app.post('/api/monitoring/redfish/discover', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+    try {
+      const candidates = redfishCredentialCandidates();
+      if (!candidates.length) return res.status(400).json({ error: 'No BMC credentials configured - set REDFISH_CREDENTIALS (e.g. "root:calvin,root:calvin@123,root:Calvin@123,hpadmin:hpinvent") or REDFISH_DEFAULT_USERNAME/PASSWORD in .env, or use Test & Detect to add BMC credentials one at a time instead.' });
+      const allowed = await getAllowedSitesForUser(req.user);
+      const conditions = ["mgmt_ip IS NOT NULL", "mgmt_ip <> ''", "(redfish_username IS NULL OR redfish_username = '')"];
+      const params = [];
+      await applySiteScope(allowed, conditions, params);
+      const [rows] = await pool.query(`SELECT * FROM assets WHERE ${conditions.join(' AND ')} ORDER BY site, rack_no LIMIT 200`, params);
+
+      const results = [];
+      let idx = 0;
+      async function worker() {
+        while (idx < rows.length) {
+          const asset = rows[idx++];
+          try {
+            const r = await detectRedfishAnyCredential(monitorFetch, asset.mgmt_ip, 443, candidates);
+            results.push({ assetId: asset.id, site: asset.site, rackNo: asset.rack_no, mgmtIp: asset.mgmt_ip, reachable: r.reachable, vendor: r.vendor, model: r.model, serialNumber: r.serialNumber, healthStatus: r.healthStatus, matchedUsername: r.reachable ? r.credential.username : null, error: r.reachable ? null : r.error });
+          } catch (e) { results.push({ assetId: asset.id, site: asset.site, rackNo: asset.rack_no, mgmtIp: asset.mgmt_ip, reachable: false, error: e.message }); }
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(DISCOVERY_CONCURRENCY, rows.length) }, worker));
+      res.json({ scanned: rows.length, reachable: results.filter((r) => r.reachable).length, credentialsTried: candidates.length, results });
+    } catch (e) { sendErr(res, e); }
+  });
+
+  // Commit step: re-detects each selected asset (so we know which of the
+  // candidate credentials actually worked for IT) and saves that asset's own
+  // matching username/password + detected fields. Each device keeps whichever
+  // credential authenticated for it - they are not all forced to the same one.
+  app.post('/api/monitoring/redfish/discover/apply', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+    try {
+      const { assetIds } = req.body;
+      if (!Array.isArray(assetIds) || !assetIds.length) return res.status(400).json({ error: 'assetIds array is required' });
+      const candidates = redfishCredentialCandidates();
+      if (!candidates.length) return res.status(400).json({ error: 'No BMC credentials configured - set REDFISH_CREDENTIALS or REDFISH_DEFAULT_USERNAME/PASSWORD' });
+      const allowed = await getAllowedSitesForUser(req.user);
+      let applied = 0;
+      for (const assetId of assetIds.slice(0, 200)) {
+        const [rows] = await pool.query('SELECT * FROM assets WHERE id = ?', [assetId]);
+        if (!rows.length || !allowed.includes(rows[0].site) || !rows[0].mgmt_ip) continue;
+        const asset = rows[0];
+        const r = await detectRedfishAnyCredential(monitorFetch, asset.mgmt_ip, 443, candidates);
+        if (!r.reachable) continue;
+        await pool.query(
+          `UPDATE assets SET redfish_username = ?, redfish_password = ?, redfish_port = 443,
+             manufacturer = COALESCE(NULLIF(manufacturer, ''), ?), model = COALESCE(NULLIF(model, ''), ?),
+             serial_number = COALESCE(NULLIF(serial_number, ''), ?), firmware = COALESCE(NULLIF(firmware, ''), ?),
+             bmc_firmware = ?, redfish_version = ?, health_status = ?, power_state = ?, redfish_alert_count = ?,
+             redfish_power_watts = ?, last_redfish_sync_at = NOW(), last_redfish_error = NULL
+           WHERE id = ?`,
+          [r.credential.username, r.credential.password || '', r.vendor, r.model, r.serialNumber, r.biosVersion, r.bmcFirmware, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
+        );
+        applied++;
+      }
+      auditLog(req, 'REDFISH_DISCOVERY_APPLY', { entity: 'asset', status: 'success' }, { count: applied });
+      res.json({ applied });
+    } catch (e) { sendErr(res, e); }
+  });
+
+  app.get('/api/monitoring/redfish/:assetId/firmware-inventory', authenticateToken, async (req, res) => {
+    try {
+      const asset = await loadAssetForUser(req, res, req.params.assetId);
+      if (!asset) return;
+      if (!asset.redfish_username) return res.status(400).json({ error: 'No Redfish credentials saved for this asset yet' });
+      const inv = await getFirmwareInventory(monitorFetch, asset.mgmt_ip, asset.redfish_port, asset.redfish_username, asset.redfish_password, null);
+      res.json(inv);
+    } catch (e) { sendErr(res, e); }
+  });
+
+  // Firmware push via the standard UpdateService SimpleUpdate action. This is
+  // the one place Redfish is genuinely less uniform across vendors (see the
+  // module header comment) - a BMC that doesn't support SimpleUpdate returns
+  // a clear "not supported" error here rather than a silent failure. On
+  // success, the resulting Task is tracked in the SAME firmware_jobs table
+  // OME/OneView jobs use (vendor='redfish'), so it shows up in the existing
+  // "Firmware Update Jobs" panel without any separate UI.
+  app.post('/api/monitoring/redfish/:assetId/firmware/update', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+    try {
+      const asset = await loadAssetForUser(req, res, req.params.assetId);
+      if (!asset) return;
+      if (!asset.redfish_username) return res.status(400).json({ error: 'No Redfish credentials saved for this asset yet' });
+      const { imageUri } = req.body;
+      if (!imageUri || !/^https?:\/\//i.test(imageUri)) return res.status(400).json({ error: 'A valid firmware image URL (http/https) is required - the BMC fetches it directly from that address' });
+      const svc = await redfishGet(monitorFetch, asset.mgmt_ip, asset.redfish_port, asset.redfish_username, asset.redfish_password, '/redfish/v1/UpdateService');
+      const action = svc.Actions && svc.Actions['#UpdateService.SimpleUpdate'];
+      if (!action) return res.status(400).json({ error: 'This BMC does not support the standard Redfish SimpleUpdate action - firmware push isn’t available for this device via Redfish.' });
+      const target = action.target || '/redfish/v1/UpdateService/Actions/UpdateService.SimpleUpdate';
+      const result = await redfishPost(monitorFetch, asset.mgmt_ip, asset.redfish_port, asset.redfish_username, asset.redfish_password, target, { ImageURI: imageUri });
+      const taskPath = result.location || (result.body && result.body['@odata.id']) || null;
+      if (!taskPath) return res.status(502).json({ error: 'The BMC accepted the update request but did not return a Task to track it' });
+      const [ins] = await pool.query(
+        `INSERT INTO firmware_jobs (vendor, site, zone, device_id, device_name, serial, job_ref, task_uri, started_by, started_at, state, source, job_name)
+         VALUES ('redfish', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Running', 'dcim', ?)`,
+        [asset.site, asset.zone, asset.id, asset.device_name || asset.asset_tag || asset.id, asset.serial_number, taskPath, taskPath, req.user.name || req.user.username, Date.now(), `Firmware update (Redfish) - ${imageUri.split('/').pop()}`]
+      );
+      auditLog(req, 'REDFISH_FIRMWARE_UPDATE_STARTED', { entity: 'asset', entityId: asset.id, site: asset.site, status: 'success' }, { imageUri });
+      res.json({ success: true, jobId: ins.insertId, taskPath });
+    } catch (e) { sendErr(res, e); }
+  });
+
+  return { getRedfishTaskStatus: (deviceId, taskUri) => getRedfishTaskStatusForDevice(pool, monitorFetch, deviceId, taskUri) };
+};
+
+async function getRedfishTaskStatusForDevice(pool, monitorFetch, deviceId, taskUri) {
+  const [rows] = await pool.query('SELECT mgmt_ip, redfish_port, redfish_username, redfish_password FROM assets WHERE id = ?', [deviceId]);
+  if (!rows.length || !rows[0].mgmt_ip || !rows[0].redfish_username) return { status: 'Failed', percent: null, step: null, error: 'Device credentials no longer available' };
+  const a = rows[0];
+  return getRedfishTaskStatus(monitorFetch, a.mgmt_ip, a.redfish_port, a.redfish_username, a.redfish_password, taskUri);
+}

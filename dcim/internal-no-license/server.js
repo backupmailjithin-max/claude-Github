@@ -1192,6 +1192,10 @@ async function initDB() {
     // OneView devices. Always reflects the latest poll (live state), same
     // as health_status/power_state above - never COALESCE-protected.
     try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_alert_count INT NULL'); } catch (e) { /* already exists */ }
+    // Power reading from the Power subresource - live state, same COALESCE-free
+    // treatment as health_status/power_state above.
+    try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_power_watts INT NULL'); } catch (e) { /* already exists */ }
+
     // Lets an admin exclude a device from the Multi-Vendor (Redfish) monitoring
     // list without touching its Asset Inventory record - for devices that have
     // a management IP captured (storage arrays, network switches, firewalls,

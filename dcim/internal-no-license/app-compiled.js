@@ -1549,6 +1549,7 @@ const REDFISH_COLUMNS = [
     { key: "_vendorModel", label: "Vendor / Model", format: (v, row) => row.vendor ? `${row.vendor} ${row.model || ""}`.trim() : "—" },
     { key: "healthStatus", label: "Health", format: (v) => v || "Unknown" },
     { key: "powerState", label: "Power State" },
+    { key: "powerWatts", label: "Power (W)", format: (v) => (v == null ? "—" : `${v} W`) },
     { key: "alertCount", label: "Alerts", format: (v) => (v == null ? "—" : String(v)) },
     { key: "bmcFirmware", label: "BMC Firmware" },
     { key: "lastSyncAt", label: "Last Sync", format: (v) => (v ? new Date(v).toLocaleString() : "Never") },
@@ -8075,6 +8076,43 @@ function RedfishHealthPill({ status }) {
     return React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "Inter", fontSize: 11, fontWeight: 700, color } },
         React.createElement("span", { style: { width: 7, height: 7, borderRadius: "50%", background: color } }), status || "Unknown");
 }
+// A thin scrollbar pinned to the bottom of the viewport, for a wide table (e.g.
+// 1000s of Redfish rows) whose own horizontal scrollbar sits at the bottom of a
+// long page - so it has to be scrolled all the way down to be found. Shown only
+// while the table extends below the viewport (i.e. its real scrollbar is off
+// screen) and mirrors scrollLeft both ways with the table's own scroll container.
+function FloatingHScroll({ wrapRef }) {
+    const trackRef = useRef(null);
+    const [state, setState] = useState({ visible: false, left: 0, width: 0, scrollWidth: 0 });
+    useEffect(() => {
+        const recompute = () => {
+            const wrap = wrapRef.current;
+            if (!wrap) { setState((s) => s.visible ? { ...s, visible: false } : s); return; }
+            const rect = wrap.getBoundingClientRect();
+            const needsScroll = wrap.scrollWidth > wrap.clientWidth + 2;
+            const visible = needsScroll && rect.top < window.innerHeight && rect.bottom > window.innerHeight;
+            setState({ visible, left: rect.left, width: rect.width, scrollWidth: wrap.scrollWidth });
+        };
+        recompute();
+        window.addEventListener("scroll", recompute, { passive: true });
+        window.addEventListener("resize", recompute);
+        const t = setInterval(recompute, 600);
+        return () => { window.removeEventListener("scroll", recompute); window.removeEventListener("resize", recompute); clearInterval(t); };
+    }, [wrapRef]);
+    useEffect(() => {
+        const wrap = wrapRef.current, track = trackRef.current;
+        if (!wrap || !track) return;
+        let syncing = false;
+        const fromWrap = () => { if (syncing) return; syncing = true; track.scrollLeft = wrap.scrollLeft; syncing = false; };
+        const fromTrack = () => { if (syncing) return; syncing = true; wrap.scrollLeft = track.scrollLeft; syncing = false; };
+        wrap.addEventListener("scroll", fromWrap, { passive: true });
+        track.addEventListener("scroll", fromTrack, { passive: true });
+        return () => { wrap.removeEventListener("scroll", fromWrap); track.removeEventListener("scroll", fromTrack); };
+    }, [wrapRef]);
+    if (!state.visible)
+        return null;
+    return ReactDOM.createPortal(React.createElement("div", { style: { position: "fixed", left: state.left, width: state.width, bottom: 0, zIndex: 60, background: "rgba(255,255,255,0.95)", borderTop: "1px solid #E2E8F0", boxShadow: "0 -4px 10px rgba(15,23,42,0.1)" } }, React.createElement("div", { ref: trackRef, style: { overflowX: "scroll", overflowY: "hidden", height: 14 } }, React.createElement("div", { style: { width: state.scrollWidth, height: 1 } }))), document.body);
+}
 function RedfishDetectModal({ asset, onClose, onSaved }) {
     const [ip, setIp] = useState((asset && asset.mgmtIp) || "");
     const [port, setPort] = useState(443);
@@ -8188,13 +8226,13 @@ function RedfishDiscoverModal({ onClose, onApplied }) {
         React.createElement("div", { className: "pdu-modal-backdrop", style: { position: "fixed", inset: 0, background: "rgba(15,23,42,.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }, onClick: onClose },
             React.createElement("div", { className: "pdu-modal-pop neu-card", style: { width: 760, maxWidth: "94vw", maxHeight: "88vh", overflowY: "auto", padding: 28 }, onClick: (e) => e.stopPropagation() },
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617", marginBottom: 4 } }, "Discover Server Hardware (Redfish)"),
-                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 16 } }, "Tries the shared default BMC credential (REDFISH_DEFAULT_USERNAME / REDFISH_DEFAULT_PASSWORD in .env) against every asset that has a management IP but no Redfish credentials saved yet. Nothing is changed until you select devices and apply."),
+                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 16 } }, "Tries every candidate BMC credential pair configured in REDFISH_CREDENTIALS (.env) in turn — e.g. Dell's root/calvin, root/calvin@123, root/Calvin@123 and HPE's hpadmin/hpinvent — against every asset that has a management IP but no Redfish credentials saved yet, and keeps whichever one answers for that device. Nothing is changed until you select devices and apply."),
                 busy && !scan && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 13, color: "#64748B" } }, "Scanning…"),
                 err && React.createElement("div", { style: { padding: "9px 12px", borderRadius: 9, background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.25)", color: "#B91C1C", fontFamily: "Inter", fontSize: 12, marginBottom: 14 } }, err),
                 scan && React.createElement("div", null,
-                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#475569", marginBottom: 10 } }, `Scanned ${scan.scanned} asset(s), ${scan.reachable} responded to Redfish.`),
+                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#475569", marginBottom: 10 } }, `Scanned ${scan.scanned} asset(s) against ${scan.credentialsTried || 1} candidate credential(s), ${scan.reachable} responded to Redfish.`),
                     React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12 } },
-                        React.createElement("thead", null, React.createElement("tr", null, ["", "Asset", "Site", "Rack", "Mgmt IP", "Vendor / Model", "Result"].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "6px 8px", borderBottom: "1px solid #E2E8F0", color: "#64748B", fontWeight: 700, fontSize: 10.5, textTransform: "uppercase" } }, h)))),
+                        React.createElement("thead", null, React.createElement("tr", null, ["", "Asset", "Site", "Rack", "Mgmt IP", "Vendor / Model", "Matched Login", "Result"].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "6px 8px", borderBottom: "1px solid #E2E8F0", color: "#64748B", fontWeight: 700, fontSize: 10.5, textTransform: "uppercase" } }, h)))),
                         React.createElement("tbody", null, scan.results.map((r) => React.createElement("tr", { key: r.assetId, style: { borderBottom: "1px solid #F1F5F9" } },
                             React.createElement("td", { style: { padding: "6px 8px" } }, r.reachable && React.createElement("input", { type: "checkbox", checked: selected.has(r.assetId), onChange: () => toggle(r.assetId) })),
                             React.createElement("td", { style: { padding: "6px 8px" } }, r.assetId),
@@ -8202,6 +8240,7 @@ function RedfishDiscoverModal({ onClose, onApplied }) {
                             React.createElement("td", { style: { padding: "6px 8px" } }, r.rackNo),
                             React.createElement("td", { style: { padding: "6px 8px", fontFamily: "'JetBrains Mono'" } }, r.mgmtIp),
                             React.createElement("td", { style: { padding: "6px 8px" } }, r.reachable ? `${r.vendor || "—"} ${r.model || ""}` : "—"),
+                            React.createElement("td", { style: { padding: "6px 8px", fontFamily: "'JetBrains Mono'" } }, r.matchedUsername || "—"),
                             React.createElement("td", { style: { padding: "6px 8px", color: r.reachable ? "#059669" : "#94A3B8" } }, r.reachable ? "Reachable" : (r.error || "Not reachable")))))),
                     applyMsg && React.createElement("div", { style: { marginTop: 10, fontFamily: "Inter", fontSize: 12, color: applyMsg.type === "error" ? "#B91C1C" : "#059669" } }, applyMsg.text)),
                 React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 } },
@@ -8221,6 +8260,7 @@ function RedfishTab({ canEdit, allowedSites }) {
     const [openFilter, setOpenFilter] = useState(null);
     const [selectedIds, setSelectedIds] = useState(() => new Set());
     const [busyAction, setBusyAction] = useState(false);
+    const tableWrapRef = useRef(null);
     const load = () => { api.getRedfishAssets(site, showIgnored).then((r) => { setAssets(r); setErr(""); setSelectedIds(new Set()); }).catch((e) => setErr(e.message || "Could not load devices")); };
     useEffect(() => { load(); }, [site, showIgnored]);
     const sel = { padding: "6px 10px", borderRadius: 8, border: "1px solid #CBD5E1", background: "#fff", fontFamily: "Inter", fontSize: 12, color: "#0F172A" };
@@ -8290,7 +8330,7 @@ function RedfishTab({ canEdit, allowedSites }) {
         err && React.createElement("div", { style: { padding: "9px 12px", borderRadius: 9, background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.25)", color: "#B91C1C", fontFamily: "Inter", fontSize: 12, marginBottom: 14 } }, err),
         !assets && !err && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 13, color: "#64748B", padding: 20 } }, "Loading…"),
         assets && !assets.length && React.createElement("div", { style: { padding: "40px 20px", textAlign: "center", fontFamily: "Inter", fontSize: 13, color: "#64748B" } }, "No assets with a management IP yet. Add one from Asset Inventory, or click \"Discover\" to scan assets that already have one."),
-        assets && assets.length > 0 && React.createElement("div", { style: { overflowX: "auto" } }, React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12.5 } },
+        assets && assets.length > 0 && React.createElement(React.Fragment, null, React.createElement("div", { ref: tableWrapRef, style: { overflowX: "auto" } }, React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12.5 } },
             React.createElement("thead", null, React.createElement("tr", null,
                 canEdit && React.createElement("th", { style: { ...thBase, width: 34 } },
                     React.createElement("input", { type: "checkbox", checked: filtered.length > 0 && filtered.every((a) => selectedIds.has(a.id)), ref: (el) => { if (el)
@@ -8306,7 +8346,7 @@ function RedfishTab({ canEdit, allowedSites }) {
                     REDFISH_COLUMNS.map((col) => React.createElement("td", { key: col.key, style: { padding: "8px 9px", whiteSpace: "nowrap" } }, renderCell(col, a), col.key === "hardwareType" && a.monitorIgnored && React.createElement("span", { style: { marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#92400E", background: "#FEF3C7", borderRadius: 5, padding: "1px 6px" } }, "IGNORED"))),
                     React.createElement("td", { style: { padding: "8px 9px", textAlign: "right", whiteSpace: "nowrap" } },
                         canEdit && React.createElement("button", { onClick: () => toggleIgnore(a), className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px", marginRight: 6 }, title: a.monitorIgnored ? "Include this device in Redfish monitoring again" : "Exclude this device from Redfish monitoring (e.g. storage/network/firewall gear that doesn't need it)" }, a.monitorIgnored ? "Un-ignore" : "Ignore from Monitor"),
-                        React.createElement("button", { onClick: () => setModalAsset(a), className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px" } }, a.redfishConfigured ? "View / Sync" : "Configure"))))))),
+                        React.createElement("button", { onClick: () => setModalAsset(a), className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px" } }, a.redfishConfigured ? "View / Sync" : "Configure"))))))), React.createElement(FloatingHScroll, { wrapRef: tableWrapRef })),
         modalAsset !== undefined && React.createElement(RedfishDetectModal, { asset: modalAsset, onClose: () => setModalAsset(undefined), onSaved: load }),
         discoverOpen && React.createElement(RedfishDiscoverModal, { onClose: () => setDiscoverOpen(false), onApplied: load }),
         openFilter && React.createElement(ValueListFilterPopup, { column: openFilter, currentFilter: columnFilters[openFilter.key], optionRows: optionRowsForColumn(openFilter.key), onApply: (value) => setColumnFilters((prev) => ({ ...prev, [openFilter.key]: value })), onClose: () => setOpenFilter(null) }));
