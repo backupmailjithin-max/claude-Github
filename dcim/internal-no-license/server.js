@@ -923,7 +923,7 @@ async function initDB() {
         dc_invoice_original_name VARCHAR(255),
         movement_date DATE,
         remarks TEXT,
-        status ENUM('Pending Approval','Approved','Rejected','Received at Site','Not Received','Outward Complete','Cancelled') NOT NULL DEFAULT 'Pending Approval',
+        status ENUM('Pending Approval','Approved','Rejected','Ticket Issued','Received at Site','Not Received','Outward Complete','Cancelled') NOT NULL DEFAULT 'Pending Approval',
         approver_name VARCHAR(150) NULL,
         approved_at DATETIME NULL,
         reject_reason VARCHAR(255) NULL,
@@ -967,6 +967,17 @@ async function initDB() {
     if (mvStatusNeedsWiden) {
       await conn.query("ALTER TABLE material_movements MODIFY status ENUM('Pending Approval','Approved','Rejected','Received at Site','Not Received','Outward Complete','Cancelled') NOT NULL DEFAULT 'Pending Approval'");
       await conn.query("UPDATE material_movements SET status = IF(movement_type = 'Inward', 'Received at Site', 'Outward Complete') WHERE status = 'Approved'");
+    }
+    // Ticket creation is now its own step after approval (Pending Approval -> Approved -> Ticket Issued -> outcome).
+    // Guarded by the column's own definition (not try/catch) so the one-time conversion below never re-runs:
+    // movements that were already approved WITH a ticket number under the old combined flow move to "Ticket Issued";
+    // approved ones without a ticket stay "Approved" and wait for someone to generate it.
+    const [[mvTicketColInfo]] = await conn.query(
+      `SELECT COLUMN_TYPE FROM information_schema.columns WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'material_movements' AND COLUMN_NAME = 'status'`
+    );
+    if (mvTicketColInfo && !/Ticket Issued/.test(mvTicketColInfo.COLUMN_TYPE)) {
+      await conn.query("ALTER TABLE material_movements MODIFY status ENUM('Pending Approval','Approved','Rejected','Ticket Issued','Received at Site','Not Received','Outward Complete','Cancelled') NOT NULL DEFAULT 'Pending Approval'");
+      await conn.query("UPDATE material_movements SET status = 'Ticket Issued' WHERE status = 'Approved' AND ticket_no IS NOT NULL AND ticket_no <> ''");
     }
     await createIndexIfNotExists(conn, 'idx_movements_site', 'material_movements', 'site');
     await createIndexIfNotExists(conn, 'idx_movements_type', 'material_movements', 'movement_type');
@@ -3586,6 +3597,7 @@ async function persistFirmwareJobStatus(vendor, site, zone, jobRef, result) {
       }
       let state = d && d.status ? d.status : null;
       let percent = d && d.percent != null ? d.percent : null;
+      if (percent != null && state !== 'Completed' && row.percent != null) percent = Math.max(percent, Number(row.percent) || 0); // never move backwards while running
       const step = d && d.step ? d.step : null;
       const error = d && d.error ? d.error : null;
       if (!state && (result.status === 'Completed' || result.status === 'Failed')) { state = result.status; if (result.status === 'Completed') percent = 100; }
@@ -3953,6 +3965,23 @@ app.post('/api/monitoring/firmware/apply', authenticateToken, requireRole(['Admi
 });
 
 // ---- Job/task status polling.
+// Dell OME very often reports Progress = 0 for the whole firmware update (the real progress is only in the step log text), so an
+// estimate is derived from that log: start-up milestones first, then the state of every Lifecycle Controller job ("JID_...") it mentions.
+function omeEstimatePercentFromLog(text) {
+  const t = String(text || '');
+  if (!t.trim()) return null;
+  let base = 0;
+  [[/service tag is valid/i, 4], [/starting communication with the device/i, 8], [/system lockdown status/i, 10], [/remote lc services are ready/i, 14], [/attempting to (initiate|stage)|performidracupdate|staging/i, 18]].forEach(([re, v]) => { if (re.test(t)) base = Math.max(base, v); });
+  const score = { new: 8, scheduling: 12, scheduled: 15, downloading: 35, downloaded: 50, 'ready for reboot': 60, rebooting: 65, running: 75, installing: 80, completed: 100 };
+  const last = {};
+  const re = /job state for\s+(JID_\w+)\s+is\s+([A-Za-z ]+?)\s*(?:\r?\n|$|\.)/gi;
+  let m;
+  while ((m = re.exec(t))) last[m[1].toUpperCase()] = m[2].trim().toLowerCase();
+  const ids = Object.keys(last);
+  if (!ids.length) return base || null;
+  const avg = ids.reduce((a, id) => a + (score[last[id]] != null ? score[last[id]] : 20), 0) / ids.length;
+  return Math.min(90, Math.max(base, Math.round(20 + (75 * avg) / 100)));
+}
 async function getOmeJobStatus(site, zone, jobRef) {
   const session = await getOmeToken(site, zone);
   if (!session) throw new Error('Dell OME is not configured for this zone');
@@ -3977,7 +4006,9 @@ async function getOmeJobStatus(site, zone, jobRef) {
           const js = String((d.JobStatus && d.JobStatus.Name) || '');
           const st = /complete/i.test(js) ? 'Completed' : (/fail|error|abort|warn/i.test(js) && !/running|progress/i.test(js) ? 'Failed' : 'Running');
           const prog = parseInt(String(d.Progress == null ? '' : d.Progress).replace(/[^0-9]/g, ''), 10);
-          return { key: String(d.Key == null ? '' : d.Key), status: st, percent: st === 'Completed' ? 100 : (Number.isFinite(prog) ? Math.min(100, prog) : null), step: d.Value ? String(d.Value).slice(0, 800) : null };
+          const est = st === 'Running' ? omeEstimatePercentFromLog(d.Value) : null;
+          const reported = Number.isFinite(prog) ? Math.min(100, prog) : null;
+          return { key: String(d.Key == null ? '' : d.Key), status: st, percent: st === 'Completed' ? 100 : (reported == null && est == null ? null : Math.max(reported || 0, est || 0)), step: d.Value ? String(d.Value).slice(-4000) : null };
         });
       }
     }
@@ -7621,7 +7652,7 @@ app.delete('/api/activities/:id', authenticateToken, requireRole(['Admin','Opera
 
 // ========== MATERIAL MOVEMENTS ==========
 const MOVEMENT_TYPES = ['Inward', 'Outward'];
-const MOVEMENT_STATUSES = ['Pending Approval', 'Approved', 'Rejected', 'Received at Site', 'Not Received', 'Outward Complete', 'Cancelled'];
+const MOVEMENT_STATUSES = ['Pending Approval', 'Approved', 'Rejected', 'Ticket Issued', 'Received at Site', 'Not Received', 'Outward Complete', 'Cancelled'];
 // Same lightweight history trail used by Visitor Access: appends a timestamped line to the
 // existing Remarks instead of overwriting it, so every step a movement goes through (approve,
 // then its final outcome) stays visible on the one record rather than needing an audit table.
@@ -7697,9 +7728,8 @@ app.post('/api/material-movements', authenticateToken, requireRole(['Admin', 'Op
     if (!allowed.includes(m.site)) return res.status(403).json({ error: 'Access denied for this site' });
     const id = genId('MAT');
     const movementDate = normalizeDateInput(m.movementDate) || localTodayStr();
-    // No ticket number yet - a material movement now needs Admin approval first (see
-    // /approve below, which is where the ticket is actually generated), same workflow
-    // shape as Visitor Access.
+    // No ticket number yet - a material movement needs approval first (/approve below), then a
+    // separate Generate Ticket step (/generate-ticket), same workflow shape as Visitor Access.
     await pool.query(
       `INSERT INTO material_movements (id, movement_type, site, item_name, description, quantity, unit, receiver_name, sender_name, dc_invoice_no, movement_date, remarks, created_by, status)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'Pending Approval')`,
@@ -7725,27 +7755,54 @@ app.post('/api/material-movements', authenticateToken, requireRole(['Admin', 'Op
 });
 
 // Approve/Reject: Admin, or any user flagged as an Approver for this record's site (see
-// requireApproverOrAdmin). This is also where the ticket number is actually generated - a
-// movement's physical-presence step (Received at Site / Not Received / Outward Complete /
-// Cancelled, below) happens after approval, same workflow shape as Visitor Access.
+// requireApproverOrAdmin). Approving only moves the request to "Approved"; the ticket is
+// generated afterwards by a separate step (generate-ticket, below), then the physical-presence
+// step (Received at Site / Not Received / Outward Complete / Cancelled) closes it - same
+// workflow shape as Visitor Access.
 app.post('/api/material-movements/:id/approve', authenticateToken, requireApproverOrAdmin, async (req, res) => {
-  let releaseTicketLock = null;
   try {
     const [existing] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [req.params.id]);
     if (existing.length === 0) return res.status(404).json({ error: 'Material movement record not found' });
     await assertSiteAccess(req.user, existing[0].site);
     if (existing[0].status !== 'Pending Approval') return res.status(400).json({ error: `Only a "Pending Approval" request can be approved (this one is "${existing[0].status}")` });
     const approverName = String((req.body && req.body.approverName) || req.user.name || req.user.username).trim();
-    releaseTicketLock = await acquireTicketLock();
-    const ticketNo = await generateTicketNoGeneric('MOV', 'material_movements');
-    await pool.query(`UPDATE material_movements SET status='Approved', approver_name=?, approved_at=NOW(), ticket_no=? WHERE id=?`, [approverName, ticketNo, req.params.id]);
+    await pool.query(`UPDATE material_movements SET status='Approved', approver_name=?, approved_at=NOW() WHERE id=?`, [approverName, req.params.id]);
     const [rows] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [req.params.id]);
     const json = movementRowToJson(rows[0]);
-    auditLog(req, 'MOVEMENT_APPROVE', { entity: 'material_movement', entityId: req.params.id, site: existing[0].site, details: { approverName, ticketNo } });
+    auditLog(req, 'MOVEMENT_APPROVE', { entity: 'material_movement', entityId: req.params.id, site: existing[0].site, details: { approverName } });
+    res.json(json);
+    setupRoutesModule.sendNotification({
+      subject: `[DCIM] Material Movement request APPROVED - ${esc(json.itemName)} (${esc(json.site)})`,
+      html: `<p>This ${esc(json.movementType)} material movement request has been approved by <b>${esc(approverName)}</b>. A ticket can now be generated.</p>
+        <table cellpadding="6" style="border-collapse:collapse">
+          <tr><td><b>Site</b></td><td>${esc(json.site)}</td></tr>
+          <tr><td><b>Item</b></td><td>${esc(json.itemName)}</td></tr>
+          <tr><td><b>Quantity</b></td><td>${esc(json.quantity)} ${esc(json.unit || '')}</td></tr>
+        </table>`,
+    }).catch(() => {});
+  } catch (e) {
+    sendErr(res, e);
+  }
+});
+
+// Generate the ticket for an Approved movement: INW<yymm><nn> for Inward, OUT<yymm><nn> for Outward.
+app.post('/api/material-movements/:id/generate-ticket', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+  let releaseTicketLock = null;
+  try {
+    const [existing] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [req.params.id]);
+    if (existing.length === 0) return res.status(404).json({ error: 'Material movement record not found' });
+    await assertSiteAccess(req.user, existing[0].site);
+    if (existing[0].status !== 'Approved') return res.status(400).json({ error: `A ticket can only be generated for an "Approved" request (this one is "${existing[0].status}")` });
+    releaseTicketLock = await acquireTicketLock();
+    const ticketNo = await generateTicketNoGeneric(existing[0].movement_type === 'Inward' ? 'INW' : 'OUT', 'material_movements');
+    await pool.query(`UPDATE material_movements SET status='Ticket Issued', ticket_no=? WHERE id=?`, [ticketNo, req.params.id]);
+    const [rows] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [req.params.id]);
+    const json = movementRowToJson(rows[0]);
+    auditLog(req, 'MOVEMENT_TICKET_ISSUED', { entity: 'material_movement', entityId: req.params.id, site: existing[0].site, ticket_no: ticketNo });
     res.json(json);
     setupRoutesModule.sendNotification({
       subject: `[DCIM] Material Movement ticket ${ticketNo} issued - ${esc(json.itemName)} (${esc(json.site)})`,
-      html: `<p>This material movement request has been approved by <b>${esc(approverName)}</b> and a ticket has been issued.</p>
+      html: `<p>A material movement ticket has been generated.</p>
         <table cellpadding="6" style="border-collapse:collapse">
           <tr><td><b>Ticket No</b></td><td>${esc(ticketNo)}</td></tr>
           <tr><td><b>Site</b></td><td>${esc(json.site)}</td></tr>
@@ -7796,7 +7853,7 @@ app.post('/api/material-movements/:id/receive', authenticateToken, requireRole([
     if (existing.length === 0) return res.status(404).json({ error: 'Material movement record not found' });
     await assertSiteAccess(req.user, existing[0].site);
     if (existing[0].movement_type !== 'Inward') return res.status(400).json({ error: 'Material Received at Site only applies to an Inward movement' });
-    if (existing[0].status !== 'Approved') return res.status(400).json({ error: `Only an "Approved" request can be marked Received at Site (this one is "${existing[0].status}")` });
+    if (existing[0].status !== 'Ticket Issued') return res.status(400).json({ error: `Only an "Ticket Issued" request can be marked Received at Site (this one is "${existing[0].status}")` });
     const receiverName = String((req.body && req.body.receiverName) || existing[0].receiver_name || '').trim() || null;
     const newRemarks = appendMovementRemark(existing[0].remarks, 'Received', req.body && req.body.remarks);
     await pool.query(`UPDATE material_movements SET status='Received at Site', receiver_name=?, remarks=? WHERE id=?`, [receiverName, newRemarks, req.params.id]);
@@ -7815,7 +7872,7 @@ app.post('/api/material-movements/:id/not-received', authenticateToken, requireR
     if (existing.length === 0) return res.status(404).json({ error: 'Material movement record not found' });
     await assertSiteAccess(req.user, existing[0].site);
     if (existing[0].movement_type !== 'Inward') return res.status(400).json({ error: 'Material Not Received only applies to an Inward movement' });
-    if (existing[0].status !== 'Approved') return res.status(400).json({ error: `Only an "Approved" request can be marked Not Received (this one is "${existing[0].status}")` });
+    if (existing[0].status !== 'Ticket Issued') return res.status(400).json({ error: `Only an "Ticket Issued" request can be marked Not Received (this one is "${existing[0].status}")` });
     const newRemarks = appendMovementRemark(existing[0].remarks, 'Not Received', req.body && req.body.remarks);
     await pool.query(`UPDATE material_movements SET status='Not Received', remarks=? WHERE id=?`, [newRemarks, req.params.id]);
     const [rows] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [req.params.id]);
@@ -7833,7 +7890,7 @@ app.post('/api/material-movements/:id/outward-complete', authenticateToken, requ
     if (existing.length === 0) return res.status(404).json({ error: 'Material movement record not found' });
     await assertSiteAccess(req.user, existing[0].site);
     if (existing[0].movement_type !== 'Outward') return res.status(400).json({ error: 'Material Outward Complete only applies to an Outward movement' });
-    if (existing[0].status !== 'Approved') return res.status(400).json({ error: `Only an "Approved" request can be marked Outward Complete (this one is "${existing[0].status}")` });
+    if (existing[0].status !== 'Ticket Issued') return res.status(400).json({ error: `Only an "Ticket Issued" request can be marked Outward Complete (this one is "${existing[0].status}")` });
     const newRemarks = appendMovementRemark(existing[0].remarks, 'Outward Complete', req.body && req.body.remarks);
     await pool.query(`UPDATE material_movements SET status='Outward Complete', remarks=? WHERE id=?`, [newRemarks, req.params.id]);
     const [rows] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [req.params.id]);
@@ -7851,7 +7908,7 @@ app.post('/api/material-movements/:id/cancel', authenticateToken, requireRole(['
     if (existing.length === 0) return res.status(404).json({ error: 'Material movement record not found' });
     await assertSiteAccess(req.user, existing[0].site);
     if (existing[0].movement_type !== 'Outward') return res.status(400).json({ error: 'Cancelled only applies to an Outward movement' });
-    if (existing[0].status !== 'Approved') return res.status(400).json({ error: `Only an "Approved" request can be Cancelled (this one is "${existing[0].status}")` });
+    if (!['Approved', 'Ticket Issued'].includes(existing[0].status)) return res.status(400).json({ error: `Only an "Approved" or "Ticket Issued" request can be Cancelled (this one is "${existing[0].status}")` });
     const newRemarks = appendMovementRemark(existing[0].remarks, 'Cancelled', req.body && req.body.remarks);
     await pool.query(`UPDATE material_movements SET status='Cancelled', remarks=? WHERE id=?`, [newRemarks, req.params.id]);
     const [rows] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [req.params.id]);

@@ -209,6 +209,7 @@ const api = {
     updateMaterialMovement: (id, m) => apiFetch('/material-movements/' + id, { method: 'PATCH', body: JSON.stringify(m) }),
     deleteMaterialMovement: (id) => apiFetch('/material-movements/' + id, { method: 'DELETE' }),
     approveMaterialMovement: (id, approverName) => apiFetch('/material-movements/' + id + '/approve', { method: 'POST', body: JSON.stringify({ approverName }) }),
+    generateMaterialMovementTicket: (id) => apiFetch('/material-movements/' + id + '/generate-ticket', { method: 'POST' }),
     rejectMaterialMovement: (id, approverName, reason) => apiFetch('/material-movements/' + id + '/reject', { method: 'POST', body: JSON.stringify({ approverName, reason }) }),
     receiveMaterialMovement: (id, remarks, receiverName) => apiFetch('/material-movements/' + id + '/receive', { method: 'POST', body: JSON.stringify({ remarks: remarks || '', receiverName: receiverName || '' }) }),
     notReceivedMaterialMovement: (id, remarks) => apiFetch('/material-movements/' + id + '/not-received', { method: 'POST', body: JSON.stringify({ remarks: remarks || '' }) }),
@@ -3101,6 +3102,7 @@ const MOVEMENT_STATUS_COLORS = {
     "Pending Approval": { c: "#D97706", bg: "#FFFBEB" },
     "Approved": { c: "#2563EB", bg: "#EFF6FF" },
     "Rejected": { c: "#DC2626", bg: "#FEF2F2" },
+    "Ticket Issued": { c: "#7C3AED", bg: "#F5F3FF" },
     "Received at Site": { c: "#059669", bg: "#ECFDF5" },
     "Not Received": { c: "#DC2626", bg: "#FEF2F2" },
     "Outward Complete": { c: "#059669", bg: "#ECFDF5" },
@@ -3127,7 +3129,7 @@ function MovementCloseActionModal({ action, onClose, onConfirm }) {
                 React.createElement("button", { onClick: onClose, className: "neu-btn-secondary", style: { flex: 1, padding: "11px 0", fontSize: 13.5 } }, "Cancel"),
                 React.createElement("button", { onClick: confirm, disabled: saving, className: "neu-btn-primary", style: { flex: 1, padding: "11px 0", fontSize: 13.5, opacity: saving ? 0.6 : 1 } }, saving ? `${MOVEMENT_ACTION_VERBING[action.type] || label}…` : label)))), document.body);
 }
-function MaterialMovements({ movements, allowedSites, canEdit, isAdmin, canApprove, onEdit, onDelete, onApprove, onReject, onReceive, onNotReceived, onOutwardComplete, onCancel, onDownload, onExportExcel, onExportCSV, onImport, importError, importProgress, importErrorDetails, selectedIds, onSelectId, onSelectAll, onDeleteSelected, onClearSelection }) {
+function MaterialMovements({ movements, allowedSites, canEdit, isAdmin, canApprove, onEdit, onDelete, onApprove, onReject, onGenerateTicket, onReceive, onNotReceived, onOutwardComplete, onCancel, onDownload, onExportExcel, onExportCSV, onImport, importError, importProgress, importErrorDetails, selectedIds, onSelectId, onSelectAll, onDeleteSelected, onClearSelection }) {
     const movListCtl = useProgressiveList();
     const [expandedId, setExpandedId] = useState(null);
     const [closeAction, setCloseAction] = useState(null); // { id, type: "receive" | "notReceived" | "outwardComplete" | "cancel", itemName, defaultReceiverName }
@@ -3237,17 +3239,19 @@ function MaterialMovements({ movements, allowedSites, canEdit, isAdmin, canAppro
                                     fontWeight: isType || col.key === "site" || col.key === "ticketNo" ? 700 : 400 } }, WRAP_COLS.has(col.key) ? React.createElement("div", { style: wrapCellStyle(false) }, val != null && val !== "" ? val : "—") : (val != null && val !== "" ? val : "—"));
                         }),
                         React.createElement("td", { onClick: (e) => e.stopPropagation(), style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px", textAlign: "right", whiteSpace: "nowrap" } },
-                            canApprove && m.status === "Pending Approval" && React.createElement("button", { onClick: () => onApprove(m.id), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Approve & issue ticket" },
+                            canApprove && m.status === "Pending Approval" && React.createElement("button", { onClick: () => onApprove(m.id), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Approve" },
                                 React.createElement(CheckCircle2, { s: 13, c: "#059669" })),
                             canApprove && m.status === "Pending Approval" && React.createElement("button", { onClick: () => onReject(m.id), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Reject request" },
                                 React.createElement(X, { s: 13, c: "#DC2626" })),
-                            canEdit && m.status === "Approved" && m.movementType === "Inward" && React.createElement("button", { onClick: () => setCloseAction({ id: m.id, type: "receive", itemName: m.itemName, defaultReceiverName: m.receiverName }), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Material Received at Site" },
+                            canEdit && m.status === "Approved" && React.createElement("button", { onClick: () => onGenerateTicket(m.id), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Generate ticket" },
+                                React.createElement(FileText, { s: 13, c: "#7C3AED" })),
+                            canEdit && m.status === "Ticket Issued" && m.movementType === "Inward" && React.createElement("button", { onClick: () => setCloseAction({ id: m.id, type: "receive", itemName: m.itemName, defaultReceiverName: m.receiverName }), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Material Received at Site" },
                                 React.createElement(CheckCircle2, { s: 13, c: "#059669" })),
-                            canEdit && m.status === "Approved" && m.movementType === "Inward" && React.createElement("button", { onClick: () => setCloseAction({ id: m.id, type: "notReceived", itemName: m.itemName }), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Material Not Received" },
+                            canEdit && m.status === "Ticket Issued" && m.movementType === "Inward" && React.createElement("button", { onClick: () => setCloseAction({ id: m.id, type: "notReceived", itemName: m.itemName }), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Material Not Received" },
                                 React.createElement(X, { s: 13, c: "#DC2626" })),
-                            canEdit && m.status === "Approved" && m.movementType === "Outward" && React.createElement("button", { onClick: () => setCloseAction({ id: m.id, type: "outwardComplete", itemName: m.itemName }), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Material Outward Complete" },
+                            canEdit && m.status === "Ticket Issued" && m.movementType === "Outward" && React.createElement("button", { onClick: () => setCloseAction({ id: m.id, type: "outwardComplete", itemName: m.itemName }), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Material Outward Complete" },
                                 React.createElement(CheckCircle2, { s: 13, c: "#059669" })),
-                            canEdit && m.status === "Approved" && m.movementType === "Outward" && React.createElement("button", { onClick: () => setCloseAction({ id: m.id, type: "cancel", itemName: m.itemName }), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Cancelled — Close Ticket" },
+                            canEdit && (m.status === "Approved" || m.status === "Ticket Issued") && m.movementType === "Outward" && React.createElement("button", { onClick: () => setCloseAction({ id: m.id, type: "cancel", itemName: m.itemName }), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Cancelled — Close Ticket" },
                                 React.createElement(X, { s: 13, c: "#DC2626" })),
                             m.hasDocument && React.createElement("button", { onClick: () => onDownload(m.id, m.documentName), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Download DC/Invoice" },
                                 React.createElement(Download, { s: 13, c: "#0EA5E9" })),
@@ -8400,6 +8404,10 @@ function FirmwareJobsTab({ canEdit }) {
 function FirmwareJobAlerts({ currentUser, onOpen, onRunning }) {
     const seen = useRef(null);
     const [toasts, setToasts] = useState([]);
+    // Dismissed alerts are remembered in this browser (per user) so a page refresh does not bring them back.
+    const dismissKey = "dcim_fw_alerts_dismissed_" + ((currentUser && (currentUser.username || currentUser.name)) || "u");
+    const readDismissed = () => { try { const o = JSON.parse(localStorage.getItem(dismissKey) || "{}"); return o && typeof o === "object" ? o : {}; } catch (e) { return {}; } };
+    const rememberDismissed = (key) => { try { const o = readDismissed(); const cut = Date.now() - 7 * 86400000; Object.keys(o).forEach((k) => { if (o[k] < cut) delete o[k]; }); o[key] = Date.now(); localStorage.setItem(dismissKey, JSON.stringify(o)); } catch (e) { } };
     useEffect(() => {
         let alive = true;
         const mine = (j) => !!j.startedBy && (j.startedBy === currentUser.name || j.startedBy === currentUser.username);
@@ -8409,6 +8417,7 @@ function FirmwareJobAlerts({ currentUser, onOpen, onRunning }) {
             const prev = seen.current;
             const next = new Map();
             const fresh = [];
+            const dismissedNow = readDismissed();
             jobs.forEach((j) => {
                 const k = j.vendor + "|" + j.site + "|" + j.zone + "|" + j.jobRef + "|" + j.startedAt;
                 next.set(k, j.status);
@@ -8421,18 +8430,19 @@ function FirmwareJobAlerts({ currentUser, onOpen, onRunning }) {
             });
             seen.current = next;
             if (onRunning) onRunning(jobs.filter((j) => j.status === "Running").length);
-            if (fresh.length) setToasts((t) => [...t, ...fresh.map((f) => ({ ...f, id: f.k + "|" + f.kind + "|" + Date.now() }))].slice(-5));
+            const shown = fresh.filter((f) => !dismissedNow[f.k + "|" + f.kind]);
+            if (shown.length) setToasts((t) => [...t, ...shown.filter((f) => !t.some((x) => x.k === f.k && x.kind === f.kind)).map((f) => ({ ...f, id: f.k + "|" + f.kind + "|" + Date.now() }))].slice(-5));
         }).catch(() => { });
         tick();
         const t = setInterval(tick, 15000);
         return () => { alive = false; clearInterval(t); };
     }, []);
     useEffect(() => {
-        const timers = toasts.filter((x) => x.kind === "completed").map((x) => setTimeout(() => setToasts((t) => t.filter((y) => y.id !== x.id)), 20000));
+        const timers = toasts.filter((x) => x.kind === "completed").map((x) => setTimeout(() => { rememberDismissed(x.k + "|" + x.kind); setToasts((t) => t.filter((y) => y.id !== x.id)); }, 20000));
         return () => timers.forEach(clearTimeout);
     }, [toasts]);
     if (!toasts.length) return null;
-    const dismiss = (id) => setToasts((t) => t.filter((y) => y.id !== id));
+    const dismiss = (id) => { const x = toasts.find((y) => y.id === id); if (x) rememberDismissed(x.k + "|" + x.kind); setToasts((t) => t.filter((y) => y.id !== id)); };
     return React.createElement("div", { role: "alert", "aria-live": "assertive", style: { position: "fixed", right: 20, bottom: 44, zIndex: 900, display: "flex", flexDirection: "column", gap: 10, width: 360, maxWidth: "calc(100vw - 40px)" } }, toasts.map((x) => {
         const j = x.j;
         const col = x.kind === "failed" ? "#DC2626" : x.kind === "completed" ? "#059669" : "#D97706";
@@ -15368,7 +15378,7 @@ function DataCenterDashboard() {
         alert(e.message);
     } };
     const approveMovement = async (id) => {
-        const approverName = prompt("Approver name (shown on the ticket and in the notification email):", (currentUser && currentUser.name) || "");
+        const approverName = prompt("Approver name (shown on the record and in the notification email):", (currentUser && currentUser.name) || "");
         if (approverName === null) return; // cancelled
         try {
             await api.approveMaterialMovement(id, approverName.trim());
@@ -15391,6 +15401,10 @@ function DataCenterDashboard() {
         catch (e) {
             alert(e.message);
         }
+    };
+    const generateMovementTicket = async (id) => {
+        try { await api.generateMaterialMovementTicket(id); await loadAll(); }
+        catch (e) { alert(e.message); }
     };
     const receiveMovement = async (id, remarks, receiverName) => {
         try { await api.receiveMaterialMovement(id, remarks, receiverName); await loadAll(); }
@@ -16897,7 +16911,7 @@ function DataCenterDashboard() {
                 canEdit && React.createElement("button", { onClick: () => setMovementModalOpen(true), className: "neu-btn-secondary", style: { display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, padding: "9px 14px", color: "#0EA5E9" }, title: "Record material movement" },
                     React.createElement(Package, { s: 14, c: "#0EA5E9" }),
                     " Record Movement")),
-            React.createElement(MaterialMovements, { movements: siteRestrictedMovements, allowedSites: allowedSites, canEdit: canEdit, isAdmin: isAdmin, canApprove: canApprove, onEdit: (m) => setEditingMovement(m), onDelete: deleteMovement, onApprove: approveMovement, onReject: rejectMovement, onReceive: receiveMovement, onNotReceived: notReceivedMovement, onOutwardComplete: outwardCompleteMovement, onCancel: cancelMovement, selectedIds: selectedMovementIds, onSelectId: (id, checked) => setSelectedMovementIds(prev => { const n = new Set(prev); checked ? n.add(id) : n.delete(id); return n; }), onSelectAll: (checked, ids) => setSelectedMovementIds(prev => { const n = new Set(prev); ids.forEach(id => checked ? n.add(id) : n.delete(id)); return n; }), onDeleteSelected: deleteSelectedMovements, onClearSelection: () => setSelectedMovementIds(new Set()), onDownload: downloadMovementDocument, onExportExcel: handleExportMovementsXlsx, onExportCSV: handleExportMovementsCsv, onImport: handleImportMovements, importError: importError, importProgress: importProgress, importErrorDetails: importErrorDetails }),
+            React.createElement(MaterialMovements, { movements: siteRestrictedMovements, allowedSites: allowedSites, canEdit: canEdit, isAdmin: isAdmin, canApprove: canApprove, onEdit: (m) => setEditingMovement(m), onDelete: deleteMovement, onApprove: approveMovement, onReject: rejectMovement, onGenerateTicket: generateMovementTicket, onReceive: receiveMovement, onNotReceived: notReceivedMovement, onOutwardComplete: outwardCompleteMovement, onCancel: cancelMovement, selectedIds: selectedMovementIds, onSelectId: (id, checked) => setSelectedMovementIds(prev => { const n = new Set(prev); checked ? n.add(id) : n.delete(id); return n; }), onSelectAll: (checked, ids) => setSelectedMovementIds(prev => { const n = new Set(prev); ids.forEach(id => checked ? n.add(id) : n.delete(id)); return n; }), onDeleteSelected: deleteSelectedMovements, onClearSelection: () => setSelectedMovementIds(new Set()), onDownload: downloadMovementDocument, onExportExcel: handleExportMovementsXlsx, onExportCSV: handleExportMovementsCsv, onImport: handleImportMovements, importError: importError, importProgress: importProgress, importErrorDetails: importErrorDetails }),
             movementModalOpen && React.createElement(RecordMovementModal, { onClose: () => setMovementModalOpen(false), onSave: createMovement, assets: siteRestrictedAssets, zones: siteRestrictedZones, onDownload: downloadMovementDocument, onRemoveDocument: removeMovementDocument, onDownloadDoc: downloadMovementDocumentById, onRemoveDoc: removeMovementDocumentById }),
             editingMovement && React.createElement(RecordMovementModal, { initial: editingMovement, onClose: () => setEditingMovement(null), onSave: (f, files, ocrMeta) => updateMovement({ ...editingMovement, ...f }, files, ocrMeta), assets: siteRestrictedAssets, zones: siteRestrictedZones, onDownload: downloadMovementDocument, onRemoveDocument: removeMovementDocument, onDownloadDoc: downloadMovementDocumentById, onRemoveDoc: removeMovementDocumentById })),
         !loading && tab === "visitors" && React.createElement(React.Fragment, null,
