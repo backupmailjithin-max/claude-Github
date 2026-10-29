@@ -8090,14 +8090,22 @@ function FloatingHScroll({ wrapRef }) {
             if (!wrap) { setState((s) => s.visible ? { ...s, visible: false } : s); return; }
             const rect = wrap.getBoundingClientRect();
             const needsScroll = wrap.scrollWidth > wrap.clientWidth + 2;
-            const visible = needsScroll && rect.top < window.innerHeight && rect.bottom > window.innerHeight;
+            // Just "the table needs horizontal scrolling and some part of it is on screen" -
+            // deliberately NOT tied to whether the table's bottom edge (and its own native
+            // scrollbar) has scrolled past the bottom of the window. That extra condition only
+            // held for a page where the whole document itself scrolls; it stayed permanently
+            // false - so the bar never appeared - on a layout where the scrolling happens inside
+            // a fixed-height panel instead (a header/sidebar shell, or simply a table short
+            // enough to fit on screen without the page growing taller). This way the bar shows
+            // whenever it's actually useful, regardless of how the surrounding page scrolls.
+            const visible = needsScroll && rect.bottom > 0 && rect.top < window.innerHeight;
             setState({ visible, left: rect.left, width: rect.width, scrollWidth: wrap.scrollWidth });
         };
         recompute();
-        window.addEventListener("scroll", recompute, { passive: true });
+        window.addEventListener("scroll", recompute, { passive: true, capture: true }); // capture: true also catches scroll events from an inner scrollable panel, which don't bubble to window
         window.addEventListener("resize", recompute);
-        const t = setInterval(recompute, 600);
-        return () => { window.removeEventListener("scroll", recompute); window.removeEventListener("resize", recompute); clearInterval(t); };
+        const t = setInterval(recompute, 500);
+        return () => { window.removeEventListener("scroll", recompute, { capture: true }); window.removeEventListener("resize", recompute); clearInterval(t); };
     }, [wrapRef]);
     useEffect(() => {
         const wrap = wrapRef.current, track = trackRef.current;

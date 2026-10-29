@@ -82,7 +82,7 @@ function normalizeVendor(manufacturer, oemKeys) {
 // (identity/health), Chassis/Thermal+Power (sensors), Managers (BMC itself).
 async function detectRedfish(monitorFetch, ip, port, username, password) {
   const out = {
-    reachable: false, redfishVersion: null, vendor: null, model: null, serialNumber: null,
+    reachable: false, rootReachable: false, redfishVersion: null, vendor: null, model: null, serialNumber: null,
     biosVersion: null, bmcFirmware: null, healthStatus: null, powerState: null,
     powerWatts: null, temperatures: [], fans: [], systemPath: null, chassisPath: null,
     managerPath: null, updateServicePath: null, error: null, alertCount: null,
@@ -90,6 +90,13 @@ async function detectRedfish(monitorFetch, ip, port, username, password) {
   let root;
   try { root = await redfishGet(monitorFetch, ip, port, username, password, '/redfish/v1/'); }
   catch (e) { out.error = e.statusCode === 401 ? 'Authentication failed - check the BMC username/password.' : `Could not reach Redfish service: ${e.message}`; return out; }
+  // Reaching the service root (unauthenticated on this and most real BMCs - see the note below)
+  // proves the IP/port answers at all. detectRedfishAnyCredential() uses this flag to stop
+  // trying further candidate credentials the moment this fails: every candidate would hit the
+  // exact same network-level failure (and the same ~30s fetch timeout) since none of them even
+  // got far enough to have their password checked, so retrying three more times is pure waste -
+  // this is what was making /discover time out across 1000s of unreachable/misconfigured IPs.
+  out.rootReachable = true;
   out.redfishVersion = root.RedfishVersion || null;
   out.updateServicePath = (root.UpdateService && root.UpdateService['@odata.id']) || null;
 
@@ -243,6 +250,12 @@ async function detectRedfishAnyCredential(monitorFetch, ip, port, candidates) {
     const r = await detectRedfish(monitorFetch, ip, port, cred.username, cred.password);
     if (r.reachable) return { ...r, credential: cred };
     last = r;
+    // Stop at the first candidate whenever the IP/port itself didn't answer at all - every
+    // remaining candidate would fail the exact same way (see the comment on out.rootReachable
+    // in detectRedfish). Only keep trying when the device IS reachable but this particular
+    // credential was rejected (rootReachable true, reachable false) - that's the only case
+    // where a different password can actually make a difference.
+    if (!r.rootReachable) break;
   }
   return last || { reachable: false, error: 'No candidate credentials configured' };
 }
@@ -451,24 +464,32 @@ module.exports = function registerRedfishRoutes(app, deps) {
       const candidates = redfishCredentialCandidates();
       if (!candidates.length) return res.status(400).json({ error: 'No BMC credentials configured - set REDFISH_CREDENTIALS or REDFISH_DEFAULT_USERNAME/PASSWORD' });
       const allowed = await getAllowedSitesForUser(req.user);
-      let applied = 0;
-      for (const assetId of assetIds.slice(0, 200)) {
-        const [rows] = await pool.query('SELECT * FROM assets WHERE id = ?', [assetId]);
-        if (!rows.length || !allowed.includes(rows[0].site) || !rows[0].mgmt_ip) continue;
-        const asset = rows[0];
-        const r = await detectRedfishAnyCredential(monitorFetch, asset.mgmt_ip, 443, candidates);
-        if (!r.reachable) continue;
-        await pool.query(
-          `UPDATE assets SET redfish_username = ?, redfish_password = ?, redfish_port = 443,
-             manufacturer = COALESCE(NULLIF(manufacturer, ''), ?), model = COALESCE(NULLIF(model, ''), ?),
-             serial_number = COALESCE(NULLIF(serial_number, ''), ?), firmware = COALESCE(NULLIF(firmware, ''), ?),
-             bmc_firmware = ?, redfish_version = ?, health_status = ?, power_state = ?, redfish_alert_count = ?,
-             redfish_power_watts = ?, last_redfish_sync_at = NOW(), last_redfish_error = NULL
-           WHERE id = ?`,
-          [r.credential.username, r.credential.password || '', r.vendor, r.model, r.serialNumber, r.biosVersion, r.bmcFirmware, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
-        );
-        applied++;
+      const ids = assetIds.slice(0, 200);
+      let idx = 0, applied = 0;
+      // Bounded concurrency, same as /discover above - this used to be a sequential per-asset
+      // loop, which for a large "select all reachable" batch multiplied the same timeout risk
+      // /discover had before the rootReachable fast-fail fix.
+      async function worker() {
+        while (idx < ids.length) {
+          const assetId = ids[idx++];
+          const [rows] = await pool.query('SELECT * FROM assets WHERE id = ?', [assetId]);
+          if (!rows.length || !allowed.includes(rows[0].site) || !rows[0].mgmt_ip) continue;
+          const asset = rows[0];
+          const r = await detectRedfishAnyCredential(monitorFetch, asset.mgmt_ip, 443, candidates);
+          if (!r.reachable) continue;
+          await pool.query(
+            `UPDATE assets SET redfish_username = ?, redfish_password = ?, redfish_port = 443,
+               manufacturer = COALESCE(NULLIF(manufacturer, ''), ?), model = COALESCE(NULLIF(model, ''), ?),
+               serial_number = COALESCE(NULLIF(serial_number, ''), ?), firmware = COALESCE(NULLIF(firmware, ''), ?),
+               bmc_firmware = ?, redfish_version = ?, health_status = ?, power_state = ?, redfish_alert_count = ?,
+               redfish_power_watts = ?, last_redfish_sync_at = NOW(), last_redfish_error = NULL
+             WHERE id = ?`,
+            [r.credential.username, r.credential.password || '', r.vendor, r.model, r.serialNumber, r.biosVersion, r.bmcFirmware, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
+          );
+          applied++;
+        }
       }
+      await Promise.all(Array.from({ length: Math.min(DISCOVERY_CONCURRENCY, ids.length) }, worker));
       auditLog(req, 'REDFISH_DISCOVERY_APPLY', { entity: 'asset', status: 'success' }, { count: applied });
       res.json({ applied });
     } catch (e) { sendErr(res, e); }
