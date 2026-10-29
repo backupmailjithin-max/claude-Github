@@ -250,6 +250,12 @@ async function detectRedfishAnyCredential(monitorFetch, ip, port, candidates) {
 module.exports = function registerRedfishRoutes(app, deps) {
   const { pool, log, httpErr, sendErr, authenticateToken, requireRole, getAllowedSitesForUser, applySiteScope, assertSiteAccess, genId, auditLog, monitorFetch } = deps;
 
+  // Asset ids currently mid-sync (via either a manual "Sync Now" click or the background
+  // auto-sync sweep). Shared between both paths so the same device's BMC is never hit by two
+  // concurrent sync requests at once - see syncOneAsset()/the /sync route, and pollAllRedfish()
+  // below, which both check it.
+  const syncInFlight = new Set();
+
   async function loadAssetForUser(req, res, assetId) {
     const [rows] = await pool.query('SELECT * FROM assets WHERE id = ?', [assetId]);
     if (!rows.length) { res.status(404).json({ error: 'Asset not found' }); return null; }
@@ -358,31 +364,45 @@ module.exports = function registerRedfishRoutes(app, deps) {
     } catch (e) { sendErr(res, e); }
   });
 
-  // Re-poll an asset's BMC with its saved credentials and persist the
-  // result: identity fields (vendor/model/serial/firmware/bmcFirmware) are
-  // COALESCE-safe (filled only if currently blank); health/power/sync time
-  // always reflect the latest poll, since they are live state, not identity.
+  // Re-poll one asset's BMC with its saved credentials and persist the result. Shared by the
+  // manual "Sync Now" action and the background auto-sync sweep below, so both ways of
+  // triggering a sync behave identically and stay in one place. Identity fields
+  // (vendor/model/serial/firmware/bmcFirmware) are COALESCE-safe (filled only if currently
+  // blank); health/power/sync time always reflect the latest poll, since they are live state,
+  // not identity.
+  async function syncOneAsset(asset) {
+    if (!asset.mgmt_ip) { const e = new Error('This asset has no management IP set'); e.statusCode = 400; throw e; }
+    if (!asset.redfish_username) { const e = new Error('No Redfish credentials saved for this asset yet - use Test & Detect first'); e.statusCode = 400; throw e; }
+    const r = await detectRedfish(monitorFetch, asset.mgmt_ip, asset.redfish_port, asset.redfish_username, asset.redfish_password);
+    if (!r.reachable) {
+      await pool.query('UPDATE assets SET last_redfish_error = ?, last_redfish_sync_at = NOW() WHERE id = ?', [String(r.error || 'Unreachable').slice(0, 255), asset.id]);
+      return { reachable: false, error: r.error };
+    }
+    await pool.query(
+      `UPDATE assets SET
+         manufacturer = COALESCE(NULLIF(manufacturer, ''), ?), model = COALESCE(NULLIF(model, ''), ?),
+         serial_number = COALESCE(NULLIF(serial_number, ''), ?), firmware = COALESCE(NULLIF(firmware, ''), ?),
+         bmc_firmware = ?, redfish_version = ?, health_status = ?, power_state = ?, redfish_alert_count = ?,
+         redfish_power_watts = ?, last_redfish_sync_at = NOW(), last_redfish_error = NULL
+       WHERE id = ?`,
+      [r.vendor, r.model, r.serialNumber, r.biosVersion, r.bmcFirmware, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
+    );
+    return { reachable: true, ...r };
+  }
+
   app.post('/api/monitoring/redfish/:assetId/sync', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
     try {
       const asset = await loadAssetForUser(req, res, req.params.assetId);
       if (!asset) return;
-      if (!asset.mgmt_ip) return res.status(400).json({ error: 'This asset has no management IP set' });
-      if (!asset.redfish_username) return res.status(400).json({ error: 'No Redfish credentials saved for this asset yet - use Test & Detect first' });
-      const r = await detectRedfish(monitorFetch, asset.mgmt_ip, asset.redfish_port, asset.redfish_username, asset.redfish_password);
-      if (!r.reachable) {
-        await pool.query('UPDATE assets SET last_redfish_error = ?, last_redfish_sync_at = NOW() WHERE id = ?', [String(r.error || 'Unreachable').slice(0, 255), asset.id]);
-        return res.json({ reachable: false, error: r.error });
-      }
-      await pool.query(
-        `UPDATE assets SET
-           manufacturer = COALESCE(NULLIF(manufacturer, ''), ?), model = COALESCE(NULLIF(model, ''), ?),
-           serial_number = COALESCE(NULLIF(serial_number, ''), ?), firmware = COALESCE(NULLIF(firmware, ''), ?),
-           bmc_firmware = ?, redfish_version = ?, health_status = ?, power_state = ?, redfish_alert_count = ?,
-           redfish_power_watts = ?, last_redfish_sync_at = NOW(), last_redfish_error = NULL
-         WHERE id = ?`,
-        [r.vendor, r.model, r.serialNumber, r.biosVersion, r.bmcFirmware, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
-      );
-      res.json({ reachable: true, ...r });
+      // The background auto-sync sweep (if enabled) already has this device open - starting a
+      // second request to the same BMC at the same time is wasted load and can trip some BMCs'
+      // session limits. Ask the person to wait a moment rather than double-hit the device.
+      if (syncInFlight.has(asset.id)) return res.status(409).json({ error: 'This device is being synced automatically right now - try again in a few seconds.' });
+      syncInFlight.add(asset.id);
+      try {
+        const result = await syncOneAsset(asset);
+        res.json(result);
+      } finally { syncInFlight.delete(asset.id); }
     } catch (e) { sendErr(res, e); }
   });
 
@@ -495,7 +515,38 @@ module.exports = function registerRedfishRoutes(app, deps) {
     } catch (e) { sendErr(res, e); }
   });
 
-  return { getRedfishTaskStatus: (deviceId, taskUri) => getRedfishTaskStatusForDevice(pool, monitorFetch, deviceId, taskUri) };
+  // Background auto-sync: re-polls every already-configured, non-ignored device on a timer
+  // (wired up in server.js next to the equivalent PDU_POLL job) so health/power/alerts stay
+  // current without anyone having the page open. Bounded concurrency, same as /discover, so a
+  // site with 1000s of devices doesn't open 1000s of connections at once. A device already
+  // mid-sync (someone just clicked "Sync Now" on it) is skipped for this pass rather than
+  // queued or double-hit - it'll be picked up on the next sweep.
+  async function pollAllRedfish() {
+    const [rows] = await pool.query(
+      `SELECT * FROM assets WHERE mgmt_ip IS NOT NULL AND mgmt_ip <> '' AND redfish_username IS NOT NULL
+         AND redfish_username <> '' AND redfish_monitor_ignored = 0`
+    );
+    let idx = 0, skipped = 0;
+    const results = [];
+    async function worker() {
+      while (idx < rows.length) {
+        const asset = rows[idx++];
+        if (syncInFlight.has(asset.id)) { skipped++; continue; }
+        syncInFlight.add(asset.id);
+        try { results.push(await syncOneAsset(asset)); }
+        catch (e) { results.push({ reachable: false, error: e.message }); }
+        finally { syncInFlight.delete(asset.id); }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(DISCOVERY_CONCURRENCY, rows.length) }, worker));
+    log.info(`[redfish] auto-sync polled ${results.length} device(s): ${results.filter((r) => r.reachable).length} reachable${skipped ? `, ${skipped} skipped (mid manual sync)` : ''}`);
+    return { polled: results.length, reachable: results.filter((r) => r.reachable).length, skipped };
+  }
+
+  return {
+    getRedfishTaskStatus: (deviceId, taskUri) => getRedfishTaskStatusForDevice(pool, monitorFetch, deviceId, taskUri),
+    pollAllRedfish,
+  };
 };
 
 async function getRedfishTaskStatusForDevice(pool, monitorFetch, deviceId, taskUri) {

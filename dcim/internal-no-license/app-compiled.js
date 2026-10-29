@@ -8125,7 +8125,19 @@ function RedfishDetectModal({ asset, onClose, onSaved }) {
     const [fwBusy, setFwBusy] = useState(false);
     const [imageUri, setImageUri] = useState("");
     const [updateMsg, setUpdateMsg] = useState(null);
+    const [syncBusy, setSyncBusy] = useState(false);
 
+    // Re-polls with the credentials already saved on this asset - no need to retype them just to
+    // refresh health/power/alerts. If the background auto-sync job is mid-poll on this same
+    // device, the server replies 409 rather than hitting the BMC twice at once; that message is
+    // shown as-is (it already says to try again in a few seconds).
+    const syncNow = async () => {
+        if (!asset) return;
+        setSyncBusy(true); setErr(""); setResult(null);
+        try { const r = await api.syncRedfishAsset(asset.id); setResult(r); if (!r.reachable) setErr(r.error || "Could not reach the device."); onSaved && onSaved(); }
+        catch (e) { setErr(e.message); }
+        setSyncBusy(false);
+    };
     const runDetect = async () => {
         if (!ip) { setErr("Enter the BMC/management IP address."); return; }
         setBusy(true); setErr(""); setResult(null);
@@ -8167,8 +8179,10 @@ function RedfishDetectModal({ asset, onClose, onSaved }) {
                 React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 18 } }, "Works against any Redfish-capable BMC (Dell iDRAC, HPE iLO, Lenovo XCC, Cisco standalone IMC, NVIDIA DGX, etc.) — reads identity, health, power and thermal directly from the device's management port."),
                 React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 12 } }, field("BMC / Management IP", ip, setIp), field("Port", port, (v) => setPort(Number(v) || 443), "number")),
                 React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 14 } }, field("Username", username, setUsername), field("Password", password, setPassword, "password")),
-                React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 16 } },
+                React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" } },
                     React.createElement("button", { type: "button", onClick: runDetect, disabled: busy, className: "neu-btn-secondary" }, busy ? "Testing…" : "Test & Detect"),
+                    asset && asset.redfishConfigured && React.createElement("button", { type: "button", onClick: syncNow, disabled: syncBusy, className: "neu-btn-primary", title: "Re-check this device now, using the credentials already saved for it" }, syncBusy ? "Syncing…" : "Sync Now"),
+                    asset && asset.redfishConfigured && React.createElement("span", { style: { fontFamily: "Inter", fontSize: 11, color: "#94A3B8" } }, "Uses the credentials already saved for this device"),
                     asset && result && result.reachable && React.createElement("button", { type: "button", onClick: saveAndApply, disabled: busy, className: "neu-btn-primary" }, "Save & Apply to This Asset")),
                 err && React.createElement("div", { style: { padding: "9px 12px", borderRadius: 9, background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.25)", color: "#B91C1C", fontFamily: "Inter", fontSize: 12, marginBottom: 14 } }, err),
                 result && result.reachable && React.createElement("div", { style: { padding: 14, borderRadius: 11, background: "#F8FAFC", border: "1px solid #E2E8F0", marginBottom: 16 } },

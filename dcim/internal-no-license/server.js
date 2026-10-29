@@ -9129,6 +9129,7 @@ const redfishRoutesModule = require('./lib/redfish-routes')(app, {
   authenticateToken, requireRole, getAllowedSitesForUser, applySiteScope, assertSiteAccess,
   genId, auditLog, monitorFetch,
 });
+const REDFISH_SYNC_INTERVAL_MS = Math.max(60000, Number(process.env.REDFISH_SYNC_INTERVAL_MS) || 15 * 60 * 1000); // 15 min default, same cadence as PDU polling
 const visitorRoutesModule = require('./lib/visitor-routes')(app, {
   pool: livePool, fs, path, multer, log, httpErr, sendErr, esc,
   authenticateToken, requireRole, requireApproverOrAdmin, getAllowedSitesForUser, applySiteScope, assertSiteAccess, getAllSiteNames,
@@ -9239,6 +9240,10 @@ async function startServer() {
       }, 1500).unref();
       if (String(process.env.MONITOR_FW_SCAN || 'on').toLowerCase() !== 'off') { setTimeout(() => fwJobsTick(true).catch(() => { }), 20000).unref(); setInterval(() => fwJobsTick(true).catch(() => { }), FW_SCAN_INTERVAL_MS).unref(); }
       if (String(process.env.PDU_POLL || 'on').toLowerCase() !== 'off') { setTimeout(() => pduRoutesModule.pollAllPdus().catch((e) => log.warn('[pdu] poll skipped: ' + e.message)), 25000).unref(); setInterval(() => pduRoutesModule.pollAllPdus().catch((e) => log.warn('[pdu] poll skipped: ' + e.message)), PDU_POLL_INTERVAL_MS).unref(); }
+      // Redfish auto-sync: re-polls already-configured devices in the background so the Multi-
+      // Vendor (Redfish) page's health/power/alerts stay current without anyone having it open.
+      // Set REDFISH_AUTO_SYNC=off in .env to disable; REDFISH_SYNC_INTERVAL_MS to change the cadence.
+      if (String(process.env.REDFISH_AUTO_SYNC || 'on').toLowerCase() !== 'off') { setTimeout(() => redfishRoutesModule.pollAllRedfish().catch((e) => log.warn('[redfish] auto-sync skipped: ' + e.message)), 35000).unref(); setInterval(() => redfishRoutesModule.pollAllRedfish().catch((e) => log.warn('[redfish] auto-sync skipped: ' + e.message)), REDFISH_SYNC_INTERVAL_MS).unref(); }
       auditLog(null, 'SERVER_START', { username: 'system', entity: 'server', details: { version: APP_VERSION, port: Number(PORT), node: process.version } });
       console.log(`\n========================================`);
       log.info(`  Data Center API Server Ready`);
