@@ -407,8 +407,11 @@ const api = {
     detectRedfish: (body) => apiFetch('/monitoring/redfish/detect', { method: 'POST', body: JSON.stringify(body), timeoutMs: 15000 }),
     saveRedfishCredentials: (assetId, body) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/credentials', { method: 'PUT', body: JSON.stringify(body) }),
     syncRedfishAsset: (assetId) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/sync', { method: 'POST', timeoutMs: 15000 }),
-    discoverRedfish: () => apiFetch('/monitoring/redfish/discover', { method: 'POST', timeoutMs: 120000 }),
-    applyRedfishDiscovery: (assetIds) => apiFetch('/monitoring/redfish/discover/apply', { method: 'POST', body: JSON.stringify({ assetIds }), timeoutMs: 120000 }),
+    // Raised from 120000: Discover and Apply no longer cap themselves at the first 200 assets,
+    // so a "select all" scan on a large site can now legitimately take several minutes end to
+    // end - 10 minutes gives that room without the browser aborting a scan that's still running.
+    discoverRedfish: () => apiFetch('/monitoring/redfish/discover', { method: 'POST', timeoutMs: 600000 }),
+    applyRedfishDiscovery: (assetIds) => apiFetch('/monitoring/redfish/discover/apply', { method: 'POST', body: JSON.stringify({ assetIds }), timeoutMs: 600000 }),
     getRedfishFirmwareInventory: (assetId) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/firmware-inventory', { timeoutMs: 20000 }),
     updateRedfishFirmware: (assetId, imageUri) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/firmware/update', { method: 'POST', body: JSON.stringify({ imageUri }) }),
     getAuditLogs: (params = {}) => { const q = new URLSearchParams(); if (params.action) q.set('action', params.action); if (params.username) q.set('username', params.username); if (params.entity) q.set('entity', params.entity); if (params.status) q.set('status', params.status); if (params.from) q.set('from', params.from); if (params.to) q.set('to', params.to); if (params.limit) q.set('limit', params.limit); if (params.offset) q.set('offset', params.offset); const qs = q.toString(); return apiFetch('/audit-logs' + (qs ? '?' + qs : '')); },
@@ -8081,9 +8084,17 @@ function RedfishHealthPill({ status }) {
 // long page - so it has to be scrolled all the way down to be found. Shown only
 // while the table extends below the viewport (i.e. its real scrollbar is off
 // screen) and mirrors scrollLeft both ways with the table's own scroll container.
+const FLOATING_HSCROLL_ARROW_BTN_STYLE = { flexShrink: 0, width: 24, height: 24, borderRadius: 6, border: "1px solid #CBD5E1", background: "#fff", color: "#334155", fontSize: 15, lineHeight: "22px", cursor: "pointer", padding: 0, fontFamily: "Inter" };
+
+// Deliberately does NOT rely on the browser's own horizontal scrollbar being visible or
+// grabbable - on many real setups (macOS's "only show scrollbars while scrolling" default,
+// most trackpad-driven browsers, some zoom levels) that native scrollbar either never renders
+// or renders too thin to find/drag, which is why people could see the table needed to scroll
+// but had no usable way to actually do it. This draws its own always-visible track + thumb
+// (plain colored divs, not a native scrollbar) plus explicit left/right buttons, so scrolling
+// the table never depends on the OS's or browser's scrollbar visibility settings at all.
 function FloatingHScroll({ wrapRef }) {
-    const trackRef = useRef(null);
-    const [state, setState] = useState({ visible: false, left: 0, width: 0, scrollWidth: 0 });
+    const [state, setState] = useState({ visible: false, left: 0, width: 0, scrollLeft: 0, scrollWidth: 0, clientWidth: 0 });
     useEffect(() => {
         const recompute = () => {
             const wrap = wrapRef.current;
@@ -8091,35 +8102,61 @@ function FloatingHScroll({ wrapRef }) {
             const rect = wrap.getBoundingClientRect();
             const needsScroll = wrap.scrollWidth > wrap.clientWidth + 2;
             // Just "the table needs horizontal scrolling and some part of it is on screen" -
-            // deliberately NOT tied to whether the table's bottom edge (and its own native
-            // scrollbar) has scrolled past the bottom of the window. That extra condition only
-            // held for a page where the whole document itself scrolls; it stayed permanently
-            // false - so the bar never appeared - on a layout where the scrolling happens inside
-            // a fixed-height panel instead (a header/sidebar shell, or simply a table short
-            // enough to fit on screen without the page growing taller). This way the bar shows
-            // whenever it's actually useful, regardless of how the surrounding page scrolls.
+            // deliberately NOT tied to whether the table's bottom edge has scrolled past the
+            // bottom of the window. That extra condition only held for a page where the whole
+            // document itself scrolls; it stayed permanently false - so the bar never appeared -
+            // on a layout where the scrolling happens inside a fixed-height panel instead (a
+            // header/sidebar shell, or simply a table short enough to fit on screen without the
+            // page growing taller). This way the bar shows whenever it's actually useful,
+            // regardless of how the surrounding page scrolls.
             const visible = needsScroll && rect.bottom > 0 && rect.top < window.innerHeight;
-            setState({ visible, left: rect.left, width: rect.width, scrollWidth: wrap.scrollWidth });
+            setState({ visible, left: rect.left, width: rect.width, scrollLeft: wrap.scrollLeft, scrollWidth: wrap.scrollWidth, clientWidth: wrap.clientWidth });
         };
         recompute();
         window.addEventListener("scroll", recompute, { passive: true, capture: true }); // capture: true also catches scroll events from an inner scrollable panel, which don't bubble to window
         window.addEventListener("resize", recompute);
+        const wrap0 = wrapRef.current;
+        if (wrap0) wrap0.addEventListener("scroll", recompute, { passive: true }); // keeps the custom thumb in sync if the table is scrolled some other way (shift+wheel, touch swipe, arrow keys)
         const t = setInterval(recompute, 500);
-        return () => { window.removeEventListener("scroll", recompute, { capture: true }); window.removeEventListener("resize", recompute); clearInterval(t); };
+        return () => {
+            window.removeEventListener("scroll", recompute, { capture: true });
+            window.removeEventListener("resize", recompute);
+            if (wrap0) wrap0.removeEventListener("scroll", recompute);
+            clearInterval(t);
+        };
     }, [wrapRef]);
-    useEffect(() => {
-        const wrap = wrapRef.current, track = trackRef.current;
-        if (!wrap || !track) return;
-        let syncing = false;
-        const fromWrap = () => { if (syncing) return; syncing = true; track.scrollLeft = wrap.scrollLeft; syncing = false; };
-        const fromTrack = () => { if (syncing) return; syncing = true; wrap.scrollLeft = track.scrollLeft; syncing = false; };
-        wrap.addEventListener("scroll", fromWrap, { passive: true });
-        track.addEventListener("scroll", fromTrack, { passive: true });
-        return () => { wrap.removeEventListener("scroll", fromWrap); track.removeEventListener("scroll", fromTrack); };
-    }, [wrapRef]);
+    const scrollByAmount = (amt) => { const wrap = wrapRef.current; if (wrap) wrap.scrollBy({ left: amt, behavior: "smooth" }); };
+    const maxScroll = Math.max(state.scrollWidth - state.clientWidth, 1);
+    const trackWidth = Math.max(state.width - 64, 40); // leaves room for the two arrow buttons on either side
+    const thumbWidth = state.scrollWidth > 0 ? Math.max((state.clientWidth / state.scrollWidth) * trackWidth, 24) : trackWidth;
+    const thumbLeft = Math.min(Math.max((state.scrollLeft / maxScroll) * (trackWidth - thumbWidth), 0), trackWidth - thumbWidth);
+    const onTrackPointerDown = (e) => {
+        const wrap = wrapRef.current;
+        if (!wrap) return;
+        const trackEl = e.currentTarget;
+        const trackRect = trackEl.getBoundingClientRect();
+        if (e.target === trackEl) { // clicking the bare track (not the thumb) jumps scroll straight to that position
+            const ratio = (e.clientX - trackRect.left) / trackRect.width;
+            wrap.scrollLeft = ratio * maxScroll;
+        }
+        const startX = e.clientX, startScrollLeft = wrap.scrollLeft;
+        const onMove = (ev) => {
+            const dx = ev.clientX - startX;
+            const scrollDx = (dx / Math.max(trackRect.width - thumbWidth, 1)) * maxScroll;
+            wrap.scrollLeft = Math.max(0, Math.min(maxScroll, startScrollLeft + scrollDx));
+        };
+        const onUp = () => { window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerup", onUp); };
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+    };
     if (!state.visible)
         return null;
-    return ReactDOM.createPortal(React.createElement("div", { style: { position: "fixed", left: state.left, width: state.width, bottom: 0, zIndex: 60, background: "rgba(255,255,255,0.95)", borderTop: "1px solid #E2E8F0", boxShadow: "0 -4px 10px rgba(15,23,42,0.1)" } }, React.createElement("div", { ref: trackRef, style: { overflowX: "scroll", overflowY: "hidden", height: 14 } }, React.createElement("div", { style: { width: state.scrollWidth, height: 1 } }))), document.body);
+    return ReactDOM.createPortal(React.createElement("div", { style: { position: "fixed", left: state.left, width: state.width, bottom: 0, zIndex: 60, background: "rgba(255,255,255,0.97)", borderTop: "1px solid #E2E8F0", boxShadow: "0 -4px 10px rgba(15,23,42,0.1)", display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", boxSizing: "border-box" } },
+        React.createElement("button", { onClick: () => scrollByAmount(-240), style: FLOATING_HSCROLL_ARROW_BTN_STYLE, title: "Scroll left", "aria-label": "Scroll table left" }, "‹"),
+        React.createElement("div", { onPointerDown: onTrackPointerDown, style: { position: "relative", flex: 1, height: 10, borderRadius: 6, background: "#E2E8F0", cursor: "pointer" } },
+            React.createElement("div", { style: { position: "absolute", top: 0, left: thumbLeft, width: thumbWidth, height: 10, borderRadius: 6, background: "#64748B" } })),
+        React.createElement("button", { onClick: () => scrollByAmount(240), style: FLOATING_HSCROLL_ARROW_BTN_STYLE, title: "Scroll right", "aria-label": "Scroll table right" }, "›")
+    ), document.body);
 }
 function RedfishDetectModal({ asset, onClose, onSaved }) {
     const [ip, setIp] = useState((asset && asset.mgmtIp) || "");
@@ -8240,7 +8277,12 @@ function RedfishDiscoverModal({ onClose, onApplied }) {
     const toggle = (id) => setSelected((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
     const apply = async () => {
         setBusy(true); setApplyMsg(null);
-        try { const r = await api.applyRedfishDiscovery(Array.from(selected)); setApplyMsg({ type: "success", text: `Applied to ${r.applied} device(s).` }); onApplied && onApplied(); }
+        try {
+            const r = await api.applyRedfishDiscovery(Array.from(selected));
+            const extra = (r.skippedNoMatch ? ` ${r.skippedNoMatch} did not authenticate with any saved credential.` : "") + (r.skippedNotFound ? ` ${r.skippedNotFound} could not be found or are outside your sites.` : "");
+            setApplyMsg({ type: "success", text: `Applied to ${r.applied} of ${r.requested || r.applied} selected device(s).${extra}` });
+            onApplied && onApplied();
+        }
         catch (e) { setApplyMsg({ type: "error", text: e.message }); }
         setBusy(false);
     };

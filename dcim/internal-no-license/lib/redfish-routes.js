@@ -25,7 +25,11 @@
 //    the SAME firmware_jobs table/"Firmware Update Jobs" panel OME/OneView
 //    jobs already show up in.
 
-const DISCOVERY_CONCURRENCY = 10;
+// Bumped from 10: with the rootReachable fast-fail fix, an unreachable device now costs one
+// ~30s timeout instead of up to 4, so a higher fan-out is safe and keeps a bulk Discover/Apply
+// over a large site (1000s of assets) finishing within the client's request timeout instead of
+// crawling through everything 10-at-a-time.
+const DISCOVERY_CONCURRENCY = 20;
 
 function redfishBaseUrl(ip, port) {
   const p = port && Number(port) !== 443 ? `:${port}` : '';
@@ -435,7 +439,12 @@ module.exports = function registerRedfishRoutes(app, deps) {
       const conditions = ["mgmt_ip IS NOT NULL", "mgmt_ip <> ''", "(redfish_username IS NULL OR redfish_username = '')"];
       const params = [];
       await applySiteScope(allowed, conditions, params);
-      const [rows] = await pool.query(`SELECT * FROM assets WHERE ${conditions.join(' AND ')} ORDER BY site, rack_no LIMIT 200`, params);
+      // No LIMIT here on purpose: this used to stop at the first 200 qualifying assets, silently,
+      // with nothing in the response telling the caller more existed - on a site with 1000s of
+      // assets that made Discover look complete ("scanned: 200") while actually only ever having
+      // looked at a small slice of the site. `scanned` below is now the TRUE total so a caller
+      // can tell the two apart.
+      const [rows] = await pool.query(`SELECT * FROM assets WHERE ${conditions.join(' AND ')} ORDER BY site, rack_no`, params);
 
       const results = [];
       let idx = 0;
@@ -464,8 +473,13 @@ module.exports = function registerRedfishRoutes(app, deps) {
       const candidates = redfishCredentialCandidates();
       if (!candidates.length) return res.status(400).json({ error: 'No BMC credentials configured - set REDFISH_CREDENTIALS or REDFISH_DEFAULT_USERNAME/PASSWORD' });
       const allowed = await getAllowedSitesForUser(req.user);
-      const ids = assetIds.slice(0, 200);
-      let idx = 0, applied = 0;
+      // No slice() here on purpose: this used to silently cap every Apply call at the first 200
+      // selected assets - with "select all reachable" on a large site (1000s of assets) that
+      // meant the response always read "applied: <small number>" no matter how many were
+      // actually selected, with everything past #200 never even attempted. skippedNotFound /
+      // skippedNoMatch below account for the rest of the gap honestly instead.
+      const ids = assetIds;
+      let idx = 0, applied = 0, skippedNotFound = 0, skippedNoMatch = 0;
       // Bounded concurrency, same as /discover above - this used to be a sequential per-asset
       // loop, which for a large "select all reachable" batch multiplied the same timeout risk
       // /discover had before the rootReachable fast-fail fix.
@@ -473,10 +487,10 @@ module.exports = function registerRedfishRoutes(app, deps) {
         while (idx < ids.length) {
           const assetId = ids[idx++];
           const [rows] = await pool.query('SELECT * FROM assets WHERE id = ?', [assetId]);
-          if (!rows.length || !allowed.includes(rows[0].site) || !rows[0].mgmt_ip) continue;
+          if (!rows.length || !allowed.includes(rows[0].site) || !rows[0].mgmt_ip) { skippedNotFound++; continue; }
           const asset = rows[0];
           const r = await detectRedfishAnyCredential(monitorFetch, asset.mgmt_ip, 443, candidates);
-          if (!r.reachable) continue;
+          if (!r.reachable) { skippedNoMatch++; continue; }
           await pool.query(
             `UPDATE assets SET redfish_username = ?, redfish_password = ?, redfish_port = 443,
                manufacturer = COALESCE(NULLIF(manufacturer, ''), ?), model = COALESCE(NULLIF(model, ''), ?),
@@ -490,8 +504,8 @@ module.exports = function registerRedfishRoutes(app, deps) {
         }
       }
       await Promise.all(Array.from({ length: Math.min(DISCOVERY_CONCURRENCY, ids.length) }, worker));
-      auditLog(req, 'REDFISH_DISCOVERY_APPLY', { entity: 'asset', status: 'success' }, { count: applied });
-      res.json({ applied });
+      auditLog(req, 'REDFISH_DISCOVERY_APPLY', { entity: 'asset', status: 'success' }, { count: applied, requested: ids.length, skippedNotFound, skippedNoMatch });
+      res.json({ applied, requested: ids.length, skippedNotFound, skippedNoMatch });
     } catch (e) { sendErr(res, e); }
   });
 
