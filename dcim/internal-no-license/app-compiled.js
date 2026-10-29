@@ -407,11 +407,17 @@ const api = {
     detectRedfish: (body) => apiFetch('/monitoring/redfish/detect', { method: 'POST', body: JSON.stringify(body), timeoutMs: 15000 }),
     saveRedfishCredentials: (assetId, body) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/credentials', { method: 'PUT', body: JSON.stringify(body) }),
     syncRedfishAsset: (assetId) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/sync', { method: 'POST', timeoutMs: 15000 }),
-    // Raised from 120000: Discover and Apply no longer cap themselves at the first 200 assets,
-    // so a "select all" scan on a large site can now legitimately take several minutes end to
-    // end - 10 minutes gives that room without the browser aborting a scan that's still running.
-    discoverRedfish: () => apiFetch('/monitoring/redfish/discover', { method: 'POST', timeoutMs: 600000 }),
-    applyRedfishDiscovery: (assetIds) => apiFetch('/monitoring/redfish/discover/apply', { method: 'POST', body: JSON.stringify({ assetIds }), timeoutMs: 600000 }),
+    // Discover and Apply no longer run as one long held-open request - a scan across a large
+    // site (1000s of assets) can legitimately take minutes, and a request held open that long
+    // tends to get cut off by whatever reverse proxy/gateway sits in front of this server (most
+    // default to timing out an idle/long connection well under that), which showed up as a bare
+    // "Request failed" with no useful detail. Each call below now just starts a background job
+    // (fast, always returns right away) and the caller polls the small status endpoint until
+    // it's done - no single request is ever open for more than a moment.
+    discoverRedfishStart: () => apiFetch('/monitoring/redfish/discover', { method: 'POST', timeoutMs: 15000 }),
+    discoverRedfishStatus: (jobId) => apiFetch('/monitoring/redfish/discover/' + encodeURIComponent(jobId), { timeoutMs: 15000 }),
+    applyRedfishDiscoveryStart: (assetIds) => apiFetch('/monitoring/redfish/discover/apply', { method: 'POST', body: JSON.stringify({ assetIds }), timeoutMs: 15000 }),
+    applyRedfishDiscoveryStatus: (jobId) => apiFetch('/monitoring/redfish/discover/apply/' + encodeURIComponent(jobId), { timeoutMs: 15000 }),
     getRedfishFirmwareInventory: (assetId) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/firmware-inventory', { timeoutMs: 20000 }),
     updateRedfishFirmware: (assetId, imageUri) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/firmware/update', { method: 'POST', body: JSON.stringify({ imageUri }) }),
     getAuditLogs: (params = {}) => { const q = new URLSearchParams(); if (params.action) q.set('action', params.action); if (params.username) q.set('username', params.username); if (params.entity) q.set('entity', params.entity); if (params.status) q.set('status', params.status); if (params.from) q.set('from', params.from); if (params.to) q.set('to', params.to); if (params.limit) q.set('limit', params.limit); if (params.offset) q.set('offset', params.offset); const qs = q.toString(); return apiFetch('/audit-logs' + (qs ? '?' + qs : '')); },
@@ -8261,24 +8267,55 @@ function RedfishDetectModal({ asset, onClose, onSaved }) {
                     React.createElement("button", { type: "button", onClick: onClose, className: "neu-btn-secondary" }, "Close"))))
         , document.body);
 }
+// Starts a background Redfish job (discover or apply) and polls its status endpoint until it's
+// done or errors - see the comment on api.discoverRedfishStart for why this isn't just one
+// held-open request. onProgress fires on every poll tick (including the first) so the caller
+// can show a live "N / total" count instead of a blank "Scanning..." for minutes.
+function pollRedfishJob(statusFn, jobId, onProgress, intervalMs) {
+    return new Promise((resolve, reject) => {
+        const tick = async () => {
+            try {
+                const r = await statusFn(jobId);
+                if (onProgress)
+                    onProgress(r);
+                if (r.status === "done")
+                    resolve(r);
+                else if (r.status === "error")
+                    reject(new Error(r.error || "The job failed"));
+                else
+                    setTimeout(tick, intervalMs || 1500);
+            }
+            catch (e) { reject(e); }
+        };
+        tick();
+    });
+}
 function RedfishDiscoverModal({ onClose, onApplied }) {
     const [busy, setBusy] = useState(false);
     const [scan, setScan] = useState(null);
+    const [scanProgress, setScanProgress] = useState(null);
     const [err, setErr] = useState("");
     const [selected, setSelected] = useState(() => new Set());
     const [applyMsg, setApplyMsg] = useState(null);
+    const [applyProgress, setApplyProgress] = useState(null);
     const runScan = async () => {
-        setBusy(true); setErr(""); setScan(null);
-        try { const r = await api.discoverRedfish(); setScan(r); setSelected(new Set(r.results.filter((x) => x.reachable).map((x) => x.assetId))); }
+        setBusy(true); setErr(""); setScan(null); setScanProgress(null);
+        try {
+            const start = await api.discoverRedfishStart();
+            const r = await pollRedfishJob(api.discoverRedfishStatus, start.jobId, setScanProgress);
+            setScan(r);
+            setSelected(new Set(r.results.filter((x) => x.reachable).map((x) => x.assetId)));
+        }
         catch (e) { setErr(e.message); }
         setBusy(false);
     };
     useEffect(() => { runScan(); }, []);
     const toggle = (id) => setSelected((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
     const apply = async () => {
-        setBusy(true); setApplyMsg(null);
+        setBusy(true); setApplyMsg(null); setApplyProgress(null);
         try {
-            const r = await api.applyRedfishDiscovery(Array.from(selected));
+            const start = await api.applyRedfishDiscoveryStart(Array.from(selected));
+            const r = await pollRedfishJob(api.applyRedfishDiscoveryStatus, start.jobId, setApplyProgress);
             const extra = (r.skippedNoMatch ? ` ${r.skippedNoMatch} did not authenticate with any saved credential.` : "") + (r.skippedNotFound ? ` ${r.skippedNotFound} could not be found or are outside your sites.` : "");
             setApplyMsg({ type: "success", text: `Applied to ${r.applied} of ${r.requested || r.applied} selected device(s).${extra}` });
             onApplied && onApplied();
@@ -8291,7 +8328,7 @@ function RedfishDiscoverModal({ onClose, onApplied }) {
             React.createElement("div", { className: "pdu-modal-pop neu-card", style: { width: 760, maxWidth: "94vw", maxHeight: "88vh", overflowY: "auto", padding: 28 }, onClick: (e) => e.stopPropagation() },
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617", marginBottom: 4 } }, "Discover Server Hardware (Redfish)"),
                 React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 16 } }, "Tries every candidate BMC credential pair configured in REDFISH_CREDENTIALS (.env) in turn — e.g. Dell's root/calvin, root/calvin@123, root/Calvin@123 and HPE's hpadmin/hpinvent — against every asset that has a management IP but no Redfish credentials saved yet, and keeps whichever one answers for that device. Nothing is changed until you select devices and apply."),
-                busy && !scan && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 13, color: "#64748B" } }, "Scanning…"),
+                busy && !scan && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 13, color: "#64748B" } }, scanProgress && scanProgress.total ? `Scanning… ${scanProgress.scanned} / ${scanProgress.total}` : "Scanning…"),
                 err && React.createElement("div", { style: { padding: "9px 12px", borderRadius: 9, background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.25)", color: "#B91C1C", fontFamily: "Inter", fontSize: 12, marginBottom: 14 } }, err),
                 scan && React.createElement("div", null,
                     React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#475569", marginBottom: 10 } }, `Scanned ${scan.scanned} asset(s) against ${scan.credentialsTried || 1} candidate credential(s), ${scan.reachable} responded to Redfish.`),
@@ -8309,7 +8346,7 @@ function RedfishDiscoverModal({ onClose, onApplied }) {
                     applyMsg && React.createElement("div", { style: { marginTop: 10, fontFamily: "Inter", fontSize: 12, color: applyMsg.type === "error" ? "#B91C1C" : "#059669" } }, applyMsg.text)),
                 React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 } },
                     React.createElement("button", { type: "button", onClick: onClose, className: "neu-btn-secondary" }, "Close"),
-                    scan && React.createElement("button", { type: "button", onClick: apply, disabled: busy || !selected.size, className: "neu-btn-primary" }, busy ? "Applying…" : `Apply to ${selected.size} Selected`))))
+                    scan && React.createElement("button", { type: "button", onClick: apply, disabled: busy || !selected.size, className: "neu-btn-primary" }, busy ? (applyProgress && applyProgress.total ? `Applying… ${applyProgress.processed} / ${applyProgress.total}` : "Applying…") : `Apply to ${selected.size} Selected`))))
         , document.body);
 }
 function RedfishTab({ canEdit, allowedSites }) {

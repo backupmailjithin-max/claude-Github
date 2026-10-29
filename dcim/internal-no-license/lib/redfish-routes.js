@@ -423,6 +423,23 @@ module.exports = function registerRedfishRoutes(app, deps) {
     } catch (e) { sendErr(res, e); }
   });
 
+  // In-memory job state for the two bulk Redfish operations below. A site can have 1000s of
+  // assets, and even with the fast-fail timeout fix and higher concurrency, scanning/applying
+  // all of them can legitimately take minutes - far longer than most reverse proxies, load
+  // balancers, or corporate gateways will hold a single HTTP request open for (a very common
+  // default is 60s), regardless of how long the BROWSER's own fetch timeout is set to. Holding
+  // the request open for the whole scan was hitting exactly that: the infrastructure in front
+  // of this server would cut the connection before Node finished, and the browser would then
+  // show a bare "Request failed" (no parseable error body came back at all - just a dropped
+  // connection or a gateway's own error page). So both routes below now return IMMEDIATELY with
+  // a job id, run the actual work in the background, and the caller polls a small, fast GET for
+  // progress/results - no single request is ever open for more than a moment, so there is
+  // nothing left for a proxy timeout to trip.
+  const discoverJobs = new Map();
+  const applyJobs = new Map();
+  const REDFISH_JOB_TTL_MS = 15 * 60 * 1000; // finished jobs are forgotten after this so memory doesn't grow unbounded on a long-running server
+  function scheduleJobCleanup(map, jobId) { const t = setTimeout(() => map.delete(jobId), REDFISH_JOB_TTL_MS); if (t.unref) t.unref(); }
+
   // Dry-run discovery: tries every candidate credential pair (REDFISH_CREDENTIALS,
   // or the single legacy REDFISH_DEFAULT_* pair - see redfishCredentialCandidates
   // above) against every asset that has a management IP but no Redfish credentials
@@ -439,27 +456,45 @@ module.exports = function registerRedfishRoutes(app, deps) {
       const conditions = ["mgmt_ip IS NOT NULL", "mgmt_ip <> ''", "(redfish_username IS NULL OR redfish_username = '')"];
       const params = [];
       await applySiteScope(allowed, conditions, params);
-      // No LIMIT here on purpose: this used to stop at the first 200 qualifying assets, silently,
-      // with nothing in the response telling the caller more existed - on a site with 1000s of
-      // assets that made Discover look complete ("scanned: 200") while actually only ever having
-      // looked at a small slice of the site. `scanned` below is now the TRUE total so a caller
-      // can tell the two apart.
+      // No LIMIT here on purpose - see the comment above the job maps: this used to stop at the
+      // first 200 qualifying assets, silently, with nothing in the response telling the caller
+      // more existed. `total`/`scanned` below are the TRUE counts so a caller can tell a
+      // complete scan from a partial one.
       const [rows] = await pool.query(`SELECT * FROM assets WHERE ${conditions.join(' AND ')} ORDER BY site, rack_no`, params);
 
-      const results = [];
+      const jobId = genId('rfdisc');
+      const job = { status: 'running', total: rows.length, scanned: 0, reachable: 0, results: [], credentialsTried: candidates.length, error: null };
+      discoverJobs.set(jobId, job);
       let idx = 0;
       async function worker() {
         while (idx < rows.length) {
           const asset = rows[idx++];
           try {
             const r = await detectRedfishAnyCredential(monitorFetch, asset.mgmt_ip, 443, candidates);
-            results.push({ assetId: asset.id, site: asset.site, rackNo: asset.rack_no, mgmtIp: asset.mgmt_ip, reachable: r.reachable, vendor: r.vendor, model: r.model, serialNumber: r.serialNumber, healthStatus: r.healthStatus, matchedUsername: r.reachable ? r.credential.username : null, error: r.reachable ? null : r.error });
-          } catch (e) { results.push({ assetId: asset.id, site: asset.site, rackNo: asset.rack_no, mgmtIp: asset.mgmt_ip, reachable: false, error: e.message }); }
+            job.results.push({ assetId: asset.id, site: asset.site, rackNo: asset.rack_no, mgmtIp: asset.mgmt_ip, reachable: r.reachable, vendor: r.vendor, model: r.model, serialNumber: r.serialNumber, healthStatus: r.healthStatus, matchedUsername: r.reachable ? r.credential.username : null, error: r.reachable ? null : r.error });
+            if (r.reachable) job.reachable++;
+          } catch (e) { job.results.push({ assetId: asset.id, site: asset.site, rackNo: asset.rack_no, mgmtIp: asset.mgmt_ip, reachable: false, error: e.message }); }
+          job.scanned++;
         }
       }
-      await Promise.all(Array.from({ length: Math.min(DISCOVERY_CONCURRENCY, rows.length) }, worker));
-      res.json({ scanned: rows.length, reachable: results.filter((r) => r.reachable).length, credentialsTried: candidates.length, results });
+      // Deliberately not awaited - the HTTP response below goes out immediately; the scan keeps
+      // running in the background and the caller polls GET .../discover/:jobId for progress.
+      Promise.all(Array.from({ length: Math.min(DISCOVERY_CONCURRENCY, rows.length) }, worker))
+        .then(() => { job.status = 'done'; })
+        .catch((e) => { job.status = 'error'; job.error = e.message; })
+        .finally(() => scheduleJobCleanup(discoverJobs, jobId));
+      res.json({ jobId, status: 'running', total: rows.length });
     } catch (e) { sendErr(res, e); }
+  });
+
+  // Poll endpoint for the background scan started above. Returns the job's current state
+  // whether it's still running or already finished - the shape matches what /discover used to
+  // return synchronously (scanned/reachable/results/credentialsTried) so a caller can treat a
+  // finished job's response exactly like the old one-shot response.
+  app.get('/api/monitoring/redfish/discover/:jobId', authenticateToken, async (req, res) => {
+    const job = discoverJobs.get(req.params.jobId);
+    if (!job) return res.status(404).json({ error: 'This scan has finished and its results have been cleared, or the job id is wrong. Start a new scan.' });
+    res.json({ status: job.status, total: job.total, scanned: job.scanned, reachable: job.reachable, results: job.results, credentialsTried: job.credentialsTried, error: job.error });
   });
 
   // Commit step: re-detects each selected asset (so we know which of the
@@ -473,40 +508,54 @@ module.exports = function registerRedfishRoutes(app, deps) {
       const candidates = redfishCredentialCandidates();
       if (!candidates.length) return res.status(400).json({ error: 'No BMC credentials configured - set REDFISH_CREDENTIALS or REDFISH_DEFAULT_USERNAME/PASSWORD' });
       const allowed = await getAllowedSitesForUser(req.user);
-      // No slice() here on purpose: this used to silently cap every Apply call at the first 200
-      // selected assets - with "select all reachable" on a large site (1000s of assets) that
-      // meant the response always read "applied: <small number>" no matter how many were
-      // actually selected, with everything past #200 never even attempted. skippedNotFound /
-      // skippedNoMatch below account for the rest of the gap honestly instead.
+      // No slice() here on purpose - see the comment above the job maps: this used to silently
+      // cap every Apply call at the first 200 selected assets, with everything past #200 never
+      // even attempted. skippedNotFound/skippedNoMatch below account for the rest of the gap
+      // honestly, and the whole thing now runs as a background job (see /discover above) so a
+      // large batch isn't held open as one long HTTP request a proxy/gateway can cut off.
       const ids = assetIds;
-      let idx = 0, applied = 0, skippedNotFound = 0, skippedNoMatch = 0;
-      // Bounded concurrency, same as /discover above - this used to be a sequential per-asset
-      // loop, which for a large "select all reachable" batch multiplied the same timeout risk
-      // /discover had before the rootReachable fast-fail fix.
+      const jobId = genId('rfapply');
+      const job = { status: 'running', total: ids.length, processed: 0, applied: 0, skippedNotFound: 0, skippedNoMatch: 0, error: null };
+      applyJobs.set(jobId, job);
+      let idx = 0;
       async function worker() {
         while (idx < ids.length) {
           const assetId = ids[idx++];
-          const [rows] = await pool.query('SELECT * FROM assets WHERE id = ?', [assetId]);
-          if (!rows.length || !allowed.includes(rows[0].site) || !rows[0].mgmt_ip) { skippedNotFound++; continue; }
-          const asset = rows[0];
-          const r = await detectRedfishAnyCredential(monitorFetch, asset.mgmt_ip, 443, candidates);
-          if (!r.reachable) { skippedNoMatch++; continue; }
-          await pool.query(
-            `UPDATE assets SET redfish_username = ?, redfish_password = ?, redfish_port = 443,
-               manufacturer = COALESCE(NULLIF(manufacturer, ''), ?), model = COALESCE(NULLIF(model, ''), ?),
-               serial_number = COALESCE(NULLIF(serial_number, ''), ?), firmware = COALESCE(NULLIF(firmware, ''), ?),
-               bmc_firmware = ?, redfish_version = ?, health_status = ?, power_state = ?, redfish_alert_count = ?,
-               redfish_power_watts = ?, last_redfish_sync_at = NOW(), last_redfish_error = NULL
-             WHERE id = ?`,
-            [r.credential.username, r.credential.password || '', r.vendor, r.model, r.serialNumber, r.biosVersion, r.bmcFirmware, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
-          );
-          applied++;
+          try {
+            const [rows] = await pool.query('SELECT * FROM assets WHERE id = ?', [assetId]);
+            if (!rows.length || !allowed.includes(rows[0].site) || !rows[0].mgmt_ip) { job.skippedNotFound++; continue; }
+            const asset = rows[0];
+            const r = await detectRedfishAnyCredential(monitorFetch, asset.mgmt_ip, 443, candidates);
+            if (!r.reachable) { job.skippedNoMatch++; continue; }
+            await pool.query(
+              `UPDATE assets SET redfish_username = ?, redfish_password = ?, redfish_port = 443,
+                 manufacturer = COALESCE(NULLIF(manufacturer, ''), ?), model = COALESCE(NULLIF(model, ''), ?),
+                 serial_number = COALESCE(NULLIF(serial_number, ''), ?), firmware = COALESCE(NULLIF(firmware, ''), ?),
+                 bmc_firmware = ?, redfish_version = ?, health_status = ?, power_state = ?, redfish_alert_count = ?,
+                 redfish_power_watts = ?, last_redfish_sync_at = NOW(), last_redfish_error = NULL
+               WHERE id = ?`,
+              [r.credential.username, r.credential.password || '', r.vendor, r.model, r.serialNumber, r.biosVersion, r.bmcFirmware, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
+            );
+            job.applied++;
+          } finally { job.processed++; }
         }
       }
-      await Promise.all(Array.from({ length: Math.min(DISCOVERY_CONCURRENCY, ids.length) }, worker));
-      auditLog(req, 'REDFISH_DISCOVERY_APPLY', { entity: 'asset', status: 'success' }, { count: applied, requested: ids.length, skippedNotFound, skippedNoMatch });
-      res.json({ applied, requested: ids.length, skippedNotFound, skippedNoMatch });
+      Promise.all(Array.from({ length: Math.min(DISCOVERY_CONCURRENCY, ids.length) }, worker))
+        .then(() => {
+          job.status = 'done';
+          auditLog(req, 'REDFISH_DISCOVERY_APPLY', { entity: 'asset', status: 'success' }, { count: job.applied, requested: ids.length, skippedNotFound: job.skippedNotFound, skippedNoMatch: job.skippedNoMatch });
+        })
+        .catch((e) => { job.status = 'error'; job.error = e.message; })
+        .finally(() => scheduleJobCleanup(applyJobs, jobId));
+      res.json({ jobId, status: 'running', total: ids.length });
     } catch (e) { sendErr(res, e); }
+  });
+
+  // Poll endpoint for the background apply started above.
+  app.get('/api/monitoring/redfish/discover/apply/:jobId', authenticateToken, async (req, res) => {
+    const job = applyJobs.get(req.params.jobId);
+    if (!job) return res.status(404).json({ error: 'This apply has finished and its results have been cleared, or the job id is wrong.' });
+    res.json({ status: job.status, total: job.total, processed: job.processed, applied: job.applied, requested: job.total, skippedNotFound: job.skippedNotFound, skippedNoMatch: job.skippedNoMatch, error: job.error });
   });
 
   app.get('/api/monitoring/redfish/:assetId/firmware-inventory', authenticateToken, async (req, res) => {
