@@ -199,7 +199,9 @@ async function detectRedfish(monitorFetch, ip, port, username, password) {
     }
     /* Systems collection missing/unreachable for some other reason - leave identity fields null, not fatal */
   }
-  out.reachable = true; // credentials confirmed via Systems above, or no Systems collection to check against (best effort)
+
+  // NOTE: `reachable` is NOT set here anymore - see the fix below, after the Managers block,
+  // which is where authConfirmed gets its real second (and last) chance to become true.
 
   // Chassis collection -> first member's Thermal + Power subresources
   try {
@@ -240,7 +242,7 @@ async function detectRedfish(monitorFetch, ip, port, username, password) {
   } catch (e) {
     // Belt-and-braces: if Systems was absent so the check above never ran, still don't let a bad
     // password through just because a protected-but-optional collection responded 401.
-    if (!authConfirmed && (e.statusCode === 401 || e.statusCode === 403)) {
+    if (e.statusCode === 401 || e.statusCode === 403) {
       const lockout = looksLikeLockout(e.bodyText);
       out.lockoutSuspected = lockout;
       out.error = lockout
@@ -251,6 +253,21 @@ async function detectRedfish(monitorFetch, ip, port, username, password) {
     }
     /* Managers collection missing - leave bmcFirmware null, not fatal */
   }
+
+  // BUG FIX: `reachable` used to be set unconditionally right after the Systems try/catch above,
+  // which meant a device whose Systems link was missing or in an unexpected shape (no throw, no
+  // 401/403 - just nothing to actually check the password against) had its credential silently
+  // accepted as "working" without ever being validated. That let Discover stop after a WRONG
+  // first-guess password on such a device and never try the remaining candidates - a real Dell
+  // server's genuinely correct second/third password was never reached. Now `reachable` only
+  // becomes true once Systems or Managers has genuinely confirmed the credential (authConfirmed)
+  // via a protected resource that actually required and accepted it.
+  if (!authConfirmed) {
+    out.reachable = false;
+    out.error = out.error || 'Could not confirm credentials: this device exposed neither a Systems nor a Managers collection to authenticate against.';
+    return out;
+  }
+  out.reachable = true;
 
   // Alert count: every sensor reporting Health != OK, plus the overall
   // system health itself if it's not OK - the Redfish-side equivalent of
@@ -328,9 +345,15 @@ function redfishCredentialCandidates() {
       return i === -1 ? null : { vendor: null, username: pair.slice(0, i), password: pair.slice(i + 1) };
     })
     .filter(Boolean);
-  if (list.length) return list;
-  const u = process.env.REDFISH_DEFAULT_USERNAME, p = process.env.REDFISH_DEFAULT_PASSWORD;
-  return u ? [{ vendor: null, username: u, password: p || '' }] : [];
+  const out = list.length ? list : (() => {
+    const u = process.env.REDFISH_DEFAULT_USERNAME, p = process.env.REDFISH_DEFAULT_PASSWORD;
+    return u ? [{ vendor: null, username: u, password: p || '' }] : [];
+  })();
+  // Stable per-candidate id (its position in this list). Several candidates can share the same
+  // username (e.g. Dell's three "root" passwords), so username alone can't identify WHICH one
+  // Discover actually proved - Apply below needs this id to reuse the exact right credential
+  // instead of silently re-grabbing the first "root" entry (which may be the wrong password).
+  return out.map((c, i) => ({ ...c, id: i }));
 }
 // A short, randomized pause between credential attempts against the SAME device - several wrong
 // passwords fired at a real BMC back-to-back is exactly the pattern that trips its failed-login
@@ -598,7 +621,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
                 autoIgnored = true; job.autoIgnored++;
               } catch (e) { /* best-effort - a failed write here shouldn't fail the whole scan */ }
             }
-            job.results.push({ assetId: asset.id, site: asset.site, rackNo: asset.rack_no, mgmtIp: asset.mgmt_ip, reachable: r.reachable, vendor: r.vendor, model: r.model, serialNumber: r.serialNumber, healthStatus: r.healthStatus, matchedUsername: r.reachable ? r.credential.username : null, error: r.reachable ? null : r.error, lockoutSuspected: !!r.lockoutSuspected, autoIgnored });
+            job.results.push({ assetId: asset.id, site: asset.site, rackNo: asset.rack_no, mgmtIp: asset.mgmt_ip, reachable: r.reachable, vendor: r.vendor, model: r.model, serialNumber: r.serialNumber, healthStatus: r.healthStatus, matchedUsername: r.reachable ? r.credential.username : null, matchedCredentialId: r.reachable ? r.credential.id : null, error: r.reachable ? null : r.error, lockoutSuspected: !!r.lockoutSuspected, autoIgnored });
           } catch (e) { job.results.push({ assetId: asset.id, site: asset.site, rackNo: asset.rack_no, mgmtIp: asset.mgmt_ip, reachable: false, error: e.message }); }
           job.scanned++;
         }
@@ -629,7 +652,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
   // credential authenticated for it - they are not all forced to the same one.
   app.post('/api/monitoring/redfish/discover/apply', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
     try {
-      const { assetIds, credentialsByAsset } = req.body;
+      const { assetIds, credentialsByAsset, credentialIdsByAsset } = req.body;
       if (!Array.isArray(assetIds) || !assetIds.length) return res.status(400).json({ error: 'assetIds array is required' });
       const candidates = redfishCredentialCandidates();
       if (!candidates.length) return res.status(400).json({ error: 'No BMC credentials configured - set REDFISH_CREDENTIALS or REDFISH_DEFAULT_USERNAME/PASSWORD' });
@@ -651,17 +674,30 @@ module.exports = function registerRedfishRoutes(app, deps) {
             const [rows] = await pool.query('SELECT * FROM assets WHERE id = ?', [assetId]);
             if (!rows.length || !allowed.includes(rows[0].site) || !rows[0].mgmt_ip) { job.skippedNotFound++; continue; }
             const asset = rows[0];
-            // The frontend sends back the exact username Discover already proved worked for this
-            // asset (credentialsByAsset[assetId]) whenever it has one, so Apply confirms with ONE
-            // targeted attempt instead of re-running the full candidate list from scratch. Without
-            // this, every asset got re-attacked with all 4 candidate passwords a SECOND time
-            // (Discover's pass, then Apply's own pass) - on a real Dell iDRAC or HPE iLO, which
-            // locks an account out after a handful of failed logins in a row, that second blind
-            // pass could easily trip the lockout Discover had just avoided, making a device that
-            // clearly matched moments earlier fail here instead. Older callers that don't send it
-            // still fall back to the original full-candidate-list behavior.
+            // The frontend sends back the exact credential Discover already proved worked for
+            // this asset, so Apply confirms with ONE targeted attempt instead of re-running the
+            // full candidate list from scratch. Without this, every asset got re-attacked with
+            // all 4 candidate passwords a SECOND time (Discover's pass, then Apply's own pass) -
+            // on a real Dell iDRAC or HPE iLO, which locks an account out after a handful of
+            // failed logins in a row, that second blind pass could easily trip the lockout
+            // Discover had just avoided, making a device that clearly matched moments earlier
+            // fail here instead.
+            //
+            // BUG FIX: this used to look candidates up by USERNAME ALONE
+            // (credentialsByAsset[assetId]). Several real candidates legitimately share a
+            // username (e.g. all three Dell "root" passwords), so that lookup always grabbed the
+            // FIRST "root" entry regardless of which password Discover actually confirmed - if
+            // that wasn't the right one, Apply would re-send a known-wrong password, get
+            // rejected, and mark the device "no match" even though Discover had just proven it
+            // reachable moments earlier with a DIFFERENT "root" password. credentialIdsByAsset
+            // carries the exact candidate's stable id (its position in REDFISH_CREDENTIALS) so
+            // Apply reuses the precise credential, not just a same-named one. credentialsByAsset
+            // (username-only) is kept as a fallback for any older caller that still sends it.
+            const knownId = credentialIdsByAsset && credentialIdsByAsset[assetId];
             const knownUsername = credentialsByAsset && credentialsByAsset[assetId];
-            const knownCred = knownUsername ? candidates.find((c) => c.username === knownUsername) : null;
+            const knownCred = knownId != null
+              ? candidates.find((c) => c.id === knownId)
+              : (knownUsername ? candidates.find((c) => c.username === knownUsername) : null);
             const r = knownCred
               ? await detectRedfish(monitorFetch, asset.mgmt_ip, 443, knownCred.username, knownCred.password).then((res) => ({ ...res, credential: knownCred }))
               : await detectRedfishAnyCredential(monitorFetch, asset.mgmt_ip, 443, candidates);

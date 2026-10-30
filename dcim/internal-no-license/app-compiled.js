@@ -416,11 +416,14 @@ const api = {
     // it's done - no single request is ever open for more than a moment.
     discoverRedfishStart: () => apiFetch('/monitoring/redfish/discover', { method: 'POST', timeoutMs: 15000 }),
     discoverRedfishStatus: (jobId) => apiFetch('/monitoring/redfish/discover/' + encodeURIComponent(jobId), { timeoutMs: 15000 }),
-    // credentialsByAsset ({assetId: username}) lets Apply re-confirm with the EXACT credential
-    // Discover already found for that asset instead of re-trying every candidate password again -
-    // see the matching backend comment. Optional: omit it (or pass {}) to fall back to the old
-    // full-candidate-list behavior for an asset.
-    applyRedfishDiscoveryStart: (assetIds, credentialsByAsset) => apiFetch('/monitoring/redfish/discover/apply', { method: 'POST', body: JSON.stringify({ assetIds, credentialsByAsset }), timeoutMs: 15000 }),
+    // credentialIdsByAsset ({assetId: credentialId}) lets Apply re-confirm with the EXACT
+    // credential Discover already found for that asset instead of re-trying every candidate
+    // password again - see the matching backend comment. Uses the candidate's stable id (its
+    // position in REDFISH_CREDENTIALS), not its username, because several candidates can share a
+    // username (e.g. Dell's three "root" passwords) - a username-only match would silently reuse
+    // the wrong one. credentialsByAsset (username only) is still sent for older-server fallback.
+    // Optional: omit both (or pass {}) to fall back to the old full-candidate-list behavior.
+    applyRedfishDiscoveryStart: (assetIds, credentialsByAsset, credentialIdsByAsset) => apiFetch('/monitoring/redfish/discover/apply', { method: 'POST', body: JSON.stringify({ assetIds, credentialsByAsset, credentialIdsByAsset }), timeoutMs: 15000 }),
     applyRedfishDiscoveryStatus: (jobId) => apiFetch('/monitoring/redfish/discover/apply/' + encodeURIComponent(jobId), { timeoutMs: 15000 }),
     getRedfishFirmwareInventory: (assetId) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/firmware-inventory', { timeoutMs: 20000 }),
     updateRedfishFirmware: (assetId, imageUri) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/firmware/update', { method: 'POST', body: JSON.stringify({ imageUri }) }),
@@ -1555,7 +1558,7 @@ const MOVEMENT_COLUMNS = [
     { key: "remarks", label: "Remarks" }, { key: "createdBy", label: "Recorded By" },
 ];
 const REDFISH_COLUMNS = [
-    { key: "_asset", label: "Asset", format: (v, row) => row.deviceName || row.assetTag || row.id },
+    { key: "_asset", label: "Serial No", format: (v, row) => row.serialNumber || row.deviceName || row.assetTag || row.id },
     { key: "site", label: "Site" }, { key: "rackNo", label: "Rack" },
     { key: "hardwareType", label: "Category", format: (v) => v || "Uncategorized" },
     { key: "mgmtIp", label: "Mgmt IP" },
@@ -8320,14 +8323,23 @@ function RedfishDiscoverModal({ onClose, onApplied }) {
         try {
             // Reuse the exact credential Discover already proved for each selected asset, instead
             // of making Apply blind-guess through every candidate password again - see the
-            // backend comment on credentialsByAsset for why that second blind pass was the main
+            // backend comment on credentialIdsByAsset for why that second blind pass was the main
             // reason real BMCs were failing login here (account lockouts stacking across the two
-            // passes). Falls back to the old full-candidate-list behavior for any asset where, for
-            // whatever reason, there's no matched username on hand.
+            // passes). Sent by stable credential id, not username alone - several candidates can
+            // share a username (e.g. Dell's three "root" passwords), and a username-only match
+            // could silently reuse the WRONG one of those, which is exactly what let a device
+            // whose correct password was the 2nd or 3rd Dell candidate get rejected again here
+            // even right after Discover had just confirmed it. Falls back to the old
+            // full-candidate-list behavior for any asset where, for whatever reason, there's no
+            // matched credential on hand.
             const credentialsByAsset = {};
-            (scan.results || []).forEach((r) => { if (r.matchedUsername && selected.has(r.assetId))
-                credentialsByAsset[r.assetId] = r.matchedUsername; });
-            const start = await api.applyRedfishDiscoveryStart(Array.from(selected), credentialsByAsset);
+            const credentialIdsByAsset = {};
+            (scan.results || []).forEach((r) => {
+                if (!selected.has(r.assetId)) return;
+                if (r.matchedUsername) credentialsByAsset[r.assetId] = r.matchedUsername;
+                if (r.matchedCredentialId != null) credentialIdsByAsset[r.assetId] = r.matchedCredentialId;
+            });
+            const start = await api.applyRedfishDiscoveryStart(Array.from(selected), credentialsByAsset, credentialIdsByAsset);
             const r = await pollRedfishJob(api.applyRedfishDiscoveryStatus, start.jobId, setApplyProgress);
             const extra = (r.skippedNoMatch ? ` ${r.skippedNoMatch} did not authenticate with any saved credential.` : "") + (r.skippedNotFound ? ` ${r.skippedNotFound} could not be found or are outside your sites.` : "");
             setApplyMsg({ type: "success", text: `Applied to ${r.applied} of ${r.requested || r.applied} selected device(s).${extra}` });
