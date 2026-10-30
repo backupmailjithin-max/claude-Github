@@ -2412,8 +2412,25 @@ function getMonitorConfig(product, site, zone) {
 // already set at the process level.
 const https = require('https');
 let insecureDispatcher = null;
-try { const { Agent } = require('undici'); insecureDispatcher = new Agent({ connect: { rejectUnauthorized: false } }); }
-catch (e) { log.warn('NOTE: "undici" is not installed - Dell OME / HPE OneView appliances with self-signed certificates will be rejected. Run: npm install undici'); }
+try {
+  const { Agent } = require('undici');
+  insecureDispatcher = new Agent({
+    connect: {
+      rejectUnauthorized: false,
+      // A real-world fleet of Dell iDRAC / HPE iLO BMCs commonly includes older generations
+      // (iDRAC7/8, iLO4 and earlier) whose TLS stack negotiates only TLS 1.0/1.1 and older
+      // cipher suites. Recent Node/OpenSSL builds refuse that handshake outright by default -
+      // which surfaces here as a bare, unhelpful "fetch failed" with no indication it was a TLS
+      // version/cipher mismatch rather than the device genuinely being unreachable. This widens
+      // what this SPECIFIC dispatcher (used only for BMC/appliance monitoring calls, never
+      // globally) will negotiate, so an old-firmware BMC that Test & Detect's own single call
+      // happens to tolerate isn't rejected here. rejectUnauthorized is already false above for
+      // the same reason (self-signed certs) - this does the equivalent for protocol/cipher age.
+      minVersion: 'TLSv1',
+      ciphers: 'DEFAULT:@SECLEVEL=0',
+    },
+  });
+} catch (e) { log.warn('NOTE: "undici" is not installed - Dell OME / HPE OneView appliances with self-signed certificates will be rejected. Run: npm install undici'); }
 const MONITOR_FETCH_TIMEOUT_MS = 30000;
 function monitorFetch(url, opts = {}) {
   const isHttps = url.startsWith('https://');

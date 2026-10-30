@@ -89,6 +89,36 @@ async function probeVendorHint(monitorFetch, ip, port) {
     return null;
   } catch (e) { return null; } // any failure here just means "no hint" - falls back to the original order, no regression
 }
+// Node's fetch() wraps every network-level failure in the same generic "TypeError: fetch
+// failed", throwing away the actual reason (connection refused, timed out, TLS handshake
+// failure, host unreachable, DNS failure...) in `error.cause`. That genericness is exactly what
+// made this impossible to diagnose from the UI/logs - "fetch failed" tells you nothing about
+// WHY a device that connects fine via a single Test & Detect call is failing here. This surfaces
+// the real cause (its error code plus message) when one is available, falling back to the bare
+// message only if there's truly nothing more specific to show.
+function describeNetworkError(e) {
+  const cause = e && e.cause;
+  if (cause && (cause.code || cause.message)) {
+    return cause.code ? `${cause.code}${cause.message ? ' - ' + cause.message : ''}` : cause.message;
+  }
+  return e && e.message;
+}
+// A single flaky TCP/TLS failure (ECONNRESET, ETIMEDOUT, EHOSTUNREACH) against a device that is
+// otherwise perfectly reachable is common when scanning many devices at once (DISCOVERY_CONCURRENCY),
+// and is exactly the kind of transient blip that makes one asset wrongly look "unreachable" in a
+// bulk Discover while a single, unhurried Test & Detect call against the same IP succeeds. One
+// retry after a short pause, for network-level failures only (never for a 401/403 - that's a
+// real answer from the device, not a transient failure), cheaply rules that out before reporting
+// the device unreachable.
+async function redfishGetWithRetry(monitorFetch, ip, port, username, password, path) {
+  try {
+    return await redfishGet(monitorFetch, ip, port, username, password, path);
+  } catch (e) {
+    if (e.statusCode === 401 || e.statusCode === 403) throw e; // a real answer, not a transient network blip - don't retry
+    await new Promise((resolve) => setTimeout(resolve, 400 + Math.floor(Math.random() * 300)));
+    return redfishGet(monitorFetch, ip, port, username, password, path);
+  }
+}
 async function redfishPost(monitorFetch, ip, port, username, password, path, body) {
   const url = `${redfishBaseUrl(ip, port)}${path}`;
   const res = await monitorFetch(url, {
@@ -132,7 +162,7 @@ async function detectRedfish(monitorFetch, ip, port, username, password) {
     managerPath: null, updateServicePath: null, error: null, alertCount: null, lockoutSuspected: false,
   };
   let root;
-  try { root = await redfishGet(monitorFetch, ip, port, username, password, '/redfish/v1/'); }
+  try { root = await redfishGetWithRetry(monitorFetch, ip, port, username, password, '/redfish/v1/'); }
   catch (e) {
     if (e.statusCode === 401 || e.statusCode === 403) {
       // A small minority of BMCs require auth even on the ServiceRoot - unlike a real network
@@ -148,7 +178,7 @@ async function detectRedfish(monitorFetch, ip, port, username, password) {
         : 'Authentication failed - check the BMC username/password.';
       return out;
     }
-    out.error = `Could not reach Redfish service: ${e.message}`;
+    out.error = `Could not reach Redfish service: ${describeNetworkError(e)}`;
     return out;
   }
   // Reaching the service root (unauthenticated on this and most real BMCs - see the note below)
