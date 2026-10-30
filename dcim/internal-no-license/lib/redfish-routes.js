@@ -620,6 +620,15 @@ module.exports = function registerRedfishRoutes(app, deps) {
   const applyJobs = new Map();
   const REDFISH_JOB_TTL_MS = 15 * 60 * 1000; // finished jobs are forgotten after this so memory doesn't grow unbounded on a long-running server
   function scheduleJobCleanup(map, jobId) { const t = setTimeout(() => map.delete(jobId), REDFISH_JOB_TTL_MS); if (t.unref) t.unref(); }
+  // PRODUCTION HARDENING: nothing previously stopped two Discover runs (a double-click, two
+  // browser tabs, or two admins) from starting at the same time and both brute-forcing the SAME
+  // set of not-yet-configured devices concurrently - doubling the real login attempts against
+  // every BMC in scope and meaningfully raising the odds of tripping its account lockout, exactly
+  // the failure mode the rest of this file works hard to avoid. One in-flight Discover job and one
+  // in-flight Apply job at a time is enough for any real admin workflow; a second attempt is
+  // rejected with a clear reason rather than silently doubling the load.
+  let discoverRunning = false;
+  let applyRunning = false;
 
   // Dry-run discovery: tries every candidate credential pair (REDFISH_CREDENTIALS,
   // or the single legacy REDFISH_DEFAULT_* pair - see redfishCredentialCandidates
@@ -630,9 +639,18 @@ module.exports = function registerRedfishRoutes(app, deps) {
   // anyone typing credentials in one IP at a time. Reports what it found and which
   // credential matched; saves nothing until /apply.
   app.post('/api/monitoring/redfish/discover', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+    // The guard flag must be set SYNCHRONOUSLY, before the very first `await` in this
+    // handler - not after. Node still runs one request handler at a time up to its first
+    // await, but from that first await onward another request's handler can interleave on
+    // the same event loop tick. If the flag were set after even one await (e.g. after
+    // getAllowedSitesForUser or the SELECT below), two Discover POSTs arriving close
+    // together could BOTH read discoverRunning as false and both pass the guard before
+    // either one sets it - the exact concurrent-scan race this guard exists to prevent.
+    if (discoverRunning) return res.status(409).json({ error: 'A Discover scan is already running - wait for it to finish before starting another, so the same devices are not brute-forced twice at once.' });
+    discoverRunning = true;
     try {
       const candidates = redfishCredentialCandidates();
-      if (!candidates.length) return res.status(400).json({ error: 'No BMC credentials configured - set REDFISH_CREDENTIALS (e.g. "root:calvin,root:calvin@123,root:Calvin@123,hpadmin:hpinvent") or REDFISH_DEFAULT_USERNAME/PASSWORD in .env, or use Test & Detect to add BMC credentials one at a time instead.' });
+      if (!candidates.length) { discoverRunning = false; return res.status(400).json({ error: 'No BMC credentials configured - set REDFISH_CREDENTIALS (e.g. "root:calvin,root:calvin@123,root:Calvin@123,hpadmin:hpinvent") or REDFISH_DEFAULT_USERNAME/PASSWORD in .env, or use Test & Detect to add BMC credentials one at a time instead.' }); }
       const allowed = await getAllowedSitesForUser(req.user);
       // redfish_monitor_ignored = 0: excludes devices already auto-ignored by a PREVIOUS Discover
       // run below (none of the candidate credentials matched, and it wasn't a suspected account
@@ -661,6 +679,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
       const jobId = genId('rfdisc');
       const job = { status: 'running', total: rows.length, scanned: 0, reachable: 0, autoIgnored: 0, results: [], credentialsTried: candidates.length, error: null };
       discoverJobs.set(jobId, job);
+      // discoverRunning was already set true synchronously at the top of this handler.
       let idx = 0;
       async function worker() {
         while (idx < rows.length) {
@@ -690,9 +709,9 @@ module.exports = function registerRedfishRoutes(app, deps) {
       Promise.all(Array.from({ length: Math.min(DISCOVERY_CONCURRENCY, rows.length) }, worker))
         .then(() => { job.status = 'done'; })
         .catch((e) => { job.status = 'error'; job.error = e.message; })
-        .finally(() => scheduleJobCleanup(discoverJobs, jobId));
+        .finally(() => { discoverRunning = false; scheduleJobCleanup(discoverJobs, jobId); });
       res.json({ jobId, status: 'running', total: rows.length });
-    } catch (e) { sendErr(res, e); }
+    } catch (e) { discoverRunning = false; sendErr(res, e); }
   });
 
   // Poll endpoint for the background scan started above. Returns the job's current state
@@ -710,11 +729,16 @@ module.exports = function registerRedfishRoutes(app, deps) {
   // matching username/password + detected fields. Each device keeps whichever
   // credential authenticated for it - they are not all forced to the same one.
   app.post('/api/monitoring/redfish/discover/apply', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+    // Same ordering requirement as /discover above: set the guard flag synchronously,
+    // before this handler's first `await`, or two Apply POSTs arriving close together can
+    // both pass the check before either one sets it.
+    if (applyRunning) return res.status(409).json({ error: 'An Apply is already running - wait for it to finish before starting another.' });
+    applyRunning = true;
     try {
       const { assetIds, credentialsByAsset, credentialIdsByAsset } = req.body;
-      if (!Array.isArray(assetIds) || !assetIds.length) return res.status(400).json({ error: 'assetIds array is required' });
+      if (!Array.isArray(assetIds) || !assetIds.length) { applyRunning = false; return res.status(400).json({ error: 'assetIds array is required' }); }
       const candidates = redfishCredentialCandidates();
-      if (!candidates.length) return res.status(400).json({ error: 'No BMC credentials configured - set REDFISH_CREDENTIALS or REDFISH_DEFAULT_USERNAME/PASSWORD' });
+      if (!candidates.length) { applyRunning = false; return res.status(400).json({ error: 'No BMC credentials configured - set REDFISH_CREDENTIALS or REDFISH_DEFAULT_USERNAME/PASSWORD' }); }
       const allowed = await getAllowedSitesForUser(req.user);
       // No slice() here on purpose - see the comment above the job maps: this used to silently
       // cap every Apply call at the first 200 selected assets, with everything past #200 never
@@ -725,6 +749,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
       const jobId = genId('rfapply');
       const job = { status: 'running', total: ids.length, processed: 0, applied: 0, skippedNotFound: 0, skippedNoMatch: 0, error: null };
       applyJobs.set(jobId, job);
+      // applyRunning was already set true synchronously at the top of this handler.
       let idx = 0;
       async function worker() {
         while (idx < ids.length) {
@@ -781,9 +806,9 @@ module.exports = function registerRedfishRoutes(app, deps) {
           auditLog(req, 'REDFISH_DISCOVERY_APPLY', { entity: 'asset', status: 'success' }, { count: job.applied, requested: ids.length, skippedNotFound: job.skippedNotFound, skippedNoMatch: job.skippedNoMatch });
         })
         .catch((e) => { job.status = 'error'; job.error = e.message; })
-        .finally(() => scheduleJobCleanup(applyJobs, jobId));
+        .finally(() => { applyRunning = false; scheduleJobCleanup(applyJobs, jobId); });
       res.json({ jobId, status: 'running', total: ids.length });
-    } catch (e) { sendErr(res, e); }
+    } catch (e) { applyRunning = false; sendErr(res, e); }
   });
 
   // Poll endpoint for the background apply started above.
