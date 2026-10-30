@@ -1203,6 +1203,18 @@ async function initDB() {
     // list view; still filterable back in with "Show ignored".
     try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_monitor_ignored TINYINT(1) NOT NULL DEFAULT 0'); } catch (e) { /* already exists */ }
 
+    // Dedicated column for the serial number the BMC itself reports over Redfish -
+    // deliberately SEPARATE from the shared `serial_number` field above. That field is
+    // COALESCE-protected because many sites (this one included) put their own internal
+    // asset-tag-style value into Asset Inventory's Serial Number at creation time, not the
+    // vendor's real hardware serial, and OME/OneView device matching keys off that exact
+    // value - silently overwriting it with whatever Redfish reports would both discard an
+    // intentionally-entered value and risk breaking that matching. This column instead
+    // always reflects the latest Redfish readout (same live-state treatment as
+    // health_status/power_state above), so the Multi-Vendor (Redfish) table can show the
+    // BMC's own serial without touching or depending on Asset Inventory's field at all.
+    try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_serial_number VARCHAR(150)'); } catch (e) { /* already exists */ }
+
     // ---- Widen id columns (VARCHAR(20) -> VARCHAR(50)) ----
     // Bulk-upsert generates IDs like AST-<13-digit timestamp>-<batch index>,
     // which can exceed 20 chars and fail with "Data too long for column 'id'".

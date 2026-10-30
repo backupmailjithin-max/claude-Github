@@ -444,6 +444,12 @@ module.exports = function registerRedfishRoutes(app, deps) {
   const assetPreview = (a) => ({
     id: a.id, site: a.site, zone: a.zone, rackNo: a.rack_no, deviceName: a.device_name, assetTag: a.asset_tag,
     mgmtIp: a.mgmt_ip, vendor: a.manufacturer, model: a.model, serialNumber: a.serial_number, firmware: a.firmware,
+    // redfishSerialNumber is the serial the BMC itself just reported - kept separate from
+    // serialNumber (Asset Inventory's own field) above. See the redfish_serial_number column
+    // comment in initDB() for why: Asset Inventory's Serial Number is often a site's own
+    // asset-tag-style value, not the vendor's real hardware serial, and is COALESCE-protected
+    // so it's never silently overwritten. This field always reflects the latest Redfish poll.
+    redfishSerialNumber: a.redfish_serial_number,
     redfishConfigured: !!a.redfish_username, redfishVersion: a.redfish_version, bmcFirmware: a.bmc_firmware,
     healthStatus: a.health_status, powerState: a.power_state, alertCount: a.redfish_alert_count,
     powerWatts: a.redfish_power_watts, hardwareType: a.hardware_type, monitorIgnored: !!a.redfish_monitor_ignored,
@@ -515,7 +521,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
           `UPDATE assets SET redfish_username = NULL, redfish_password = NULL, redfish_port = NULL,
              redfish_version = NULL, bmc_firmware = NULL, health_status = NULL, power_state = NULL,
              redfish_alert_count = NULL, redfish_power_watts = NULL, redfish_monitor_ignored = 0,
-             last_redfish_sync_at = NULL, last_redfish_error = NULL
+             redfish_serial_number = NULL, last_redfish_sync_at = NULL, last_redfish_error = NULL
            WHERE id = ?`,
           [rows[0].id]
         );
@@ -558,10 +564,11 @@ module.exports = function registerRedfishRoutes(app, deps) {
       `UPDATE assets SET
          manufacturer = COALESCE(NULLIF(manufacturer, ''), ?), model = COALESCE(NULLIF(model, ''), ?),
          serial_number = COALESCE(NULLIF(serial_number, ''), ?), firmware = COALESCE(NULLIF(firmware, ''), ?),
+         redfish_serial_number = ?,
          bmc_firmware = ?, redfish_version = ?, health_status = ?, power_state = ?, redfish_alert_count = ?,
          redfish_power_watts = ?, last_redfish_sync_at = NOW(), last_redfish_error = NULL
        WHERE id = ?`,
-      [r.vendor, r.model, r.serialNumber, r.biosVersion, r.bmcFirmware, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
+      [r.vendor, r.model, r.serialNumber, r.biosVersion, r.serialNumber, r.bmcFirmware, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
     );
     return { reachable: true, ...r };
   }
@@ -736,10 +743,11 @@ module.exports = function registerRedfishRoutes(app, deps) {
               `UPDATE assets SET redfish_username = ?, redfish_password = ?, redfish_port = 443,
                  manufacturer = COALESCE(NULLIF(manufacturer, ''), ?), model = COALESCE(NULLIF(model, ''), ?),
                  serial_number = COALESCE(NULLIF(serial_number, ''), ?), firmware = COALESCE(NULLIF(firmware, ''), ?),
+                 redfish_serial_number = ?,
                  bmc_firmware = ?, redfish_version = ?, health_status = ?, power_state = ?, redfish_alert_count = ?,
                  redfish_power_watts = ?, last_redfish_sync_at = NOW(), last_redfish_error = NULL
                WHERE id = ?`,
-              [r.credential.username, r.credential.password || '', r.vendor, r.model, r.serialNumber, r.biosVersion, r.bmcFirmware, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
+              [r.credential.username, r.credential.password || '', r.vendor, r.model, r.serialNumber, r.biosVersion, r.serialNumber, r.bmcFirmware, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
             );
             job.applied++;
           } finally { job.processed++; }

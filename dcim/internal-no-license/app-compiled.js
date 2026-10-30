@@ -1558,7 +1558,14 @@ const MOVEMENT_COLUMNS = [
     { key: "remarks", label: "Remarks" }, { key: "createdBy", label: "Recorded By" },
 ];
 const REDFISH_COLUMNS = [
-    { key: "_asset", label: "Serial No", format: (v, row) => row.serialNumber || row.deviceName || row.assetTag || row.id },
+    // Prefer the serial the BMC itself just reported over Redfish (redfishSerialNumber) over
+    // Asset Inventory's own Serial Number field (serialNumber) - many sites, this one included,
+    // put their own internal asset-tag-style value into Asset Inventory's Serial Number at
+    // creation time rather than the vendor's real hardware serial, so showing that field here
+    // looked wrong/stale even on a device that had synced successfully. Falls back through
+    // Asset Inventory's serial, then device name/asset tag/id, only for a device Redfish has
+    // never successfully reached yet.
+    { key: "_asset", label: "Serial No", format: (v, row) => row.redfishSerialNumber || row.serialNumber || row.deviceName || row.assetTag || row.id },
     { key: "site", label: "Site" }, { key: "rackNo", label: "Rack" },
     { key: "hardwareType", label: "Category", format: (v) => v || "Uncategorized" },
     { key: "mgmtIp", label: "Mgmt IP" },
@@ -8416,7 +8423,11 @@ function RedfishTab({ canEdit, allowedSites }) {
     };
     const renderCell = (col, a) => {
         switch (col.key) {
-            case "_asset": return React.createElement("span", { style: { fontWeight: 600 } }, a.deviceName || a.assetTag || a.id);
+            // BUG FIX: this case used to hardcode deviceName/assetTag/id directly, completely
+            // bypassing REDFISH_COLUMNS' own `format` function for "_asset" - so renaming that
+            // column to Serial No and preferring redfishSerialNumber/serialNumber there never
+            // actually took effect; this switch always won. Now matches the column's own format.
+            case "_asset": return React.createElement("span", { style: { fontWeight: 600 } }, a.redfishSerialNumber || a.serialNumber || a.deviceName || a.assetTag || a.id);
             case "mgmtIp": return a.mgmtIp ? React.createElement("a", { href: `https://${a.mgmtIp}`, target: "_blank", rel: "noopener", style: { color: "#2563EB", textDecoration: "underline", fontFamily: "'JetBrains Mono'" } }, a.mgmtIp) : "—";
             case "healthStatus": return React.createElement(RedfishHealthPill, { status: a.healthStatus });
             case "alertCount": return a.alertCount == null ? React.createElement("span", { style: { color: "#94A3B8" } }, "—") : a.alertCount === 0 ? React.createElement("span", { style: { color: "#059669", fontWeight: 700 } }, "0") : React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 5, color: "#DC2626", fontWeight: 700 } }, React.createElement("span", { style: { width: 6, height: 6, borderRadius: "50%", background: "#DC2626" } }), a.alertCount);
