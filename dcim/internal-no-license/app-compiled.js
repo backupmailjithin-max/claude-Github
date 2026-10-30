@@ -404,9 +404,16 @@ const api = {
     getRedfishAssets: (site, includeIgnored) => { const q = new URLSearchParams(); if (site && site !== 'all') q.set('site', site); if (includeIgnored) q.set('includeIgnored', '1'); const qs = q.toString(); return apiFetch('/monitoring/redfish/assets' + (qs ? '?' + qs : '')); },
     setRedfishIgnored: (assetId, ignored) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/ignore', { method: 'PUT', body: JSON.stringify({ ignored }) }),
     unconfigureRedfish: (assetIds) => apiFetch('/monitoring/redfish/unconfigure', { method: 'POST', body: JSON.stringify({ assetIds }) }),
-    detectRedfish: (body) => apiFetch('/monitoring/redfish/detect', { method: 'POST', body: JSON.stringify(body), timeoutMs: 15000 }),
+    // BUG FIX: these two make a single, synchronous call all the way to the BMC and back (unlike
+    // Discover/Apply below, which only start/poll a background job) - the backend's own network
+    // timeout for that call is 30s (MONITOR_FETCH_TIMEOUT_MS in server.js), so a client-side
+    // timeout of 15s was aborting the request HALF A TIMEOUT-CYCLE before the backend itself
+    // would have given up and answered, producing exactly "Server request timed out after 15
+    // seconds" for a device that was simply slow to respond/reject rather than for any backend or
+    // database problem. Raised to comfortably clear the backend's own ceiling.
+    detectRedfish: (body) => apiFetch('/monitoring/redfish/detect', { method: 'POST', body: JSON.stringify(body), timeoutMs: 35000 }),
     saveRedfishCredentials: (assetId, body) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/credentials', { method: 'PUT', body: JSON.stringify(body) }),
-    syncRedfishAsset: (assetId) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/sync', { method: 'POST', timeoutMs: 15000 }),
+    syncRedfishAsset: (assetId) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/sync', { method: 'POST', timeoutMs: 35000 }),
     // Discover and Apply no longer run as one long held-open request - a scan across a large
     // site (1000s of assets) can legitimately take minutes, and a request held open that long
     // tends to get cut off by whatever reverse proxy/gateway sits in front of this server (most

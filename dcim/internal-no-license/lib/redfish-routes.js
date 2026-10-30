@@ -154,7 +154,15 @@ function normalizeVendor(manufacturer, oemKeys) {
 // resource tree is NOT uniform across vendors/generations), then pull the
 // four fields confirmed reliable across every vendor researched: Systems
 // (identity/health), Chassis/Thermal+Power (sensors), Managers (BMC itself).
-async function detectRedfish(monitorFetch, ip, port, username, password) {
+// retryOnNetworkError: a transient TCP/TLS blip is realistically only worth absorbing on the
+// bulk, backgrounded Discover path (detectRedfishAnyCredential below always passes true) - there
+// a user is watching a progress bar, not the clock, so a doubled worst-case wait per device is
+// invisible. For the ad-hoc, synchronous "Test & Detect" call and Apply's single targeted
+// confirmation (both default to false), a human is staring at the screen waiting on THIS one
+// call, and doubling the worst case from ~30s to ~60s is a worse outcome than occasionally
+// reporting a genuinely-transient blip as "unreachable" - the user can just click Test & Detect
+// again in a couple seconds, which is faster than waiting out a built-in retry would ever be.
+async function detectRedfish(monitorFetch, ip, port, username, password, retryOnNetworkError = false) {
   const out = {
     reachable: false, rootReachable: false, redfishVersion: null, vendor: null, model: null, serialNumber: null,
     biosVersion: null, bmcFirmware: null, healthStatus: null, powerState: null,
@@ -162,7 +170,11 @@ async function detectRedfish(monitorFetch, ip, port, username, password) {
     managerPath: null, updateServicePath: null, error: null, alertCount: null, lockoutSuspected: false,
   };
   let root;
-  try { root = await redfishGetWithRetry(monitorFetch, ip, port, username, password, '/redfish/v1/'); }
+  try {
+    root = retryOnNetworkError
+      ? await redfishGetWithRetry(monitorFetch, ip, port, username, password, '/redfish/v1/')
+      : await redfishGet(monitorFetch, ip, port, username, password, '/redfish/v1/');
+  }
   catch (e) {
     if (e.statusCode === 401 || e.statusCode === 403) {
       // A small minority of BMCs require auth even on the ServiceRoot - unlike a real network
@@ -405,7 +417,10 @@ async function detectRedfishAnyCredential(monitorFetch, ip, port, candidates) {
   for (let i = 0; i < ordered.length; i++) {
     const cred = ordered[i];
     if (i > 0) await credentialAttemptBackoff();
-    const r = await detectRedfish(monitorFetch, ip, port, cred.username, cred.password);
+    // retryOnNetworkError=true here: this path is only ever called from the backgrounded,
+    // polled bulk Discover job (never synchronously while a user waits), so absorbing a
+    // transient connect blip is pure upside.
+    const r = await detectRedfish(monitorFetch, ip, port, cred.username, cred.password, true);
     if (r.reachable) return { ...r, credential: cred, vendorHint: hint };
     last = r;
     // Stop at the first candidate whenever the IP/port itself didn't answer at all - every
@@ -627,7 +642,14 @@ module.exports = function registerRedfishRoutes(app, deps) {
       // real BMC's login lockout again. "Show ignored" + "Un-ignore" in the main list brings a
       // device back into scope any time (e.g. after fixing REDFISH_CREDENTIALS or confirming its
       // actual login by hand) so this never permanently loses a device.
-      const conditions = ["mgmt_ip IS NOT NULL", "mgmt_ip <> ''", "(redfish_username IS NULL OR redfish_username = '')", "redfish_monitor_ignored = 0"];
+      // Only scan hardware types that are actually servers (e.g. "DellServer", "HPServer").
+      // REDFISH_CREDENTIALS is configured for server BMC logins only - storage arrays, switches,
+      // firewalls, PDUs etc. have a management IP too but speak nothing Redfish understands, so
+      // throwing the same candidate passwords at them every run wastes a full ~30s timeout per
+      // device for nothing and was exactly what made a bulk Discover take far longer than it
+      // needed to, and look like it was "scanning everything" instead of just the Dell/HP
+      // servers credentials were actually given for.
+      const conditions = ["mgmt_ip IS NOT NULL", "mgmt_ip <> ''", "(redfish_username IS NULL OR redfish_username = '')", "redfish_monitor_ignored = 0", "LOWER(hardware_type) LIKE '%server%'"];
       const params = [];
       await applySiteScope(allowed, conditions, params);
       // No LIMIT here on purpose - see the comment above the job maps: this used to stop at the
