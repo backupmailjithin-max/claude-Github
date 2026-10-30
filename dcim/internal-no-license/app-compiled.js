@@ -416,7 +416,11 @@ const api = {
     // it's done - no single request is ever open for more than a moment.
     discoverRedfishStart: () => apiFetch('/monitoring/redfish/discover', { method: 'POST', timeoutMs: 15000 }),
     discoverRedfishStatus: (jobId) => apiFetch('/monitoring/redfish/discover/' + encodeURIComponent(jobId), { timeoutMs: 15000 }),
-    applyRedfishDiscoveryStart: (assetIds) => apiFetch('/monitoring/redfish/discover/apply', { method: 'POST', body: JSON.stringify({ assetIds }), timeoutMs: 15000 }),
+    // credentialsByAsset ({assetId: username}) lets Apply re-confirm with the EXACT credential
+    // Discover already found for that asset instead of re-trying every candidate password again -
+    // see the matching backend comment. Optional: omit it (or pass {}) to fall back to the old
+    // full-candidate-list behavior for an asset.
+    applyRedfishDiscoveryStart: (assetIds, credentialsByAsset) => apiFetch('/monitoring/redfish/discover/apply', { method: 'POST', body: JSON.stringify({ assetIds, credentialsByAsset }), timeoutMs: 15000 }),
     applyRedfishDiscoveryStatus: (jobId) => apiFetch('/monitoring/redfish/discover/apply/' + encodeURIComponent(jobId), { timeoutMs: 15000 }),
     getRedfishFirmwareInventory: (assetId) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/firmware-inventory', { timeoutMs: 20000 }),
     updateRedfishFirmware: (assetId, imageUri) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/firmware/update', { method: 'POST', body: JSON.stringify({ imageUri }) }),
@@ -8314,7 +8318,16 @@ function RedfishDiscoverModal({ onClose, onApplied }) {
     const apply = async () => {
         setBusy(true); setApplyMsg(null); setApplyProgress(null);
         try {
-            const start = await api.applyRedfishDiscoveryStart(Array.from(selected));
+            // Reuse the exact credential Discover already proved for each selected asset, instead
+            // of making Apply blind-guess through every candidate password again - see the
+            // backend comment on credentialsByAsset for why that second blind pass was the main
+            // reason real BMCs were failing login here (account lockouts stacking across the two
+            // passes). Falls back to the old full-candidate-list behavior for any asset where, for
+            // whatever reason, there's no matched username on hand.
+            const credentialsByAsset = {};
+            (scan.results || []).forEach((r) => { if (r.matchedUsername && selected.has(r.assetId))
+                credentialsByAsset[r.assetId] = r.matchedUsername; });
+            const start = await api.applyRedfishDiscoveryStart(Array.from(selected), credentialsByAsset);
             const r = await pollRedfishJob(api.applyRedfishDiscoveryStatus, start.jobId, setApplyProgress);
             const extra = (r.skippedNoMatch ? ` ${r.skippedNoMatch} did not authenticate with any saved credential.` : "") + (r.skippedNotFound ? ` ${r.skippedNotFound} could not be found or are outside your sites.` : "");
             setApplyMsg({ type: "success", text: `Applied to ${r.applied} of ${r.requested || r.applied} selected device(s).${extra}` });
@@ -8331,7 +8344,7 @@ function RedfishDiscoverModal({ onClose, onApplied }) {
                 busy && !scan && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 13, color: "#64748B" } }, scanProgress && scanProgress.total ? `Scanning… ${scanProgress.scanned} / ${scanProgress.total}` : "Scanning…"),
                 err && React.createElement("div", { style: { padding: "9px 12px", borderRadius: 9, background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.25)", color: "#B91C1C", fontFamily: "Inter", fontSize: 12, marginBottom: 14 } }, err),
                 scan && React.createElement("div", null,
-                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#475569", marginBottom: 10 } }, `Scanned ${scan.scanned} asset(s) against ${scan.credentialsTried || 1} candidate credential(s), ${scan.reachable} responded to Redfish.`),
+                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#475569", marginBottom: 10 } }, `Scanned ${scan.scanned} asset(s) against ${scan.credentialsTried || 1} candidate credential(s), ${scan.reachable} responded to Redfish.` + (scan.autoIgnored ? ` ${scan.autoIgnored} device(s) didn't match any saved credential and were auto-marked "Ignore from Monitor" so they won't be re-scanned every time — un-ignore them from the main list to retry.` : "")),
                     React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12 } },
                         React.createElement("thead", null, React.createElement("tr", null, ["", "Asset", "Site", "Rack", "Mgmt IP", "Vendor / Model", "Matched Login", "Result"].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "6px 8px", borderBottom: "1px solid #E2E8F0", color: "#64748B", fontWeight: 700, fontSize: 10.5, textTransform: "uppercase" } }, h)))),
                         React.createElement("tbody", null, scan.results.map((r) => React.createElement("tr", { key: r.assetId, style: { borderBottom: "1px solid #F1F5F9" } },
@@ -8342,7 +8355,7 @@ function RedfishDiscoverModal({ onClose, onApplied }) {
                             React.createElement("td", { style: { padding: "6px 8px", fontFamily: "'JetBrains Mono'" } }, r.mgmtIp),
                             React.createElement("td", { style: { padding: "6px 8px" } }, r.reachable ? `${r.vendor || "—"} ${r.model || ""}` : "—"),
                             React.createElement("td", { style: { padding: "6px 8px", fontFamily: "'JetBrains Mono'" } }, r.matchedUsername || "—"),
-                            React.createElement("td", { style: { padding: "6px 8px", color: r.reachable ? "#059669" : "#94A3B8" } }, r.reachable ? "Reachable" : (r.error || "Not reachable")))))),
+                            React.createElement("td", { style: { padding: "6px 8px", color: r.reachable ? "#059669" : (r.lockoutSuspected ? "#B45309" : "#94A3B8") }, title: r.autoIgnored ? "Auto-ignored - won't be re-scanned until un-ignored" : undefined }, r.reachable ? "Reachable" : (r.error || "Not reachable") + (r.autoIgnored ? " (ignored)" : "")))))),
                     applyMsg && React.createElement("div", { style: { marginTop: 10, fontFamily: "Inter", fontSize: 12, color: applyMsg.type === "error" ? "#B91C1C" : "#059669" } }, applyMsg.text)),
                 React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 } },
                     React.createElement("button", { type: "button", onClick: onClose, className: "neu-btn-secondary" }, "Close"),

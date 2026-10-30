@@ -46,8 +46,48 @@ function authHeader(username, password) {
 async function redfishGet(monitorFetch, ip, port, username, password, path) {
   const url = `${redfishBaseUrl(ip, port)}${path}`;
   const res = await monitorFetch(url, { headers: { Accept: 'application/json', ...authHeader(username, password) } });
-  if (!res.ok) { const err = new Error(`Redfish ${path} returned ${res.status}`); err.statusCode = res.status; throw err; }
+  if (!res.ok) {
+    let bodyText = '';
+    try { bodyText = await res.text(); } catch (e) { /* some BMCs send no body on a 401/403 */ }
+    const err = new Error(`Redfish ${path} returned ${res.status}`);
+    err.statusCode = res.status;
+    err.bodyText = bodyText; // used to tell a real bad-password rejection apart from an account lockout - see looksLikeLockout()
+    throw err;
+  }
   return res.json();
+}
+// Dell iDRAC and HPE iLO (and most other BMCs) lock an account out for several minutes after a
+// handful of failed logins in a row - a VERY real risk here, since Discover deliberately tries
+// several candidate passwords against devices whose vendor isn't known yet. A lockout rejection
+// looks identical to a plain wrong password (401/403) unless the body text is actually read, so
+// without this a locked-out account reports as "all 4 credentials failed" even when the correct
+// one is in the list and would have worked if it weren't asked while the account was locked.
+function looksLikeLockout(bodyText) {
+  return /locked|lockout|too many (failed )?(login|attempt)|exceeded.*(attempt|login)|retry later|try again later|temporarily (disabled|unavailable|blocked)/i.test(String(bodyText || ''));
+}
+// Reads the unauthenticated ServiceRoot (no credentials sent at all, so this never counts toward
+// a BMC's failed-login lockout counter) to get a vendor hint BEFORE any password is tried, so
+// Dell credentials can be tried first against a Dell box and HPE credentials first against an
+// HPE box - instead of blind-guessing through every candidate in a fixed order regardless of
+// vendor, which wastes attempts (and risks a lockout) with credentials that could never apply to
+// that device. Returns null (not a guess) when the ServiceRoot gives no usable clue.
+async function probeVendorHint(monitorFetch, ip, port) {
+  try {
+    const res = await monitorFetch(`${redfishBaseUrl(ip, port)}/redfish/v1/`, { headers: { Accept: 'application/json' } });
+    if (!res.ok) return null;
+    const root = await res.json();
+    const oemKeys = Object.keys(root.Oem || {}).map((k) => k.toLowerCase());
+    if (oemKeys.includes('dell')) return 'dell';
+    if (oemKeys.includes('hpe') || oemKeys.includes('hp')) return 'hpe';
+    if (oemKeys.includes('lenovo')) return 'lenovo';
+    if (oemKeys.includes('cisco')) return 'cisco';
+    if (oemKeys.includes('nvidia')) return 'nvidia';
+    if (oemKeys.includes('supermicro') || oemKeys.includes('smc')) return 'supermicro';
+    const vendorField = String(root.Vendor || '').toLowerCase();
+    if (vendorField.includes('dell')) return 'dell';
+    if (vendorField.includes('hp')) return 'hpe';
+    return null;
+  } catch (e) { return null; } // any failure here just means "no hint" - falls back to the original order, no regression
 }
 async function redfishPost(monitorFetch, ip, port, username, password, path, body) {
   const url = `${redfishBaseUrl(ip, port)}${path}`;
@@ -89,11 +129,28 @@ async function detectRedfish(monitorFetch, ip, port, username, password) {
     reachable: false, rootReachable: false, redfishVersion: null, vendor: null, model: null, serialNumber: null,
     biosVersion: null, bmcFirmware: null, healthStatus: null, powerState: null,
     powerWatts: null, temperatures: [], fans: [], systemPath: null, chassisPath: null,
-    managerPath: null, updateServicePath: null, error: null, alertCount: null,
+    managerPath: null, updateServicePath: null, error: null, alertCount: null, lockoutSuspected: false,
   };
   let root;
   try { root = await redfishGet(monitorFetch, ip, port, username, password, '/redfish/v1/'); }
-  catch (e) { out.error = e.statusCode === 401 ? 'Authentication failed - check the BMC username/password.' : `Could not reach Redfish service: ${e.message}`; return out; }
+  catch (e) {
+    if (e.statusCode === 401 || e.statusCode === 403) {
+      // A small minority of BMCs require auth even on the ServiceRoot - unlike a real network
+      // failure, the device clearly DID answer, it just rejected THIS credential, so other
+      // candidates can still legitimately work. rootReachable=true here (not false) is what
+      // keeps detectRedfishAnyCredential() trying the rest of the list instead of giving up on
+      // this device after just one wrong password.
+      out.rootReachable = true;
+      const lockout = looksLikeLockout(e.bodyText);
+      out.lockoutSuspected = lockout;
+      out.error = lockout
+        ? 'This BMC account appears to be temporarily locked after repeated failed login attempts - wait a few minutes, then retry with the correct credential directly (Test & Detect).'
+        : 'Authentication failed - check the BMC username/password.';
+      return out;
+    }
+    out.error = `Could not reach Redfish service: ${e.message}`;
+    return out;
+  }
   // Reaching the service root (unauthenticated on this and most real BMCs - see the note below)
   // proves the IP/port answers at all. detectRedfishAnyCredential() uses this flag to stop
   // trying further candidate credentials the moment this fails: every candidate would hit the
@@ -132,7 +189,14 @@ async function detectRedfish(monitorFetch, ip, port, username, password) {
       }
     }
   } catch (e) {
-    if (e.statusCode === 401 || e.statusCode === 403) { out.error = 'Authentication failed - check the BMC username/password.'; return out; }
+    if (e.statusCode === 401 || e.statusCode === 403) {
+      const lockout = looksLikeLockout(e.bodyText);
+      out.lockoutSuspected = lockout;
+      out.error = lockout
+        ? 'This BMC account appears to be temporarily locked after repeated failed login attempts - wait a few minutes, then retry with the correct credential directly (Test & Detect).'
+        : 'Authentication failed - check the BMC username/password.';
+      return out;
+    }
     /* Systems collection missing/unreachable for some other reason - leave identity fields null, not fatal */
   }
   out.reachable = true; // credentials confirmed via Systems above, or no Systems collection to check against (best effort)
@@ -176,7 +240,15 @@ async function detectRedfish(monitorFetch, ip, port, username, password) {
   } catch (e) {
     // Belt-and-braces: if Systems was absent so the check above never ran, still don't let a bad
     // password through just because a protected-but-optional collection responded 401.
-    if (!authConfirmed && (e.statusCode === 401 || e.statusCode === 403)) { out.error = 'Authentication failed - check the BMC username/password.'; out.reachable = false; return out; }
+    if (!authConfirmed && (e.statusCode === 401 || e.statusCode === 403)) {
+      const lockout = looksLikeLockout(e.bodyText);
+      out.lockoutSuspected = lockout;
+      out.error = lockout
+        ? 'This BMC account appears to be temporarily locked after repeated failed login attempts - wait a few minutes, then retry with the correct credential directly (Test & Detect).'
+        : 'Authentication failed - check the BMC username/password.';
+      out.reachable = false;
+      return out;
+    }
     /* Managers collection missing - leave bmcFirmware null, not fatal */
   }
 
@@ -238,21 +310,50 @@ async function getRedfishTaskStatus(monitorFetch, ip, port, username, password, 
 // them in one pass instead of the admin testing each IP by hand. Format: "user:pass,user:pass,...";
 // a literal ":" or "," inside a password is not supported (use REDFISH_DEFAULT_USERNAME/_PASSWORD
 // for that one pair instead). Falls back to the single legacy pair when REDFISH_CREDENTIALS is unset.
+//
+// Optionally, a candidate can be tagged with which vendor it belongs to by prefixing it with
+// "vendor:" - e.g. "dell:root:calvin,dell:root:calvin@123,hpe:hpadmin:hpinvent". Tagged
+// candidates are tried FIRST against a device whose vendor hint matches (see probeVendorHint),
+// before any untagged/generic ones, instead of blindly trying every candidate in a fixed order
+// regardless of vendor - real Dell iDRAC and HPE iLO BMCs commonly lock an account out after a
+// handful of failed logins in a row, so wasting attempts with an obviously-wrong vendor's
+// password first is a real risk, not just wasted time. Tagging is entirely optional: an untagged
+// list (the original format) behaves exactly as before.
 function redfishCredentialCandidates() {
   const list = String(process.env.REDFISH_CREDENTIALS || '').split(',').map((s) => s.trim()).filter(Boolean)
-    .map((pair) => { const i = pair.indexOf(':'); return i === -1 ? null : { username: pair.slice(0, i), password: pair.slice(i + 1) }; })
+    .map((pair) => {
+      const parts = pair.split(':');
+      if (parts.length >= 3) return { vendor: parts[0].toLowerCase(), username: parts[1], password: parts.slice(2).join(':') };
+      const i = pair.indexOf(':');
+      return i === -1 ? null : { vendor: null, username: pair.slice(0, i), password: pair.slice(i + 1) };
+    })
     .filter(Boolean);
   if (list.length) return list;
   const u = process.env.REDFISH_DEFAULT_USERNAME, p = process.env.REDFISH_DEFAULT_PASSWORD;
-  return u ? [{ username: u, password: p || '' }] : [];
+  return u ? [{ vendor: null, username: u, password: p || '' }] : [];
 }
+// A short, randomized pause between credential attempts against the SAME device - several wrong
+// passwords fired at a real BMC back-to-back is exactly the pattern that trips its failed-login
+// lockout counter; most BMCs count attempts within a short window, so even this little room
+// measurably reduces the chance of a lockout without meaningfully slowing down a bulk scan
+// (concurrency across DIFFERENT devices is unaffected).
+function credentialAttemptBackoff() { return new Promise((resolve) => setTimeout(resolve, 200 + Math.floor(Math.random() * 250))); }
 // Tries each candidate credential in turn against one IP; returns the first that authenticates
 // (reachable:true), tagged with which credential worked, or the last attempt's result if none did.
+// First reads the vendor hint (no credentials sent, so this never counts toward a lockout) and
+// tries vendor-matching candidates before generic/other-vendor ones - see the comment on
+// redfishCredentialCandidates above.
 async function detectRedfishAnyCredential(monitorFetch, ip, port, candidates) {
+  const hint = await probeVendorHint(monitorFetch, ip, port);
+  const ordered = hint
+    ? [...candidates.filter((c) => c.vendor === hint), ...candidates.filter((c) => !c.vendor), ...candidates.filter((c) => c.vendor && c.vendor !== hint)]
+    : candidates;
   let last = null;
-  for (const cred of candidates) {
+  for (let i = 0; i < ordered.length; i++) {
+    const cred = ordered[i];
+    if (i > 0) await credentialAttemptBackoff();
     const r = await detectRedfish(monitorFetch, ip, port, cred.username, cred.password);
-    if (r.reachable) return { ...r, credential: cred };
+    if (r.reachable) return { ...r, credential: cred, vendorHint: hint };
     last = r;
     // Stop at the first candidate whenever the IP/port itself didn't answer at all - every
     // remaining candidate would fail the exact same way (see the comment on out.rootReachable
@@ -260,6 +361,11 @@ async function detectRedfishAnyCredential(monitorFetch, ip, port, candidates) {
     // credential was rejected (rootReachable true, reachable false) - that's the only case
     // where a different password can actually make a difference.
     if (!r.rootReachable) break;
+    // A suspected account lockout means every remaining candidate - even the genuinely correct
+    // one, if it hasn't been tried yet - will also be rejected right now, and trying anyway only
+    // extends the lockout further. Stop here and report it honestly as a lockout rather than
+    // "wrong password" (see the per-candidate fastfail comment on out.lockoutSuspected).
+    if (r.lockoutSuspected) break;
   }
   return last || { reachable: false, error: 'No candidate credentials configured' };
 }
@@ -453,7 +559,15 @@ module.exports = function registerRedfishRoutes(app, deps) {
       const candidates = redfishCredentialCandidates();
       if (!candidates.length) return res.status(400).json({ error: 'No BMC credentials configured - set REDFISH_CREDENTIALS (e.g. "root:calvin,root:calvin@123,root:Calvin@123,hpadmin:hpinvent") or REDFISH_DEFAULT_USERNAME/PASSWORD in .env, or use Test & Detect to add BMC credentials one at a time instead.' });
       const allowed = await getAllowedSitesForUser(req.user);
-      const conditions = ["mgmt_ip IS NOT NULL", "mgmt_ip <> ''", "(redfish_username IS NULL OR redfish_username = '')"];
+      // redfish_monitor_ignored = 0: excludes devices already auto-ignored by a PREVIOUS Discover
+      // run below (none of the candidate credentials matched, and it wasn't a suspected account
+      // lockout) and anyone manually ignored via "Ignore from Monitor" - otherwise a device that
+      // genuinely has no matching credential gets re-attacked with every candidate password on
+      // every single Discover run forever, which does nothing but waste time and risk tripping a
+      // real BMC's login lockout again. "Show ignored" + "Un-ignore" in the main list brings a
+      // device back into scope any time (e.g. after fixing REDFISH_CREDENTIALS or confirming its
+      // actual login by hand) so this never permanently loses a device.
+      const conditions = ["mgmt_ip IS NOT NULL", "mgmt_ip <> ''", "(redfish_username IS NULL OR redfish_username = '')", "redfish_monitor_ignored = 0"];
       const params = [];
       await applySiteScope(allowed, conditions, params);
       // No LIMIT here on purpose - see the comment above the job maps: this used to stop at the
@@ -463,7 +577,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
       const [rows] = await pool.query(`SELECT * FROM assets WHERE ${conditions.join(' AND ')} ORDER BY site, rack_no`, params);
 
       const jobId = genId('rfdisc');
-      const job = { status: 'running', total: rows.length, scanned: 0, reachable: 0, results: [], credentialsTried: candidates.length, error: null };
+      const job = { status: 'running', total: rows.length, scanned: 0, reachable: 0, autoIgnored: 0, results: [], credentialsTried: candidates.length, error: null };
       discoverJobs.set(jobId, job);
       let idx = 0;
       async function worker() {
@@ -471,8 +585,20 @@ module.exports = function registerRedfishRoutes(app, deps) {
           const asset = rows[idx++];
           try {
             const r = await detectRedfishAnyCredential(monitorFetch, asset.mgmt_ip, 443, candidates);
-            job.results.push({ assetId: asset.id, site: asset.site, rackNo: asset.rack_no, mgmtIp: asset.mgmt_ip, reachable: r.reachable, vendor: r.vendor, model: r.model, serialNumber: r.serialNumber, healthStatus: r.healthStatus, matchedUsername: r.reachable ? r.credential.username : null, error: r.reachable ? null : r.error });
-            if (r.reachable) job.reachable++;
+            let autoIgnored = false;
+            if (r.reachable) {
+              job.reachable++;
+            } else if (r.rootReachable && !r.lockoutSuspected) {
+              // The device answered but none of the candidate credentials worked, and it's not a
+              // suspected lockout (where the correct password might just be mid-cooldown) - this
+              // is a clean "none of these logins are right for this device" result, so stop
+              // re-attacking it on every future scan. See the condition comment above.
+              try {
+                await pool.query('UPDATE assets SET redfish_monitor_ignored = 1, last_redfish_error = ?, last_redfish_sync_at = NOW() WHERE id = ?', [String(r.error || 'No configured credential matched').slice(0, 255), asset.id]);
+                autoIgnored = true; job.autoIgnored++;
+              } catch (e) { /* best-effort - a failed write here shouldn't fail the whole scan */ }
+            }
+            job.results.push({ assetId: asset.id, site: asset.site, rackNo: asset.rack_no, mgmtIp: asset.mgmt_ip, reachable: r.reachable, vendor: r.vendor, model: r.model, serialNumber: r.serialNumber, healthStatus: r.healthStatus, matchedUsername: r.reachable ? r.credential.username : null, error: r.reachable ? null : r.error, lockoutSuspected: !!r.lockoutSuspected, autoIgnored });
           } catch (e) { job.results.push({ assetId: asset.id, site: asset.site, rackNo: asset.rack_no, mgmtIp: asset.mgmt_ip, reachable: false, error: e.message }); }
           job.scanned++;
         }
@@ -494,7 +620,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
   app.get('/api/monitoring/redfish/discover/:jobId', authenticateToken, async (req, res) => {
     const job = discoverJobs.get(req.params.jobId);
     if (!job) return res.status(404).json({ error: 'This scan has finished and its results have been cleared, or the job id is wrong. Start a new scan.' });
-    res.json({ status: job.status, total: job.total, scanned: job.scanned, reachable: job.reachable, results: job.results, credentialsTried: job.credentialsTried, error: job.error });
+    res.json({ status: job.status, total: job.total, scanned: job.scanned, reachable: job.reachable, autoIgnored: job.autoIgnored, results: job.results, credentialsTried: job.credentialsTried, error: job.error });
   });
 
   // Commit step: re-detects each selected asset (so we know which of the
@@ -503,7 +629,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
   // credential authenticated for it - they are not all forced to the same one.
   app.post('/api/monitoring/redfish/discover/apply', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
     try {
-      const { assetIds } = req.body;
+      const { assetIds, credentialsByAsset } = req.body;
       if (!Array.isArray(assetIds) || !assetIds.length) return res.status(400).json({ error: 'assetIds array is required' });
       const candidates = redfishCredentialCandidates();
       if (!candidates.length) return res.status(400).json({ error: 'No BMC credentials configured - set REDFISH_CREDENTIALS or REDFISH_DEFAULT_USERNAME/PASSWORD' });
@@ -525,7 +651,20 @@ module.exports = function registerRedfishRoutes(app, deps) {
             const [rows] = await pool.query('SELECT * FROM assets WHERE id = ?', [assetId]);
             if (!rows.length || !allowed.includes(rows[0].site) || !rows[0].mgmt_ip) { job.skippedNotFound++; continue; }
             const asset = rows[0];
-            const r = await detectRedfishAnyCredential(monitorFetch, asset.mgmt_ip, 443, candidates);
+            // The frontend sends back the exact username Discover already proved worked for this
+            // asset (credentialsByAsset[assetId]) whenever it has one, so Apply confirms with ONE
+            // targeted attempt instead of re-running the full candidate list from scratch. Without
+            // this, every asset got re-attacked with all 4 candidate passwords a SECOND time
+            // (Discover's pass, then Apply's own pass) - on a real Dell iDRAC or HPE iLO, which
+            // locks an account out after a handful of failed logins in a row, that second blind
+            // pass could easily trip the lockout Discover had just avoided, making a device that
+            // clearly matched moments earlier fail here instead. Older callers that don't send it
+            // still fall back to the original full-candidate-list behavior.
+            const knownUsername = credentialsByAsset && credentialsByAsset[assetId];
+            const knownCred = knownUsername ? candidates.find((c) => c.username === knownUsername) : null;
+            const r = knownCred
+              ? await detectRedfish(monitorFetch, asset.mgmt_ip, 443, knownCred.username, knownCred.password).then((res) => ({ ...res, credential: knownCred }))
+              : await detectRedfishAnyCredential(monitorFetch, asset.mgmt_ip, 443, candidates);
             if (!r.reachable) { job.skippedNoMatch++; continue; }
             await pool.query(
               `UPDATE assets SET redfish_username = ?, redfish_password = ?, redfish_port = 443,
