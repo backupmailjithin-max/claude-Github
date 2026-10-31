@@ -9316,7 +9316,7 @@ async function ensurePowerSnapshotLoaded() {
   } catch (e) { /* no snapshot yet */ }
 }
 // Server Power Consumption (main dashboard module): current draw and PSU capacity per location and zone, plus each
-// location's top 5 servers by draw. Pure database read of the numbers the 30-min auto-sync / Sync button save on
+// location's top 10 servers by draw. Pure database read of the numbers the 30-min auto-sync / Sync button save on
 // Asset Inventory (OME / OneView first; the Redfish reading is the fallback for a server neither appliance reports).
 // A server's capacity is ONE PSU's rating (the second PSU is redundancy), so utilisation = draw / that rating.
 app.get('/api/monitoring/server-power-consumption', authenticateToken, async (req, res) => {
@@ -9356,7 +9356,7 @@ app.get('/api/monitoring/server-power-consumption', authenticateToken, async (re
       site: l.site, loadWatts: l.loadWatts, capacityWatts: l.capacityWatts, pct: pctOf(l.loadWithCapWatts, l.capacityWatts),
       serversMonitored: l.serversMonitored, serversReporting: l.serversReporting, serversOn: l.serversOn, asOf: l.asOf,
       zones: [...l.zonesMap.values()].sort((a, b) => String(a.zone).localeCompare(String(b.zone), undefined, { numeric: true })).map((z) => ({ zone: z.zone, loadWatts: z.loadWatts, capacityWatts: z.capacityWatts, pct: pctOf(z.loadWithCapWatts, z.capacityWatts), servers: z.servers, reporting: z.reporting, on: z.on })),
-      top: l.servers.sort((a, b) => b.watts - a.watts).slice(0, 5),
+      top: l.servers.sort((a, b) => b.watts - a.watts).slice(0, 10),
     }));
     res.json({ sites, anyData: sites.length > 0, lastRunAt: lastAutoSyncAt ? lastAutoSyncAt.getTime() : null, intervalMs: AUTO_SYNC_INTERVAL_MS });
   } catch (e) { sendErr(res, e); }
