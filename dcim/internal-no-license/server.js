@@ -2666,6 +2666,49 @@ const MONITOR_MAX_PAGES = 25; // 25 * 200 = 5000 devices ceiling, safety-net onl
 //    null and the dashboard falls back to the Redfish reading for the server.
 // Set MONITOR_POWER_FETCH=off to skip all of this (e.g. a very large estate).
 // ---------------------------------------------------------------------------
+// ---- Sync progress (shown as a % bar on the Monitoring page) -------------------------------------------------
+// One record per zone; each vendor (OME / OneView) reports its own phase. Phases and their share of the bar:
+// device list 0-5%, firmware 5-60%, power readings 60-95%, saving 95-100%.
+const syncProgressByZone = new Map();
+const SYNC_PHASE_LABEL = { list: 'Reading device list', firmware: 'Reading firmware for every device', power: 'Reading power & PSU capacity', saving: 'Saving to Asset Inventory', done: 'Done' };
+function progressBegin(site, zone, vendor) {
+  const k = `${site}|${zone}`;
+  let z = syncProgressByZone.get(k);
+  const stale = !z || Date.now() - z.updatedAt > 20 * 60 * 1000 || Object.values(z.vendors).every((v) => v.finished);
+  if (stale) { z = { vendors: {}, updatedAt: Date.now() }; syncProgressByZone.set(k, z); }
+  z.vendors[vendor] = { phase: 'list', done: 0, total: 0, finished: false };
+  z.updatedAt = Date.now();
+}
+function progressSet(site, zone, vendor, phase, done = 0, total = 0) {
+  const z = syncProgressByZone.get(`${site}|${zone}`); const v = z && z.vendors[vendor];
+  if (!v) return;
+  v.phase = phase; v.done = done; v.total = total; z.updatedAt = Date.now();
+}
+function progressEnd(site, zone, vendor) {
+  const z = syncProgressByZone.get(`${site}|${zone}`); const v = z && z.vendors[vendor];
+  if (!v) return;
+  v.phase = 'done'; v.finished = true; z.updatedAt = Date.now();
+}
+function vendorPercent(v) {
+  if (v.finished) return 100;
+  const f = v.total > 0 ? Math.min(1, v.done / v.total) : 0;
+  if (v.phase === 'list') return 2;
+  if (v.phase === 'firmware') return Math.round(5 + 55 * f);
+  if (v.phase === 'power') return Math.round(60 + 35 * f);
+  if (v.phase === 'saving') return 97;
+  return 0;
+}
+function getSyncProgress(site, zone) {
+  const z = syncProgressByZone.get(`${site}|${zone}`);
+  if (!z) return { running: false };
+  const vs = Object.entries(z.vendors);
+  const active = vs.filter(([, v]) => !v.finished);
+  if (!active.length) return { running: false, percent: 100 };
+  const percent = Math.min(99, Math.round(vs.reduce((a, [, v]) => a + vendorPercent(v), 0) / vs.length));
+  const [name, cur] = active[0];
+  return { running: true, percent, phase: cur.phase, label: SYNC_PHASE_LABEL[cur.phase] || '', done: cur.done, total: cur.total, vendor: name === 'OME' ? 'Dell OME' : 'HPE OneView',
+    steps: ['list', 'firmware', 'power', 'saving'].map((p) => ({ key: p, label: { list: 'Device list', firmware: 'Firmware', power: 'Power readings', saving: 'Saving' }[p], state: ['list', 'firmware', 'power', 'saving'].indexOf(p) < ['list', 'firmware', 'power', 'saving'].indexOf(cur.phase) ? 'done' : (p === cur.phase ? 'active' : 'todo') })) };
+}
 const POWER_FETCH_ENABLED = String(process.env.MONITOR_POWER_FETCH || 'on').toLowerCase() !== 'off';
 const POWER_FETCH_CONCURRENCY = 10;
 const OME_POWER_MANAGER_PLUGIN_ID = '2F6D05BE-EE4B-4B0E-B873-C8D2F64A4625'; // Dell's published Power Manager plugin id
@@ -2886,23 +2929,28 @@ async function seedPowerFromAssets(site, devices) {
 }
 // Runs the per-device power lookups. Returns a promise the caller may wait on for a short budget (so the first
 // response already carries most numbers) while the rest finishes in the background without blocking the sync.
-function startPowerEnrichment(key, site, devices, fetchOne, source) {
-  if (!POWER_FETCH_ENABLED) return Promise.resolve();
+function startPowerEnrichment(key, site, devices, fetchOne, source, prog) {
+  if (!POWER_FETCH_ENABLED) { if (prog) progressEnd(site, prog.zone, prog.vendor); return Promise.resolve(); }
   if (powerEnrichRunning.has(key)) return powerEnrichRunning.get(key);
   const p = (async () => {
     try {
+      const isSrv = (d) => !(d.deviceType !== undefined && d.deviceType !== null && Number(d.deviceType) !== 1000);
+      const totalSrv = devices.filter(isSrv).length; let doneSrv = 0;
+      if (prog) progressSet(site, prog.zone, prog.vendor, 'power', 0, totalSrv);
       await mapWithConcurrency(devices, POWER_FETCH_CONCURRENCY, async (d) => {
-        if (d.deviceType !== undefined && d.deviceType !== null && Number(d.deviceType) !== 1000) return;
+        if (!isSrv(d)) return;
         try {
           const r = await fetchOne(d);
           if (r.powerWatts != null) d.powerWatts = r.powerWatts;
           if (r.psuMaxWatts != null) d.psuMaxWatts = r.psuMaxWatts;
         } catch (e) { /* keep what we had */ }
         if (d.powerState === 'Off') d.powerWatts = 0;
+        if (prog) progressSet(site, prog.zone, prog.vendor, 'power', ++doneSrv, totalSrv);
       });
+      if (prog) progressSet(site, prog.zone, prog.vendor, 'saving');
       await persistDevicePower(site, devices, source);
     } catch (e) { log.warn(`Power enrichment failed for ${key}: ${e.message}`); }
-    finally { powerEnrichRunning.delete(key); }
+    finally { powerEnrichRunning.delete(key); if (prog) progressEnd(site, prog.zone, prog.vendor); }
   })();
   powerEnrichRunning.set(key, p);
   return p;
@@ -2974,14 +3022,18 @@ async function fetchOmeDevices(site, zone, forceRefresh = false, waitForAllPower
     const cachedAgain = deviceSnapshotCache[key];
     if (!forceRefresh && cachedAgain && Date.now() - cachedAgain.fetchedAt < DEVICE_SNAPSHOT_TTL_MS) return cachedAgain.devices;
 
-    const devices = await fetchOmeDevicesRaw(site, zone);
-    if (devices === null) return null;
+    progressBegin(site, zone, 'OME');
+    let devices;
+    try { devices = await fetchOmeDevicesRaw(site, zone); } catch (e) { progressEnd(site, zone, 'OME'); throw e; }
+    if (devices === null) { progressEnd(site, zone, 'OME'); return null; }
+    let fwDone = 0; progressSet(site, zone, 'OME', 'firmware', 0, devices.length);
     // Fetch every device's System ROM version — requested explicitly: the
     // Monitoring page should show the same firmware every device has on the
     // real OME dashboard, for the full device list, not a lazy subset.
     await mapWithConcurrency(devices, FIRMWARE_FETCH_CONCURRENCY, async (d) => {
       try { d.firmwareVersion = await fetchOmeSystemRom(site, zone, d.id); }
       catch (e) { d.firmwareVersion = null; } // one device's inventory call failing shouldn't break the whole list
+      progressSet(site, zone, 'OME', 'firmware', ++fwDone, devices.length);
     });
     carryOverPower(deviceSnapshotCache[key] && deviceSnapshotCache[key].devices, devices);
     await seedPowerFromAssets(site, devices);
@@ -2990,7 +3042,7 @@ async function fetchOmeDevices(site, zone, forceRefresh = false, waitForAllPower
       const p = await fetchOmePower(site, zone, d.id);
       if (p.powerWatts == null && d.powerState === 'On' && d.ipAddress) { const w = await fetchIdracWatts(d.ipAddress); if (w != null) p.powerWatts = w; }
       return p;
-    }, 'OME'), waitForAllPower ? POWER_AUTOSYNC_WAIT_MS : POWER_WAIT_BUDGET_MS);
+    }, 'OME', { zone, vendor: 'OME' }), waitForAllPower ? POWER_AUTOSYNC_WAIT_MS : POWER_WAIT_BUDGET_MS);
     return devices;
   });
 }
@@ -3193,19 +3245,23 @@ async function fetchOneviewServers(site, zone, forceRefresh = false, waitForAllP
     const cachedAgain = deviceSnapshotCache[key];
     if (!forceRefresh && cachedAgain && Date.now() - cachedAgain.fetchedAt < DEVICE_SNAPSHOT_TTL_MS) return cachedAgain.devices;
 
-    const devices = await fetchOneviewServersRaw(site, zone);
-    if (devices === null) return null;
+    progressBegin(site, zone, 'ONEVIEW');
+    let devices;
+    try { devices = await fetchOneviewServersRaw(site, zone); } catch (e) { progressEnd(site, zone, 'ONEVIEW'); throw e; }
+    if (devices === null) { progressEnd(site, zone, 'ONEVIEW'); return null; }
+    let fwDone = 0; progressSet(site, zone, 'ONEVIEW', 'firmware', 0, devices.length);
     // Same reasoning as OME above: fetch System ROM for every device so the
     // Monitoring page's firmware column matches the full estate, not a lazy
     // subset.
     await mapWithConcurrency(devices, FIRMWARE_FETCH_CONCURRENCY, async (d) => {
       try { d.firmwareVersion = await fetchOneviewSystemRom(site, zone, d.uri); }
       catch (e) { d.firmwareVersion = null; }
+      progressSet(site, zone, 'ONEVIEW', 'firmware', ++fwDone, devices.length);
     });
     carryOverPower(deviceSnapshotCache[key] && deviceSnapshotCache[key].devices, devices);
     await seedPowerFromAssets(site, devices);
     deviceSnapshotCache[key] = { devices, fetchedAt: Date.now() };
-    await waitUpTo(startPowerEnrichment(key, site, devices, (d) => fetchOneviewPower(site, zone, d.uri), 'ONEVIEW'), waitForAllPower ? POWER_AUTOSYNC_WAIT_MS : POWER_WAIT_BUDGET_MS);
+    await waitUpTo(startPowerEnrichment(key, site, devices, (d) => fetchOneviewPower(site, zone, d.uri), 'ONEVIEW', { zone, vendor: 'ONEVIEW' }), waitForAllPower ? POWER_AUTOSYNC_WAIT_MS : POWER_WAIT_BUDGET_MS);
     return devices;
   });
 }
@@ -3464,6 +3520,17 @@ app.get('/api/monitoring/devices', authenticateToken, async (req, res) => {
   } catch (e) {
     sendErr(res, e);
   }
+});
+
+// Live progress of a zone's sync (manual Sync button or the 30-min auto-sync) - polled by the Monitoring page.
+app.get('/api/monitoring/sync-progress', authenticateToken, async (req, res) => {
+  try {
+    const { site, zone } = req.query;
+    if (!site || !zone) return res.status(400).json({ error: 'site and zone are required' });
+    const allowed = await getAllowedSitesForUser(req.user);
+    if (!allowed.includes(site)) return res.status(403).json({ error: 'Access denied for this site' });
+    res.json(getSyncProgress(String(site), String(zone)));
+  } catch (e) { sendErr(res, e); }
 });
 
 // ----------------------------------------------------------------------------

@@ -357,6 +357,7 @@ const api = {
         window.URL.revokeObjectURL(url);
     },
     searchMonitoring: (q) => apiFetch('/monitoring/search?q=' + encodeURIComponent(q)),
+    getSyncProgress: (site, zone) => apiFetch('/monitoring/sync-progress?site=' + encodeURIComponent(site) + '&zone=' + encodeURIComponent(zone)),
     getMonitoringDevices: (site, zone, forceRefresh) => apiFetch('/monitoring/devices?site=' + encodeURIComponent(site) + '&zone=' + encodeURIComponent(zone) + (forceRefresh ? '&refresh=true' : '')),
     getFirmwareBaselines: (site, zone, vendor, deviceUri) => apiFetch('/monitoring/firmware/baselines?site=' + encodeURIComponent(site) + '&zone=' + encodeURIComponent(zone) + '&vendor=' + encodeURIComponent(vendor) + (deviceUri ? '&deviceUri=' + encodeURIComponent(deviceUri) : '')),
     applyFirmware: (payload) => apiFetch('/monitoring/firmware/apply', { method: 'POST', body: JSON.stringify(payload) }),
@@ -9036,6 +9037,9 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
     const [data, setData] = useState(null); // { ome, oneview } for the selected zone
     const [loadErr, setLoadErr] = useState("");
     const [lastSynced, setLastSynced] = useState(null);
+    const [syncProg, setSyncProg] = useState(null); // live % of the zone's sync (manual or auto-sync), polled from the server
+    const [zoneLoading, setZoneLoading] = useState(false);
+    const syncWasRunningRef = useRef(false);
     const [tab, setTab] = useState(() => { if (typeof window !== "undefined" && window.__dcimOpenFwJobs) { window.__dcimOpenFwJobs = false; return "fwjobs"; } return "status"; }); // "status" | "fwjobs" | "firmware" | "reconciliation"
     useEffect(() => { const h = () => { window.__dcimOpenFwJobs = false; setTab("fwjobs"); }; window.addEventListener("dcim-open-fwjobs", h); return () => window.removeEventListener("dcim-open-fwjobs", h); }, []);
     const [selOme, setSelOme] = useState(new Set());
@@ -9490,6 +9494,7 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
     const loadZone = async (site, zone, forceRefresh = false) => {
         const mySeq = ++loadZoneSeqRef.current; // a slower answer for a previously clicked zone must never overwrite the zone now selected
         setSelected({ site, zone });
+        setZoneLoading(true);
         setData(null);
         setLoadErr("");
         setSelOme(new Set());
@@ -9515,7 +9520,41 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
             if (mySeq === loadZoneSeqRef.current)
                 setLoadErr(e.message || "Failed to load monitoring data");
         }
+        finally {
+            if (mySeq === loadZoneSeqRef.current)
+                setZoneLoading(false);
+        }
     };
+    // While a zone is selected, ask the server how far its sync is (cheap, in-memory). When a sync that was running
+    // finishes - e.g. the power readings that complete after the first reply - quietly re-read the zone so the table
+    // shows the final numbers without the user pressing anything.
+    useEffect(() => {
+        if (!selected || tab !== "status") { setSyncProg(null); return undefined; }
+        let stop = false;
+        const tick = async () => {
+            try {
+                const p = await api.getSyncProgress(selected.site, selected.zone);
+                if (stop) return;
+                setSyncProg(p && p.running ? p : null);
+                if (syncWasRunningRef.current && !(p && p.running)) {
+                    syncWasRunningRef.current = false;
+                    try {
+                        const res = await api.getMonitoringDevices(selected.site, selected.zone, false);
+                        if (!stop) {
+                            setData(res);
+                            const st = [res.ome && res.ome.configured ? res.ome.devicesFetchedAt : null, res.oneview && res.oneview.configured ? res.oneview.devicesFetchedAt : null].filter((v) => v != null);
+                            if (st.length) setLastSynced(new Date(Math.min(...st)));
+                        }
+                    } catch (e) { /* keep what is shown */ }
+                }
+                if (p && p.running) syncWasRunningRef.current = true;
+            } catch (e) { /* progress is a nicety; never break the page */ }
+        };
+        tick();
+        const t = setInterval(tick, 1200);
+        return () => { stop = true; clearInterval(t); };
+    }, [selected && selected.site, selected && selected.zone, tab]);
+    const syncBusy = zoneLoading || !!syncProg;
     const toggleOne = (setFn) => (id, checked) => setFn((prev) => { const n = new Set(prev); checked ? n.add(id) : n.delete(id); return n; });
     const toggleAll = (setFn) => (ids, checked) => setFn((prev) => { const n = new Set(prev); ids.forEach((id) => checked ? n.add(id) : n.delete(id)); return n; });
     const openFirmwareModal = (vendor, vendorLabel) => (deviceIds) => {
@@ -9687,7 +9726,7 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
                                 selected.site,
                                 " \u00B7 ",
                                 selected.zone),
-                            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#475569", marginTop: 3 } }, lastSynced ? `Last synced ${lastSynced.toLocaleTimeString()}` : "Syncing… fetching System ROM for every device, this can take a while on large estates"),
+                            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#475569", marginTop: 3 } }, syncBusy ? "Syncing… please wait until all data is captured" : (lastSynced ? `Last synced ${lastSynced.toLocaleTimeString()}` : "Not synced yet")),
                             autosyncStatus && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, color: "#A78BFA", marginTop: 2 } },
                                 "Auto-sync every ",
                                 Math.round(autosyncStatus.intervalMs / 60000),
@@ -9699,9 +9738,16 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
                                 React.createElement(RefreshCw, { s: 13 }),
                                 " ",
                                 alertRefreshing ? "Refreshing Alerts…" : "Refresh Alerts Now"),
-                            React.createElement("button", { onClick: () => loadZone(selected.site, selected.zone, true), className: "neu-btn-secondary", style: { display: "flex", alignItems: "center", gap: 6 } },
+                            React.createElement("button", { onClick: () => loadZone(selected.site, selected.zone, true), disabled: syncBusy, className: "neu-btn-secondary", style: { display: "flex", alignItems: "center", gap: 6, opacity: syncBusy ? 0.5 : 1, cursor: syncBusy ? "not-allowed" : "pointer" } },
                                 React.createElement(RefreshCw, { s: 13 }),
-                                " Sync from Dell OME / HPE OneView"))),
+                                syncBusy ? " Syncing…" : " Sync from Dell OME / HPE OneView"))),
+                    syncBusy && React.createElement("div", { className: "neu-card anim-in d1", style: { padding: "14px 18px", marginBottom: 16 } },
+                        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7, fontFamily: "Inter", fontSize: 12, fontWeight: 700, color: "#475569" } },
+                            React.createElement("span", null, syncProg ? `${syncProg.label}${syncProg.total ? ` \u00B7 ${syncProg.done} / ${syncProg.total}` : ""}${syncProg.vendor ? ` (${syncProg.vendor})` : ""}` : "Starting sync\u2026"),
+                            React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontSize: 14, fontWeight: 800, color: "#3157EE" } }, `${syncProg ? syncProg.percent : 1}%`)),
+                        React.createElement("div", { style: { height: 8, borderRadius: 6, background: "rgba(148,163,184,0.28)", boxShadow: "inset 1px 1px 3px rgba(34,48,70,0.15)", overflow: "hidden" } },
+                            React.createElement("div", { style: { height: "100%", width: `${syncProg ? syncProg.percent : 1}%`, borderRadius: 6, background: "linear-gradient(90deg,#3157EE,#5B7BFF)", transition: "width .6s ease" } })),
+                        syncProg && syncProg.steps && React.createElement("div", { style: { display: "flex", gap: 18, marginTop: 9, fontFamily: "Inter", fontSize: 11, color: "#94A3B8", flexWrap: "wrap" } }, syncProg.steps.map((st) => React.createElement("span", { key: st.key, style: st.state === "active" ? { color: "#3157EE", fontWeight: 700 } : (st.state === "done" ? { color: "#059669" } : null) }, (st.state === "done" ? "\u2713 " : (st.state === "active" ? "\u25CF " : "\u25CB ")) + st.label)))),
                     alertRefreshMsg && React.createElement("div", { className: "neu-card anim-in d1", style: { background: alertRefreshMsg.startsWith("Alerts refreshed") ? "#F0FDF4" : "#FEF2F2", border: alertRefreshMsg.startsWith("Alerts refreshed") ? "1px solid rgba(16,185,129,0.25)" : "1px solid rgba(239,68,68,0.25)", padding: "10px 16px", marginBottom: 16, color: alertRefreshMsg.startsWith("Alerts refreshed") ? "#065F46" : "#991B1B", fontFamily: "Inter", fontSize: 12.5, display: "flex", justifyContent: "space-between", alignItems: "center" } },
                         React.createElement("span", null, alertRefreshMsg),
                         React.createElement("button", { onClick: () => setAlertRefreshMsg(""), style: { background: "none", border: "none", color: "inherit", cursor: "pointer", fontSize: 11, fontWeight: 700 } }, "Dismiss")),
