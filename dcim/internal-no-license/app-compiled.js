@@ -12583,7 +12583,12 @@ function DashPowerStatus() {
                             React.createElement("b", null, st.site),
                             React.createElement("small", null, rep ? `${servers(st.total)} · ${st.zonesReported} of ${st.zonesConfigured} zone${st.zonesConfigured === 1 ? "" : "s"} reporting` : "Not synced yet"))),
                     rep ? [chip(st.on, "on", "a"), chip(st.off, "off", "b"), chip(st.unknown, "unk", "c")] : React.createElement("span", { className: "pws-ns" }, "No cached data yet"));
-            }));
+            }),
+            sites.length === 1 ? React.createElement("div", { className: "dz-list", "data-dz": "pws" },
+                React.createElement("div", { className: "dz-h" }, "By zone"),
+                (sites[0].zones || []).map((z, i) => React.createElement("div", { key: z.zone + i, className: "dz-row dz-pws", "data-dz": "row", style: { "--lc": colorOf(sites[0]) } },
+                    React.createElement("span", { className: "dz-n" }, z.zone),
+                    z.reported ? [chip(z.on, "on", "a"), chip(z.off, "off", "b"), chip(z.unknown, "unk", "c")] : React.createElement("span", { className: "pws-ns", style: { gridColumn: "2 / 5" } }, "Not synced yet")))) : null);
     }
     const detailsBtn = sites.length ? React.createElement("button", { type: "button", className: "pws-more", "data-pws": "open", onClick: () => open("All") }, "Details ›") : null;
     let modal = null;
@@ -12633,7 +12638,7 @@ function DashPowerStatus() {
         + ".spc-loc{--c:#3157EE;--t:rgba(49,87,238,.08);border:1px solid rgba(148,163,184,.22);border-left:6px solid var(--c);border-radius:16px;padding:14px;margin-bottom:14px;background:linear-gradient(180deg,var(--t),#fff 90px)}.spc-lh{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}.spc-lh b{font:800 15px 'Space Grotesk',sans-serif;color:var(--c)}.spc-lh span{font:600 12px Inter,sans-serif;color:#64748B}"
         + ".spc-tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}.spc-tools input,.spc-tools select{font:500 12px Inter,sans-serif;padding:6px 10px;border-radius:10px;border:1px solid rgba(148,163,184,.35);background:#F8FAFC;color:#1E293B}"
         + ".spc-h{font:800 10.5px Inter,sans-serif;letter-spacing:.8px;text-transform:uppercase;color:var(--c,#64748B);margin:12px 0 4px}.spc-tw{overflow-x:auto}.spc-t{min-width:640px}.spc-tr{display:grid;gap:8px;align-items:center;padding:8px 10px;border-radius:10px;font:500 12px Inter,sans-serif}.spc-tr:nth-child(even){background:rgba(241,245,249,.7)}.spc-th{font:800 10.5px Inter,sans-serif;color:#64748B;text-transform:uppercase;letter-spacing:.6px;background:transparent!important}.spc-th button{all:unset;cursor:pointer;display:inline-flex;gap:3px;align-items:center}.spc-th button:hover{color:#3157EE}"
-        + ".spc-k-load{background:linear-gradient(145deg,#EAF0FF,#D6E1FF);border-color:rgba(49,87,238,.28)}.spc-k-load b{color:#2243C4}.spc-k-cap{background:linear-gradient(145deg,#F1EAFF,#E2D6FF);border-color:rgba(124,58,237,.28)}.spc-k-cap b{color:#5B21B6}.spc-k-util{background:linear-gradient(145deg,#E2F7F3,#CBEEE8);border-color:rgba(13,148,136,.28)}.spc-k-util b{color:#0B6F66}.spc-k-rep{background:linear-gradient(145deg,#FFF1E0,#FFE2C2);border-color:rgba(234,122,12,.3)}.spc-k-rep b{color:#B45309}.spc-sync{color:#3157EE!important}.spc-sync:disabled{opacity:.6;cursor:default}.spc-mono{font-family:'JetBrains Mono',monospace;font-size:11.5px}.spc-chip{display:inline-block;padding:2px 9px;border-radius:999px;font:800 10.5px Inter,sans-serif}.spc-empty{padding:14px;color:#64748B;font-size:12.5px}";
+        + ".spc-k-load{background:linear-gradient(145deg,#EAF0FF,#D6E1FF);border-color:rgba(49,87,238,.28)}.spc-k-load b{color:#2243C4}.spc-k-cap{background:linear-gradient(145deg,#F1EAFF,#E2D6FF);border-color:rgba(124,58,237,.28)}.spc-k-cap b{color:#5B21B6}.spc-k-util{background:linear-gradient(145deg,#E2F7F3,#CBEEE8);border-color:rgba(13,148,136,.28)}.spc-k-util b{color:#0B6F66}.spc-k-rep{background:linear-gradient(145deg,#FFF1E0,#FFE2C2);border-color:rgba(234,122,12,.3)}.spc-k-rep b{color:#B45309}.dz-list{margin-top:10px;display:flex;flex-direction:column;gap:5px}.dz-h{font:800 10px Inter,sans-serif;letter-spacing:.8px;text-transform:uppercase;color:#64748B;margin-bottom:1px}.dz-row{display:grid;align-items:center;gap:8px;padding:6px 10px;border-radius:10px;background:rgba(255,255,255,.62);border:1px solid rgba(148,163,184,.18)}.dz-pws{grid-template-columns:minmax(0,1fr) auto auto auto}.dz-spc{grid-template-columns:42px 82px minmax(0,1fr)}.dz-n{font:800 11.5px Inter,sans-serif;color:#17345D}.dz-v{font:800 12px 'Space Grotesk',sans-serif;color:#17345D;white-space:nowrap}.dz-v small{font:600 10px Inter,sans-serif;color:#94A3B8}.dz-mk{grid-template-columns:90px minmax(0,1fr) 62px}.sample-grid-bottom .hw-hbar-chart{min-height:170px;justify-content:space-evenly}.dz-na{font:500 10.5px Inter,sans-serif;color:#94A3B8}.sample-grid-bottom>.sample-card{min-height:0!important;height:auto!important}.spc-sync{color:#3157EE!important}.spc-sync:disabled{opacity:.6;cursor:default}.spc-mono{font-family:'JetBrains Mono',monospace;font-size:11.5px}.spc-chip{display:inline-block;padding:2px 9px;border-radius:999px;font:800 10.5px Inter,sans-serif}.spc-empty{padding:14px;color:#64748B;font-size:12.5px}";
     document.head.appendChild(st);
 })();
 const spcColor = (pct) => (pct == null ? "#94A3B8" : pct >= 85 ? "#DC2626" : pct >= 70 ? "#EA7A0C" : "#059669");
@@ -12696,7 +12701,13 @@ function DashServerPower() {
         React.createElement("div", { className: "spc-nm" }, React.createElement("span", null, st.site), React.createElement("small", null, `${st.serversReporting} of ${st.serversMonitored} reporting`)),
         React.createElement("div", { className: "spc-big" }, spcFmt(st.loadWatts), st.capacityWatts ? React.createElement("span", null, ` / ${spcFmt(st.capacityWatts)}`) : null),
         st.pct != null ? bar(st.pct) : React.createElement("div", { className: "spc-sub" }, "PSU rating not reported yet"),
-        React.createElement("div", { className: "spc-sub" }, `${st.serversOn} server${st.serversOn === 1 ? "" : "s"} drawing power`))));
+        React.createElement("div", { className: "spc-sub" }, `${st.serversOn} server${st.serversOn === 1 ? "" : "s"} drawing power`))),
+        sites.length === 1 ? React.createElement("div", { className: "dz-list", "data-dz": "spc" },
+            React.createElement("div", { className: "dz-h" }, "By zone"),
+            (sites[0].zones || []).map((z) => React.createElement("div", { key: z.zone, className: "dz-row dz-spc", "data-dz": "row" },
+                React.createElement("span", { className: "dz-n" }, z.zone),
+                React.createElement("span", { className: "dz-v" }, spcFmt(z.loadWatts), z.capacityWatts ? React.createElement("small", null, ` / ${spcFmt(z.capacityWatts)}`) : null),
+                z.pct != null ? bar(z.pct) : React.createElement("span", { className: "dz-na" }, "No PSU rating")))) : null);
     const detailsBtn = sites.length ? React.createElement("button", { type: "button", className: "pws-more", "data-spc": "open", onClick: () => open("All") }, "Details ›") : null;
     let modal = null;
     if (view && data) {
@@ -12810,7 +12821,7 @@ function DashDeviceCounts({ assets = [], sites = [] }) {
         React.createElement("button", { onClick: () => setOpen((o) => !o), className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px" }, title: "Choose which hardware types are counted" }, "Modify"),
         popover);
     return React.createElement(DashCard, { title: "Server Count", sub: sub, className: "dash-count-card" + (open ? " dash-count-open" : ""), action: action },
-        React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4, flex: 1, justifyContent: "space-around" } }, siteList.map((st, i) => {
+        React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4, flex: 1, justifyContent: siteList.length > 1 ? "space-around" : "flex-start", gap: siteList.length > 1 ? 4 : 8 } }, siteList.map((st, i) => {
             const zones = Object.keys(tree[st] || {}).sort();
             const n = zones.reduce((x, z) => x + zoneTotal(st, z), 0);
             const sm = siteMakes(st);
@@ -12829,7 +12840,13 @@ function DashDeviceCounts({ assets = [], sites = [] }) {
                         React.createElement("b", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#1E293B", textAlign: "right", fontVariantNumeric: "tabular-nums" } }, zt.toLocaleString()));
                 }),
                 !zones.length && React.createElement("div", { style: { paddingLeft: 10, fontFamily: "Inter", fontSize: 10.5, color: "#64748B" } }, "No servers"));
-        })));
+        }),
+        siteList.length === 1 && total > 0 ? React.createElement("div", { className: "dz-list", "data-dz": "count", style: { marginTop: 14 } },
+            React.createElement("div", { className: "dz-h" }, "By make"),
+            makeList.map((m) => React.createElement("div", { key: m, className: "dz-row dz-mk" },
+                React.createElement("span", { className: "dz-n", style: { display: "inline-flex", alignItems: "center", gap: 6 } }, React.createElement("i", { style: { width: 9, height: 9, borderRadius: 3, background: dashMakeColor(m), display: "inline-block" } }), m),
+                React.createElement("div", { className: "spc-trk" }, React.createElement("i", { style: { display: "block", height: "100%", borderRadius: 5, width: `${Math.round(allMakes[m] * 100 / total)}%`, background: dashMakeColor(m) } })),
+                React.createElement("b", { className: "dz-v" }, allMakes[m].toLocaleString(), React.createElement("small", null, ` · ${Math.round(allMakes[m] * 100 / total)}%`))))) : null));
 }
 // ---- Firmware Compliance (read-only) -------------------------------------------------------------------------------
 // Shows only what Dell OME (Dell servers) and HPE OneView (HPE servers) themselves report. The 30-minute auto-sync stores their
@@ -16816,7 +16833,7 @@ function DataCenterDashboard() {
                                                 React.createElement("text", { x: dCx, y: dCy - 4, textAnchor: "middle", fontFamily: "'Space Grotesk'", fontSize: "19", fontWeight: "800", fill: "#0F172A" }, locTotal),
                                                 React.createElement("text", { x: dCx, y: dCy + 12, textAnchor: "middle", fontFamily: "Inter", fontSize: "9", fill: "#94A3B8" }, "assets"));
                                         })())),
-                                React.createElement("div", { style: { flex: "1 1 280px", minWidth: 200, borderLeft: "1px solid #F1F4FA", paddingLeft: 16 } },
+                                React.createElement("div", { style: { flex: "1 1 280px", minWidth: 200, borderLeft: "1px solid #F1F4FA", paddingLeft: 16, display: "flex", flexDirection: "column", justifyContent: "center" } },
                                     React.createElement("div", { style: { fontFamily: "Inter", fontSize: 9.5, color: "#475569", marginBottom: 6 } }, "Device count · by site + zone"),
                                     zoneEntries.length === 0 ? React.createElement("div", { style: { color: "#64748B", fontSize: 11, padding: "20px 0", textAlign: "center" } }, "No devices yet") : React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 7 } }, zoneEntries.map(([label, n, site, z], zi) => { const rowColor = entryColor(zi); const rowColorDark = darkenHex(rowColor, 0.22); const widthPct = Math.max(10, (n / zoneMax) * 100); return React.createElement("div", { key: label, onClick: () => { setAssetSearch(""); setAssetZoneFilter(z); setAssetSiteFilter(site); setAssetHwFilter("all"); }, style: { cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }, title: `${site} · ${z}: ${n} device(s)` },
                                         React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6, width: 86, flexShrink: 0 } },
