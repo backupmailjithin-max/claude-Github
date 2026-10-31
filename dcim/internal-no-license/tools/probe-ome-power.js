@@ -24,7 +24,11 @@ const j = async (p, o) => { try { const r = await fetch(host + p, o); const t = 
     const want = new Set(names.filter((n) => /power|energy|environ|thermal|statist/i.test(String(n))));
     ['serverPowerStatistics', 'powerStatistics', 'serverEnvironment', 'deviceEnvironment'].forEach((n) => want.add(n));
     for (const n of want) rec.powerRelated[n] = await j(`/api/DeviceService/Devices(${id})/InventoryDetails('${n}')`, { headers: H });
-    for (const p of ['Power', 'PowerStatistics', 'Temperature', 'EnvironmentDetails']) rec.powerRelated['GET ' + p] = await j(`/api/DeviceService/Devices(${id})/${p}`, { headers: H });
+    // The device Overview page shows "Power: NNN W" and "Instantaneous Headroom"; try every place that data could be served from.
+    rec.deviceRecord = await j(`/api/DeviceService/Devices(${id})`, { headers: H });
+    for (const p of ['Power', 'PowerStatistics', 'PowerUsage', 'PowerStates', 'EnvironmentDetails', 'Environment', 'Temperature', 'TemperatureStatistics', 'DeviceHealth', 'SubSystemHealth', 'DeviceBladeSlots', 'DeviceCapabilities']) rec.powerRelated['GET ' + p] = await j(`/api/DeviceService/Devices(${id})/${p}`, { headers: H });
+    rec.powerRelated['GET Power (v2)'] = await j(`/api/DeviceService/Devices(${id})/PowerUsageByDevice?$top=5`, { headers: H });
+    rec.powerRelated['MetricService types'] = await j('/api/MetricService/MetricTypes', { headers: H });
     out.devices.push(rec);
   }
   fs.writeFileSync('ome-power-probe.json', JSON.stringify(out, null, 2));
