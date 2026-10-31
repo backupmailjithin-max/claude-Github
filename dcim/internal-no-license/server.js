@@ -2907,7 +2907,8 @@ function startPowerEnrichment(key, site, devices, fetchOne, source) {
   powerEnrichRunning.set(key, p);
   return p;
 }
-const POWER_WAIT_BUDGET_MS = 8000;
+const POWER_WAIT_BUDGET_MS = 8000;          // manual Sync / page load: reply quickly, finish the rest in the background
+const POWER_AUTOSYNC_WAIT_MS = 10 * 60 * 1000; // 30-min auto-sync: power readings are part of the same run - wait until they are read and saved
 const waitUpTo = (p, ms) => Promise.race([p, new Promise((r) => { setTimeout(r, ms).unref(); })]);
 // Writes the power numbers onto the matching Asset Inventory rows (matched by serial number within the site),
 // into their OWN columns - Inventory's serial/model/etc. are never touched. Only non-empty readings overwrite
@@ -2957,7 +2958,7 @@ async function fetchOmeDevicesRaw(site, zone) {
 async function fetchOmeDevicesLight(site, zone) {
   return fetchOmeDevicesRaw(site, zone);
 }
-async function fetchOmeDevices(site, zone, forceRefresh = false) {
+async function fetchOmeDevices(site, zone, forceRefresh = false, waitForAllPower = false) {
   const key = snapshotKey('OME', site, zone);
   const cached = deviceSnapshotCache[key];
   if (!forceRefresh && cached && Date.now() - cached.fetchedAt < DEVICE_SNAPSHOT_TTL_MS) return cached.devices;
@@ -2989,7 +2990,7 @@ async function fetchOmeDevices(site, zone, forceRefresh = false) {
       const p = await fetchOmePower(site, zone, d.id);
       if (p.powerWatts == null && d.powerState === 'On' && d.ipAddress) { const w = await fetchIdracWatts(d.ipAddress); if (w != null) p.powerWatts = w; }
       return p;
-    }, 'OME'), POWER_WAIT_BUDGET_MS);
+    }, 'OME'), waitForAllPower ? POWER_AUTOSYNC_WAIT_MS : POWER_WAIT_BUDGET_MS);
     return devices;
   });
 }
@@ -3182,7 +3183,7 @@ async function fetchOneviewServersRaw(site, zone) {
 async function fetchOneviewServersLight(site, zone) {
   return fetchOneviewServersRaw(site, zone);
 }
-async function fetchOneviewServers(site, zone, forceRefresh = false) {
+async function fetchOneviewServers(site, zone, forceRefresh = false, waitForAllPower = false) {
   const key = snapshotKey('ONEVIEW', site, zone);
   const cached = deviceSnapshotCache[key];
   if (!forceRefresh && cached && Date.now() - cached.fetchedAt < DEVICE_SNAPSHOT_TTL_MS) return cached.devices;
@@ -3204,7 +3205,7 @@ async function fetchOneviewServers(site, zone, forceRefresh = false) {
     carryOverPower(deviceSnapshotCache[key] && deviceSnapshotCache[key].devices, devices);
     await seedPowerFromAssets(site, devices);
     deviceSnapshotCache[key] = { devices, fetchedAt: Date.now() };
-    await waitUpTo(startPowerEnrichment(key, site, devices, (d) => fetchOneviewPower(site, zone, d.uri), 'ONEVIEW'), POWER_WAIT_BUDGET_MS);
+    await waitUpTo(startPowerEnrichment(key, site, devices, (d) => fetchOneviewPower(site, zone, d.uri), 'ONEVIEW'), waitForAllPower ? POWER_AUTOSYNC_WAIT_MS : POWER_WAIT_BUDGET_MS);
     return devices;
   });
 }
@@ -5177,7 +5178,7 @@ async function runAutoSyncCycle() {
     autoSyncProgress = { processedZones: 0, totalZones: zoneRows.length };
     for (const z of zoneRows) {
       if (getMonitorConfig('OME', z.site, z.zone)) {
-        try { recordPowerSnapshot('OME', z.site, z.zone, await fetchOmeDevices(z.site, z.zone, true)); } catch (e) { log.warn(`Auto-sync: OME refresh failed for ${z.site}/${z.zone}:`, e.message); }
+        try { recordPowerSnapshot('OME', z.site, z.zone, await fetchOmeDevices(z.site, z.zone, true, true)); } catch (e) { log.warn(`Auto-sync: OME refresh failed for ${z.site}/${z.zone}:`, e.message); }
         // Active alerts (Critical/Warning) — piggybacks on this same 30-min
         // appliance call rather than polling separately. One vendor's alert
         // fetch failing doesn't touch the previous cached counts, so the
@@ -5186,7 +5187,7 @@ async function runAutoSyncCycle() {
         catch (e) { log.warn(`Auto-sync: OME alerts fetch failed for ${z.site}/${z.zone}:`, e.message); }
         await refreshFwCompliance('OME', z.site, z.zone);
       }if (getMonitorConfig('ONEVIEW', z.site, z.zone)) {
-        try { recordPowerSnapshot('ONEVIEW', z.site, z.zone, await fetchOneviewServers(z.site, z.zone, true)); } catch (e) { log.warn(`Auto-sync: OneView refresh failed for ${z.site}/${z.zone}:`, e.message); }
+        try { recordPowerSnapshot('ONEVIEW', z.site, z.zone, await fetchOneviewServers(z.site, z.zone, true, true)); } catch (e) { log.warn(`Auto-sync: OneView refresh failed for ${z.site}/${z.zone}:`, e.message); }
         try { alertSnapshotCache[snapshotKey('ONEVIEW', z.site, z.zone)] = { counts: await fetchOneviewAlertCounts(z.site, z.zone), fetchedAt: Date.now() }; }
         catch (e) { log.warn(`Auto-sync: OneView alerts fetch failed for ${z.site}/${z.zone}:`, e.message); }
         await refreshFwCompliance('ONEVIEW', z.site, z.zone);
