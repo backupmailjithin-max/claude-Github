@@ -2783,9 +2783,10 @@ async function fetchOmePower(site, zone, deviceId) {
   for (const p of psus) rated = Math.max(rated, toWatts(p.RatedMaxOutputPower) || toWatts(p.OutputWatts) || toWatts(p.Range1MaxInputPowerWatts) || 0);
   if (rated > 0) { out.psuMaxWatts = rated; omePsuCache[psuKey] = { watts: rated, at: Date.now() }; }
   else if (psuHit) out.psuMaxWatts = psuHit.watts;
-  // 2) Core OME: per-device power usage.
-  const usage = await getJson(`/api/DeviceService/Devices(${id})/PowerUsageByDevice`, 'usage');
-  out.powerWatts = omeWattsFromPayload(usage);
+  // 2) Core OME (confirmed on OME 4.8): the device Overview's own data - GET Devices(id)/Power returns the current draw in
+  //    `power` (watts, as text) next to instantaneousHeadroom / peakPower / minimumPower / avgPower. No plugin needed.
+  const pw = await getJson(`/api/DeviceService/Devices(${id})/Power`, 'power');
+  out.powerWatts = toWatts(pw && pw.power);
   // 3) Power Manager plugin, only when core OME gave no live reading.
   if (out.powerWatts === null && !endpointOff('metrics')) {
     try {
@@ -2818,10 +2819,10 @@ async function fetchOmePower(site, zone, deviceId) {
 // estate (e.g. 65+ servers) cannot push Sync past the browser's 30-second limit. The devices are the same objects
 // the snapshot cache holds, so the next page load/refresh sees the values; they are also saved to Asset Inventory.
 // Dell OME 4.8 does not report live watts, so for powered-on Dell servers the iDRAC itself is asked (Redfish Power,
-// PowerControl[0].PowerConsumedWatts) using the same REDFISH_CREDENTIALS list as the Multi-Vendor module. Care is taken
+// PowerControl[0].PowerConsumedWatts) using the same REDFISH_CREDENTIALS list as the Multi-Vendor module (OFF by default - set MONITOR_IDRAC_POWER=on; OME's own Power call is the normal source). Care is taken
 // not to trip iDRAC's failed-login lockout: the credential that worked once is tried first everywhere, and a host
-// where every credential failed is left alone for 30 minutes. Disable with MONITOR_IDRAC_POWER=off.
-const IDRAC_POWER_ENABLED = String(process.env.MONITOR_IDRAC_POWER || 'on').toLowerCase() !== 'off';
+// where every credential failed is left alone for 30 minutes. Enable with MONITOR_IDRAC_POWER=on.
+const IDRAC_POWER_ENABLED = String(process.env.MONITOR_IDRAC_POWER || 'off').toLowerCase() === 'on'; // opt-in: only useful when this server can reach the iDRACs
 const idracState = { winner: null, badUntil: {} };
 function idracCandidates() {
   const raw = String(process.env.REDFISH_CREDENTIALS || '').split(',').map((x) => x.trim()).filter(Boolean).map((pair) => {
