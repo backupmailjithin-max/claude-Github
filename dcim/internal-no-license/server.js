@@ -2775,8 +2775,9 @@ async function fetchOmePower(site, zone, deviceId) {
   // 1) Core OME (no plugin needed): PSU inventory gives the installed rated capacity.
   const psu = await getJson(`/api/DeviceService/Devices(${id})/InventoryDetails('serverPowerSupplies')`, 'psu');
   const psus = psu && Array.isArray(psu.InventoryInfo) ? psu.InventoryInfo : [];
+  // Server capacity = ONE PSU's rating (the other PSU is redundancy), so take the largest, not the sum.
   let rated = 0;
-  for (const p of psus) rated += toWatts(p.RatedMaxOutputPower) || toWatts(p.OutputWatts) || toWatts(p.Range1MaxInputPowerWatts) || 0;
+  for (const p of psus) rated = Math.max(rated, toWatts(p.RatedMaxOutputPower) || toWatts(p.OutputWatts) || toWatts(p.Range1MaxInputPowerWatts) || 0);
   if (rated > 0) out.psuMaxWatts = rated;
   // 2) Core OME: per-device power usage.
   const usage = await getJson(`/api/DeviceService/Devices(${id})/PowerUsageByDevice`, 'usage');
