@@ -1,6 +1,6 @@
-// Read-only probe: shows what YOUR Dell OME returns for power, so the integration can be matched to your version.
+// Read-only probe: shows what YOUR Dell OME returns for power/energy, so the integration can be matched to your version.
 // Run from the webapp folder:  node tools/probe-ome-power.js https://OME-HOST USER PASSWORD
-// Writes ome-power-probe.json next to where you run it (no passwords inside). Safe: only GET/POST reads.
+// Writes ome-power-probe.json in the folder you run it from (no passwords inside). Only reads data.
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 const fs = require('fs');
 const [host, user, pass] = process.argv.slice(2);
@@ -10,17 +10,23 @@ const j = async (p, o) => { try { const r = await fetch(host + p, o); const t = 
   const s = await fetch(host + '/api/SessionService/Sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ UserName: user, Password: pass, SessionType: 'API' }) });
   const tok = s.headers.get('x-auth-token'); if (!tok) { console.log('Login failed, HTTP ' + s.status); process.exit(1); }
   const H = { 'X-Auth-Token': tok, 'Content-Type': 'application/json' };
-  const list = await j('/api/DeviceService/Devices?$filter=Type eq 1000&$top=2', { headers: H });
+  // Powered-on servers only (PowerState 17 = On)
+  const list = await j('/api/DeviceService/Devices?$filter=' + encodeURIComponent('Type eq 1000 and PowerState eq 17') + '&$top=2', { headers: H });
   const devs = (list.body && list.body.value) || [];
-  const out = { omeVersionHint: (await j('/api/ApplicationService/Info', { headers: H })).body, devices: [] };
+  const out = { devices: [] };
   for (const d of devs) {
     const id = d.Id;
-    out.devices.push({ id, model: d.Model,
-      powerUsageByDevice: await j(`/api/DeviceService/Devices(${id})/PowerUsageByDevice`, { headers: H }),
-      serverPowerSupplies: await j(`/api/DeviceService/Devices(${id})/InventoryDetails('serverPowerSupplies')`, { headers: H }),
-      metricsPlugin: await j('/api/MetricService/Metrics', { method: 'POST', headers: H, body: JSON.stringify({ PluginId: '2F6D05BE-EE4B-4B0E-B873-C8D2F64A4625', EntityType: 0, EntityId: id, MetricTypes: [4], Duration: 0, SortOrder: 0 }) }),
-    });
+    const idx = await j(`/api/DeviceService/Devices(${id})/InventoryDetails`, { headers: H });
+    const entries = (idx.body && idx.body.value) || [];
+    const names = entries.map((e) => e.InventoryType || e.Name || JSON.stringify(e).slice(0, 60));
+    const rec = { id, model: d.Model, inventoryTypesAvailable: names, powerRelated: {} };
+    // every inventory type whose name looks power/energy/environment related
+    const want = new Set(names.filter((n) => /power|energy|environ|thermal|statist/i.test(String(n))));
+    ['serverPowerStatistics', 'powerStatistics', 'serverEnvironment', 'deviceEnvironment'].forEach((n) => want.add(n));
+    for (const n of want) rec.powerRelated[n] = await j(`/api/DeviceService/Devices(${id})/InventoryDetails('${n}')`, { headers: H });
+    for (const p of ['Power', 'PowerStatistics', 'Temperature', 'EnvironmentDetails']) rec.powerRelated['GET ' + p] = await j(`/api/DeviceService/Devices(${id})/${p}`, { headers: H });
+    out.devices.push(rec);
   }
   fs.writeFileSync('ome-power-probe.json', JSON.stringify(out, null, 2));
-  console.log('Done. Send me the file ome-power-probe.json');
+  console.log('Done. Send me the file ome-power-probe.json  (' + out.devices.length + ' device(s))');
 })();
