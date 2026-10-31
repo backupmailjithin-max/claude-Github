@@ -8674,7 +8674,10 @@ function MonitorVendorPanel({ vendorLabel, icon, result, canEdit, selectedIds, o
     }, { latest: 0, outdated: 0, unknown: 0, noTarget: 0 });
     const MONITOR_EXPORT_COLUMNS = [
         { key: "name", label: "Name" }, { key: "model", label: "Model" }, { key: "serialNumber", label: "Serial" },
-        { key: "healthStatus", label: "Health" }, { key: "powerState", label: "Power" }, { key: "ipAddress", label: "IP" },
+        { key: "healthStatus", label: "Health" }, { key: "powerState", label: "Power" },
+        { key: "powerWatts", label: "Power (W)", format: (v) => (v === null || v === undefined || v === "") ? "\u2014" : String(v) },
+        { key: "psuMaxWatts", label: "Max (W)", format: (v) => (v === null || v === undefined || v === "") ? "\u2014" : String(v) },
+        { key: "ipAddress", label: "IP" },
         { key: "firmwareVersion", label: "System BIOS" },
         { key: "_manualTarget", label: "Manual Target", format: (v, row) => (targetForDevice(row) && targetForDevice(row).targetVersion) || "—" },
         { key: "_status", label: "Status", format: (v, row) => !targetForDevice(row) ? "No Target" : !row.firmwareVersion ? "Unknown" : fwStatusText(row.firmwareVersion, targetForDevice(row).targetVersion) },
@@ -8682,7 +8685,10 @@ function MonitorVendorPanel({ vendorLabel, icon, result, canEdit, selectedIds, o
     const exportName = `${vendorLabel.replace(/\s+/g, "-").toLowerCase()}-inventory-${localDateStr(new Date())}`;
     const MONITOR_LIST_COLUMNS = [
         { key: "name", label: "Name" }, { key: "model", label: "Model" }, { key: "serialNumber", label: "Serial" },
-        { key: "healthStatus", label: "Health" }, { key: "powerState", label: "Power" }, { key: "ipAddress", label: "IP" },
+        { key: "healthStatus", label: "Health" }, { key: "powerState", label: "Power" },
+        { key: "powerWatts", label: "Power (W)", format: (v) => (v === null || v === undefined || v === "") ? "\u2014" : String(v) },
+        { key: "psuMaxWatts", label: "Max (W)", format: (v) => (v === null || v === undefined || v === "") ? "\u2014" : String(v) },
+        { key: "ipAddress", label: "IP" },
         { key: "firmwareVersion", label: "System BIOS" },
         { key: "_manualTarget", label: "Manual Target", format: (v, row) => (targetForDevice(row) && targetForDevice(row).targetVersion) || "—" },
         { key: "_status", label: "Status", format: (v, row) => !targetForDevice(row) ? "No Target" : !row.firmwareVersion ? "Unknown" : fwStatusText(row.firmwareVersion, targetForDevice(row).targetVersion) }
@@ -8812,6 +8818,8 @@ function MonitorVendorPanel({ vendorLabel, icon, result, canEdit, selectedIds, o
                                 React.createElement("td", { style: tdSm },
                                     React.createElement(MonitorHealthDot, { status: d.healthStatus })),
                                 React.createElement("td", { style: tdSm }, d.powerState || "Unknown"),
+                                React.createElement("td", { style: { ...tdSm, fontFamily: "'JetBrains Mono'", fontSize: 11.5 }, title: "Current draw reported by the appliance" }, d.powerWatts != null ? d.powerWatts + " W" : "\u2014"),
+                                React.createElement("td", { style: { ...tdSm, fontFamily: "'JetBrains Mono'", fontSize: 11.5 }, title: "Maximum / rated watts reported by the appliance" }, d.psuMaxWatts != null ? d.psuMaxWatts + " W" : "\u2014"),
                                 React.createElement("td", { style: { ...tdSm, fontFamily: "'JetBrains Mono'", fontSize: 11.5 } }, d.ipAddress ? React.createElement("a", { href: `https://${d.ipAddress}`, target: "_blank", rel: "noopener", style: { color: "#2563EB", textDecoration: "underline" } }, d.ipAddress) : "—"),
                                 React.createElement("td", { style: { ...tdSm, fontFamily: "'JetBrains Mono'", fontSize: 11.5 } }, d.firmwareVersion || "—"),
                                 React.createElement("td", { style: { ...tdSm, fontFamily: "'JetBrains Mono'", fontSize: 11.5 } }, (targetForDevice(d) && targetForDevice(d).targetVersion) || "—"),

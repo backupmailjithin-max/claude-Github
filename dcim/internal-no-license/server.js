@@ -1195,6 +1195,11 @@ async function initDB() {
     // Power reading from the Power subresource - live state, same COALESCE-free
     // treatment as health_status/power_state above.
     try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_power_watts INT NULL'); } catch (e) { /* already exists */ }
+    // Power read from Dell OME / HPE OneView (their own columns, so Inventory fields are never touched).
+    try { await conn.query('ALTER TABLE assets ADD COLUMN hw_power_watts INT NULL'); } catch (e) { /* already exists */ }
+    try { await conn.query('ALTER TABLE assets ADD COLUMN hw_psu_max_watts INT NULL'); } catch (e) { /* already exists */ }
+    try { await conn.query("ALTER TABLE assets ADD COLUMN hw_power_source VARCHAR(12) NULL"); } catch (e) { /* already exists */ }
+    try { await conn.query('ALTER TABLE assets ADD COLUMN hw_power_synced_at DATETIME NULL'); } catch (e) { /* already exists */ }
 
     // Lets an admin exclude a device from the Multi-Vendor (Redfish) monitoring
     // list without touching its Asset Inventory record - for devices that have
@@ -2520,6 +2525,8 @@ function normalizeOmeDevice(d) {
     healthStatus: OME_HEALTH_MAP[d.Status] || 'Unknown',
     powerState: OME_POWER_MAP[d.PowerState] || 'Unknown',
     firmwareVersion: null, // filled in below, per device, via fetchOmeSystemRom
+    powerWatts: null, // current draw in watts (needs the OME Power Manager plugin) - filled in per device
+    psuMaxWatts: null, // maximum / rated watts
   };
 }
 // Dell OME device Status enum: 1000 Normal, 2000 Unknown, 3000 Warning, 4000 Critical, 5000 No status/informational.
@@ -2643,6 +2650,141 @@ const MONITOR_MAX_PAGES = 25; // 25 * 200 = 5000 devices ceiling, safety-net onl
 // device on every zone (fetchOmeDevices' full behavior) was pure waste —
 // likely the actual cause of Reconciliation timing out on any estate with
 // more than a handful of zones.
+// ---------------------------------------------------------------------------
+// Per-server POWER (current watts + maximum watts) from the appliances the
+// Monitoring page already talks to. Both numbers are best-effort: a device
+// (or a whole appliance) that does not expose them simply reports null and
+// the UI shows a dash - it never fails the device list.
+//
+//  * HPE OneView: GET <server uri>/utilization gives the live AveragePower
+//    metric (latest sample) and PowerCap; GET <server uri>/environmentalConfiguration
+//    gives calibratedMaxPower. Both are part of OneView itself.
+//  * Dell OME: live watts exist ONLY through the OME Power Manager plugin
+//    (POST /api/MetricService/Metrics, metric type 4 = instant system power;
+//    POST /api/PowerService/DeviceDetails returns EstimatedMaxPower). Plain
+//    OME without that plugin has no live-watts call, so those zones report
+//    null and the dashboard falls back to the Redfish reading for the server.
+// Set MONITOR_POWER_FETCH=off to skip all of this (e.g. a very large estate).
+// ---------------------------------------------------------------------------
+const POWER_FETCH_ENABLED = String(process.env.MONITOR_POWER_FETCH || 'on').toLowerCase() !== 'off';
+const POWER_FETCH_CONCURRENCY = 6;
+const OME_POWER_MANAGER_PLUGIN_ID = '2F6D05BE-EE4B-4B0E-B873-C8D2F64A4625'; // Dell's published Power Manager plugin id
+const OME_POWER_RETRY_AFTER_MS = 30 * 60 * 1000;
+const omePowerState = {}; // "site|zone" -> { fails, disabledUntil } so a zone without the plugin is not hammered once per device
+const oneviewMaxPowerCache = {}; // server uri (per host) -> { watts, at }: the calibrated maximum almost never changes
+
+function toWatts(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 && n < 100000 ? Math.round(n) : null;
+}
+// OneView metric samples arrive either as [timestamp, value] pairs or as "timestamp value" strings.
+function latestMetricSample(metric) {
+  const samples = (metric && Array.isArray(metric.metricSamples)) ? metric.metricSamples : [];
+  for (let i = samples.length - 1; i >= 0; i--) {
+    const s = samples[i];
+    const val = Array.isArray(s) ? s[1] : (typeof s === 'string' ? s.trim().split(/\s+/)[1] : (s && typeof s === 'object' ? s.value : s));
+    const w = toWatts(val);
+    if (w !== null) return w;
+  }
+  return null;
+}
+async function fetchOneviewPower(site, zone, uri) {
+  const out = { powerWatts: null, psuMaxWatts: null };
+  if (!uri) return out;
+  const session = await getOneviewSession(site, zone);
+  if (!session) return out;
+  const headers = { Auth: session.sessionId, 'X-API-Version': String(session.apiVersion) };
+  try {
+    const res = await monitorFetch(`${session.host}${uri}/utilization?fields=AveragePower,PeakPower,PowerCap`, { headers });
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      const list = (data && Array.isArray(data.metricList)) ? data.metricList : [];
+      const avg = list.find((m) => /^averagepower$/i.test(m.metricName || ''));
+      const cap = list.find((m) => /^powercap$/i.test(m.metricName || ''));
+      out.powerWatts = latestMetricSample(avg);
+      if (avg) out.psuMaxWatts = toWatts(avg.metricCapacity); // fallback maximum if environmentalConfiguration has none
+      const capW = toWatts(cap && cap.metricCapacity);
+      if (capW && !out.psuMaxWatts) out.psuMaxWatts = capW;
+    }
+  } catch (e) { /* utilization unavailable for this server */ }
+  const cacheKey = `${session.host}${uri}`;
+  const cached = oneviewMaxPowerCache[cacheKey];
+  if (cached && Date.now() - cached.at < 24 * 3600 * 1000) {
+    if (cached.watts) out.psuMaxWatts = cached.watts;
+  } else {
+    try {
+      const res = await monitorFetch(`${session.host}${uri}/environmentalConfiguration`, { headers });
+      if (res.ok) {
+        const env = await res.json().catch(() => null);
+        const w = toWatts(env && (env.calibratedMaxPower != null ? env.calibratedMaxPower : env.maxPower));
+        oneviewMaxPowerCache[cacheKey] = { watts: w, at: Date.now() };
+        if (w) out.psuMaxWatts = w; // calibrated maximum is the better figure when present
+      } else {
+        oneviewMaxPowerCache[cacheKey] = { watts: null, at: Date.now() };
+      }
+    } catch (e) { /* leave whatever the utilization call gave */ }
+  }
+  return out;
+}
+async function fetchOmePower(site, zone, deviceId) {
+  const out = { powerWatts: null, psuMaxWatts: null };
+  if (deviceId == null) return out;
+  const stateKey = `${site}|${zone}`;
+  const st = omePowerState[stateKey] || (omePowerState[stateKey] = { fails: 0, disabledUntil: 0 });
+  if (st.disabledUntil > Date.now()) return out; // Power Manager plugin not present/answering for this zone
+  const session = await getOmeToken(site, zone);
+  if (!session) return out;
+  const headers = { 'X-Auth-Token': session.token, 'Content-Type': 'application/json' };
+  let reachedPlugin = false;
+  try {
+    // EntityType 0 = a single device (the group queries Dell documents use 1). Metric type 4 = instant system power.
+    const res = await monitorFetch(`${session.host}/api/MetricService/Metrics`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ PluginId: OME_POWER_MANAGER_PLUGIN_ID, EntityType: 0, EntityId: Number(deviceId), MetricTypes: [4], Duration: 0, SortOrder: 0 }),
+    });
+    if (res.ok) {
+      reachedPlugin = true;
+      const data = await res.json().catch(() => null);
+      const rows = (data && Array.isArray(data.Value)) ? data.Value : [];
+      const row = rows.find((r) => Number(r.Type) === 4) || rows[0];
+      out.powerWatts = toWatts(row && row.Value);
+    }
+  } catch (e) { /* plugin call failed */ }
+  try {
+    const res = await monitorFetch(`${session.host}/api/PowerService/DeviceDetails`, {
+      method: 'POST', headers, body: JSON.stringify({ DeviceId: Number(deviceId) }),
+    });
+    if (res.ok) {
+      reachedPlugin = true;
+      const data = await res.json().catch(() => null);
+      out.psuMaxWatts = toWatts(data && data.EstimatedMaxPower);
+    }
+  } catch (e) { /* details call failed */ }
+  if (reachedPlugin) st.fails = 0;
+  else if (++st.fails >= 3) { st.disabledUntil = Date.now() + OME_POWER_RETRY_AFTER_MS; st.fails = 0; log.info(`OME power: no Power Manager answer for ${stateKey}; skipping power for ${Math.round(OME_POWER_RETRY_AFTER_MS / 60000)} min`); }
+  return out;
+}
+// Writes the power numbers onto the matching Asset Inventory rows (matched by serial number within the site),
+// into their OWN columns - Inventory's serial/model/etc. are never touched. Only non-empty readings overwrite
+// (a transient failure keeps the last good value); a server reported Off is recorded as 0 W.
+async function persistDevicePower(site, devices, source) {
+  if (!POWER_FETCH_ENABLED || !Array.isArray(devices)) return;
+  for (const d of devices) {
+    if (!d || !d.serialNumber) continue;
+    const off = d.powerState === 'Off';
+    const watts = off ? 0 : d.powerWatts;
+    if ((watts === null || watts === undefined) && !d.psuMaxWatts) continue;
+    try {
+      await pool.query(
+        `UPDATE assets SET hw_power_watts = COALESCE(?, hw_power_watts), hw_psu_max_watts = COALESCE(?, hw_psu_max_watts),
+           hw_power_source = ?, hw_power_synced_at = NOW()
+         WHERE site = ? AND UPPER(TRIM(serial_number)) = UPPER(TRIM(?))`,
+        [watts === undefined ? null : watts, d.psuMaxWatts || null, source, site, d.serialNumber]
+      );
+    } catch (e) { log.warn(`Power persist failed for ${d.serialNumber}: ${e.message}`); }
+  }
+}
+
 async function fetchOmeDevicesRaw(site, zone) {
   const session = await getOmeToken(site, zone);
   if (!session) return null; // not configured for this zone
@@ -2695,6 +2837,15 @@ async function fetchOmeDevices(site, zone, forceRefresh = false) {
       try { d.firmwareVersion = await fetchOmeSystemRom(site, zone, d.id); }
       catch (e) { d.firmwareVersion = null; } // one device's inventory call failing shouldn't break the whole list
     });
+    if (POWER_FETCH_ENABLED) {
+      // Servers only (chassis/storage/sleds have no per-server power meter); a failure leaves that device's power null.
+      await mapWithConcurrency(devices, POWER_FETCH_CONCURRENCY, async (d) => {
+        if (d.deviceType !== undefined && d.deviceType !== null && Number(d.deviceType) !== 1000) return;
+        try { const p = await fetchOmePower(site, zone, d.id); d.powerWatts = p.powerWatts; d.psuMaxWatts = p.psuMaxWatts; }
+        catch (e) { /* leave null */ }
+      });
+      persistDevicePower(site, devices, 'OME').catch(() => {});
+    }
     deviceSnapshotCache[key] = { devices, fetchedAt: Date.now() };
     return devices;
   });
@@ -2829,6 +2980,8 @@ function normalizeOneviewServer(s) {
     healthStatus: s.status || 'Unknown', // OK / Warning / Critical / Disabled / Unknown
     powerState: s.powerState || 'Unknown', // On / Off / Unknown
     firmwareVersion: null, // filled in below, per device, via fetchOneviewSystemRom — this is System ROM, not iLO's own firmware
+    powerWatts: null, // current draw in watts, from OneView's utilization metrics
+    psuMaxWatts: null, // calibrated maximum watts
   };
 }
 
@@ -2905,6 +3058,13 @@ async function fetchOneviewServers(site, zone, forceRefresh = false) {
       try { d.firmwareVersion = await fetchOneviewSystemRom(site, zone, d.uri); }
       catch (e) { d.firmwareVersion = null; }
     });
+    if (POWER_FETCH_ENABLED) {
+      await mapWithConcurrency(devices, POWER_FETCH_CONCURRENCY, async (d) => {
+        try { const p = await fetchOneviewPower(site, zone, d.uri); d.powerWatts = p.powerWatts; d.psuMaxWatts = p.psuMaxWatts; }
+        catch (e) { /* leave null */ }
+      });
+      persistDevicePower(site, devices, 'ONEVIEW').catch(() => {});
+    }
     deviceSnapshotCache[key] = { devices, fetchedAt: Date.now() };
     return devices;
   });
