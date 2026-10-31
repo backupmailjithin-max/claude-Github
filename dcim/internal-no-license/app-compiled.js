@@ -377,6 +377,7 @@ const api = {
     refreshAlerts: (payload) => apiFetch('/monitoring/refresh-alerts', { method: 'POST', body: JSON.stringify(payload) }),
     getAutosyncStatus: () => apiFetch('/monitoring/autosync-status'),
     getPowerSummary: () => apiFetch('/monitoring/power-summary'),
+    getServerPowerConsumption: () => apiFetch('/monitoring/server-power-consumption'),
     getFirmwareCompliance: () => apiFetch('/monitoring/firmware-compliance'),
     getAssetConnectivity: (id) => apiFetch('/assets/' + encodeURIComponent(id) + '/connectivity'),
     deleteAssetConnectivity: (id) => apiFetch('/assets/' + encodeURIComponent(id) + '/connectivity', { method: 'DELETE' }),
@@ -12615,6 +12616,123 @@ function DashPowerStatus() {
         React.createElement(DashCard, { title: "Server Power Status", sub: sub, className: "dash-power-card", action: detailsBtn }, body),
         modal);
 }
+// ---- Server Power Consumption (main dashboard module, next to Server Power Status) ---------------------------------
+(function injectSpcStyle() {
+    if (typeof document === "undefined" || document.getElementById("spc-style")) return;
+    const st = document.createElement("style");
+    st.id = "spc-style";
+    st.textContent = ".dash-pair.dash-quad{grid-template-columns:330px 340px minmax(0,1fr) 340px}@media (max-width:1380px){.dash-pair.dash-quad{grid-template-columns:repeat(2,minmax(0,1fr))}}@media (max-width:900px){.dash-pair.dash-quad{grid-template-columns:1fr}}"
+        + ".spc-list{display:flex;flex-direction:column;gap:9px}.spc-lr{padding:11px 13px;border-radius:14px;cursor:pointer;background:linear-gradient(145deg,rgba(255,255,255,.95),rgba(240,245,252,.9));border:1px solid rgba(255,255,255,.85);box-shadow:0 3px 10px rgba(34,48,70,.07);transition:transform .18s ease,box-shadow .18s ease}.spc-lr:hover{transform:translateX(3px);box-shadow:0 5px 14px rgba(34,48,70,.13)}.spc-lr:focus-visible{outline:2px solid #3157EE;outline-offset:2px}"
+        + ".spc-nm{font:800 11.5px Inter,sans-serif;color:#17345D;margin-bottom:5px;display:flex;justify-content:space-between;gap:8px}.spc-nm small{font-weight:600;color:#94A3B8}.spc-big{font:800 19px 'Space Grotesk',sans-serif;color:#17345D}.spc-big span{font-size:12px;color:#94A3B8;font-weight:600}"
+        + ".spc-bar{display:flex;align-items:center;gap:7px;margin-top:7px}.spc-trk{flex:1;height:6px;border-radius:5px;background:rgba(148,163,184,.25);overflow:hidden}.spc-trk i{display:block;height:100%;border-radius:5px}.spc-pc{font:800 12px 'Space Grotesk',sans-serif}.spc-sub{font:500 10.5px Inter,sans-serif;color:#94A3B8;margin-top:5px}"
+        + ".spc-ov{position:fixed;inset:0;z-index:3000;background:rgba(14,18,28,.45);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;padding:16px}.spc-win{background:rgba(255,255,255,.97);border:1px solid rgba(148,163,184,.19);border-radius:20px;box-shadow:9px 10px 30px rgba(15,23,42,.22);width:min(1120px,100%);max-height:92vh;overflow:auto;padding:22px;font-family:Inter,sans-serif;color:#1E293B}"
+        + ".spc-wh{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px}.spc-wh h2{margin:0;font:800 20px 'Space Grotesk',sans-serif;color:#17345D}.spc-wh p{margin:3px 0 0;font-size:12px;color:#64748B}.spc-x{border:none;border-radius:999px;padding:8px 16px;font:700 12px Inter,sans-serif;color:#334155;cursor:pointer;background:linear-gradient(145deg,#fff,#e6edf6);box-shadow:4px 5px 10px rgba(34,48,70,.14),-3px -3px 8px #fff}"
+        + ".spc-seg{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}.spc-seg button{border:1px solid rgba(148,163,184,.3);background:#fff;border-radius:999px;padding:6px 13px;font:700 11.5px Inter,sans-serif;color:#475569;cursor:pointer}.spc-seg button.on{background:#3157EE;border-color:#3157EE;color:#fff}"
+        + ".spc-kp{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}@media (max-width:760px){.spc-kp{grid-template-columns:repeat(2,minmax(0,1fr))}}.spc-k{padding:12px 14px;border-radius:14px;background:linear-gradient(145deg,rgba(255,255,255,.95),rgba(231,237,246,.9));border:1px solid rgba(255,255,255,.85);box-shadow:0 3px 10px rgba(34,48,70,.07)}.spc-k small{display:block;font:700 10.5px Inter,sans-serif;color:#64748B}.spc-k b{font:800 22px 'Space Grotesk',sans-serif;color:#17345D}"
+        + ".spc-loc{border:1px solid rgba(148,163,184,.22);border-radius:16px;padding:14px;margin-bottom:14px;background:#fff}.spc-lh{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}.spc-lh b{font:800 15px 'Space Grotesk',sans-serif;color:#17345D}.spc-lh span{font:600 12px Inter,sans-serif;color:#64748B}"
+        + ".spc-tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}.spc-tools input,.spc-tools select{font:500 12px Inter,sans-serif;padding:6px 10px;border-radius:10px;border:1px solid rgba(148,163,184,.35);background:#F8FAFC;color:#1E293B}"
+        + ".spc-h{font:800 10.5px Inter,sans-serif;letter-spacing:.8px;text-transform:uppercase;color:#64748B;margin:12px 0 4px}.spc-tw{overflow-x:auto}.spc-t{min-width:640px}.spc-tr{display:grid;gap:8px;align-items:center;padding:8px 10px;border-radius:10px;font:500 12px Inter,sans-serif}.spc-tr:nth-child(even){background:rgba(241,245,249,.7)}.spc-th{font:800 10.5px Inter,sans-serif;color:#64748B;text-transform:uppercase;letter-spacing:.6px;background:transparent!important}.spc-th button{all:unset;cursor:pointer;display:inline-flex;gap:3px;align-items:center}.spc-th button:hover{color:#3157EE}"
+        + ".spc-mono{font-family:'JetBrains Mono',monospace;font-size:11.5px}.spc-chip{display:inline-block;padding:2px 9px;border-radius:999px;font:800 10.5px Inter,sans-serif}.spc-empty{padding:14px;color:#64748B;font-size:12.5px}";
+    document.head.appendChild(st);
+})();
+const spcColor = (pct) => (pct == null ? "#94A3B8" : pct >= 85 ? "#DC2626" : pct >= 70 ? "#EA7A0C" : "#059669");
+const spcFmt = (w) => (w == null ? "—" : w >= 1000 ? `${(w / 1000).toFixed(1)} kW` : `${Math.round(w)} W`);
+const spcStatusStyle = (s) => (s === "Critical" ? { background: "rgba(220,38,38,.12)", color: "#DC2626" } : s === "High" ? { background: "rgba(234,122,12,.14)", color: "#B45309" } : s === "Normal" ? { background: "rgba(5,150,105,.12)", color: "#059669" } : { background: "rgba(100,116,139,.14)", color: "#64748B" });
+function DashServerPower() {
+    const [data, setData] = useState(null);
+    const [err, setErr] = useState("");
+    const [view, setView] = useState(null);           // null = closed, otherwise { site: "All" | site }
+    const [zoneQ, setZoneQ] = useState("");
+    const [zoneSort, setZoneSort] = useState({ key: "loadWatts", dir: -1 });
+    const [srvQ, setSrvQ] = useState("");
+    const [srvStatus, setSrvStatus] = useState("all");
+    const [srvSort, setSrvSort] = useState({ key: "watts", dir: -1 });
+    const sigRef = useRef("");
+    useEffect(() => {
+        let alive = true;
+        // Database read of values the 30-minute sync already saved - no appliance call, so a 2-minute refresh is plenty.
+        const load = () => api.getServerPowerConsumption().then((r) => {
+            if (!alive) return;
+            const sig = JSON.stringify(r);
+            if (sig !== sigRef.current) { sigRef.current = sig; setData(r); }
+            setErr("");
+        }).catch((e) => { if (alive) setErr(e.message || String(e)); });
+        load();
+        const t = setInterval(load, 120000);
+        return () => { alive = false; clearInterval(t); };
+    }, []);
+    useEffect(() => {
+        if (!view) return;
+        const h = (e) => { if (e.key === "Escape") { e.stopImmediatePropagation(); setView(null); } };
+        window.addEventListener("keydown", h, true);
+        return () => window.removeEventListener("keydown", h, true);
+    }, [view]);
+    const hhmm = (ts) => { try { return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch (e) { return ""; } };
+    const note = (t) => React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#64748B" } }, t);
+    const sites = data && data.anyData ? data.sites : [];
+    const open = (site) => { setZoneQ(""); setSrvQ(""); setSrvStatus("all"); setView({ site }); };
+    const onKey = (site) => (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(site); } };
+    const sortRows = (rows, s) => rows.slice().sort((a, b) => { const x = a[s.key], y = b[s.key]; if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return (typeof x === "string" ? x.localeCompare(y, undefined, { numeric: true }) : x - y) * s.dir; });
+    const th = (label, key, st, setSt) => React.createElement("span", { key }, React.createElement("button", { type: "button", onClick: () => setSt({ key, dir: st.key === key ? -st.dir : (key === "zone" || key === "name" ? 1 : -1) }) }, label, st.key === key ? (st.dir === 1 ? " ▲" : " ▼") : ""));
+    const bar = (pct) => React.createElement("div", { className: "spc-bar", style: { marginTop: 0 } }, React.createElement("div", { className: "spc-trk" }, React.createElement("i", { style: { width: `${Math.min(100, pct || 0)}%`, background: spcColor(pct) } })), React.createElement("span", { className: "spc-pc", style: { color: spcColor(pct) } }, pct == null ? "—" : `${pct}%`));
+    let body;
+    if (err && !data) body = note("Server power consumption is not available right now.");
+    else if (!data) body = note("Loading…");
+    else if (!sites.length) body = note("No server power readings yet. They appear after the next Dell OME / HPE OneView sync.");
+    else body = React.createElement("div", { className: "spc-list", "data-spc": "list" }, sites.map((st) => React.createElement("div", { key: st.site, className: "spc-lr", role: "button", tabIndex: 0, "data-spc": "loc", title: `${st.site}: open zone and top-5 server details`, onClick: () => open(st.site), onKeyDown: onKey(st.site) },
+        React.createElement("div", { className: "spc-nm" }, React.createElement("span", null, st.site), React.createElement("small", null, `${st.serversReporting} of ${st.serversMonitored} reporting`)),
+        React.createElement("div", { className: "spc-big" }, spcFmt(st.loadWatts), st.capacityWatts ? React.createElement("span", null, ` / ${spcFmt(st.capacityWatts)}`) : null),
+        st.pct != null ? bar(st.pct) : React.createElement("div", { className: "spc-sub" }, "PSU rating not reported yet"),
+        React.createElement("div", { className: "spc-sub" }, `${st.serversOn} server${st.serversOn === 1 ? "" : "s"} drawing power`))));
+    const detailsBtn = sites.length ? React.createElement("button", { type: "button", className: "pws-more", "data-spc": "open", onClick: () => open("All") }, "Details ›") : null;
+    let modal = null;
+    if (view && data) {
+        const pick = sites.filter((st) => view.site === "All" || st.site === view.site);
+        const T = pick.reduce((a, st) => ({ load: a.load + st.loadWatts, cap: a.cap + st.capacityWatts, rep: a.rep + st.serversReporting, mon: a.mon + st.serversMonitored, lc: a.lc + (st.pct != null ? Math.round(st.loadWatts) : 0) }), { load: 0, cap: 0, rep: 0, mon: 0, lc: 0 });
+        const totalPct = T.cap > 0 ? Math.round((pick.reduce((a, st) => a + (st.pct != null ? (st.pct / 100) * st.capacityWatts : 0), 0) / T.cap) * 100) : null;
+        const kp = (l, v) => React.createElement("div", { className: "spc-k" }, React.createElement("small", null, l), React.createElement("b", null, v));
+        const zq = zoneQ.trim().toLowerCase(), sq = srvQ.trim().toLowerCase();
+        modal = ReactDOM.createPortal(React.createElement("div", { className: "spc-ov", "data-spc": "modal", role: "dialog", "aria-modal": "true", "aria-label": "Server power consumption by location and zone", onMouseDown: (e) => { if (e.target === e.currentTarget) setView(null); } },
+            React.createElement("div", { className: "spc-win" },
+                React.createElement("div", { className: "spc-wh" },
+                    React.createElement("div", null, React.createElement("h2", null, "Server Power Consumption"), React.createElement("p", null, "Current load vs PSU rating by location and zone, and the top 5 servers per location" + (data.lastRunAt ? ` · last 30-min sync ${hhmm(data.lastRunAt)}` : ""))),
+                    React.createElement("button", { type: "button", className: "spc-x", "data-spc": "close", onClick: () => setView(null) }, "Close")),
+                React.createElement("div", { className: "spc-seg" }, [["All", "All locations"]].concat(sites.map((st) => [st.site, st.site])).map(([v, l]) => React.createElement("button", { key: v, type: "button", className: view.site === v ? "on" : "", onClick: () => setView({ site: v }) }, l))),
+                React.createElement("div", { className: "spc-kp" }, kp("Total current load", spcFmt(T.load)), kp("PSU capacity (1 PSU per server)", spcFmt(T.cap || null)), kp("Utilization", totalPct == null ? "—" : `${totalPct}%`), kp("Servers reporting", `${T.rep} / ${T.mon}`)),
+                React.createElement("div", { className: "spc-tools" },
+                    React.createElement("input", { type: "search", placeholder: "Filter zones…", value: zoneQ, onChange: (e) => setZoneQ(e.target.value), "aria-label": "Filter zones" }),
+                    React.createElement("input", { type: "search", placeholder: "Filter servers (name, serial, rack, model)…", value: srvQ, onChange: (e) => setSrvQ(e.target.value), "aria-label": "Filter top servers", style: { minWidth: 240 } }),
+                    React.createElement("select", { value: srvStatus, onChange: (e) => setSrvStatus(e.target.value), "aria-label": "Filter servers by status" }, [["all", "All statuses"], ["Critical", "Critical (85%+)"], ["High", "High (70–84%)"], ["Normal", "Normal"], ["Off", "Off"]].map(([v, l]) => React.createElement("option", { key: v, value: v }, l)))),
+                pick.map((st) => {
+                    const zones = sortRows(st.zones.filter((z) => !zq || String(z.zone).toLowerCase().includes(zq)), zoneSort);
+                    const servers = sortRows(st.top.filter((r) => (srvStatus === "all" || r.status === srvStatus) && (!sq || [r.name, r.serial, r.rack, r.model, r.make, r.zone].some((x) => String(x || "").toLowerCase().includes(sq)))), srvSort);
+                    const zcols = "minmax(90px,1.2fr) 80px 110px 120px minmax(150px,1.6fr)";
+                    const scols = "34px minmax(150px,1.6fr) 90px 70px 90px 100px minmax(140px,1.4fr) 84px 70px";
+                    return React.createElement("div", { key: st.site, className: "spc-loc", "data-spc": "block" },
+                        React.createElement("div", { className: "spc-lh" }, React.createElement("b", null, st.site), React.createElement("span", null, `${spcFmt(st.loadWatts)}${st.capacityWatts ? ` of ${spcFmt(st.capacityWatts)}` : ""}${st.pct != null ? ` · ${st.pct}%` : ""} · ${st.serversReporting} of ${st.serversMonitored} servers reporting${st.asOf ? ` · oldest reading ${hhmm(st.asOf)}` : ""}`)),
+                        React.createElement("div", { className: "spc-h" }, "Zone breakdown"),
+                        React.createElement("div", { className: "spc-tw" }, React.createElement("div", { className: "spc-t" },
+                            React.createElement("div", { className: "spc-tr spc-th", style: { gridTemplateColumns: zcols } }, th("Zone", "zone", zoneSort, setZoneSort), th("Servers", "servers", zoneSort, setZoneSort), th("Load", "loadWatts", zoneSort, setZoneSort), th("PSU capacity", "capacityWatts", zoneSort, setZoneSort), th("Utilization", "pct", zoneSort, setZoneSort)),
+                            zones.length ? zones.map((z) => React.createElement("div", { key: z.zone, className: "spc-tr", "data-spc": "zone", style: { gridTemplateColumns: zcols } },
+                                React.createElement("b", null, z.zone), React.createElement("span", null, `${z.reporting}/${z.servers}`), React.createElement("span", { className: "spc-mono" }, spcFmt(z.loadWatts)), React.createElement("span", { className: "spc-mono" }, spcFmt(z.capacityWatts || null)), bar(z.pct)))
+                                : React.createElement("div", { className: "spc-empty" }, "No zones match the filter."))),
+                        React.createElement("div", { className: "spc-h" }, "Top 5 servers by power consumption"),
+                        React.createElement("div", { className: "spc-tw" }, React.createElement("div", { className: "spc-t", style: { minWidth: 860 } },
+                            React.createElement("div", { className: "spc-tr spc-th", style: { gridTemplateColumns: scols } }, React.createElement("span", null, "#"), th("Server", "name", srvSort, setSrvSort), th("Zone / Rack", "zone", srvSort, setSrvSort), th("Source", "source", srvSort, setSrvSort), th("Current load", "watts", srvSort, setSrvSort), th("PSU max", "maxWatts", srvSort, setSrvSort), th("Utilization", "pct", srvSort, setSrvSort), th("Status", "status", srvSort, setSrvSort), React.createElement("span", null, "Model")),
+                            servers.length ? servers.map((r, i) => React.createElement("div", { key: r.id, className: "spc-tr", "data-spc": "server", style: { gridTemplateColumns: scols } },
+                                React.createElement("span", { style: { color: "#94A3B8", fontWeight: 700 } }, i + 1),
+                                React.createElement("span", { style: { minWidth: 0 } }, React.createElement("b", { style: { display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: r.name }, r.name), React.createElement("small", { className: "spc-mono", style: { color: "#94A3B8" } }, r.serial || "")),
+                                React.createElement("span", null, `${r.zone || "-"}${r.rack ? ` / ${r.rack}` : ""}`), React.createElement("span", null, r.source || "—"),
+                                React.createElement("span", { className: "spc-mono", style: { fontWeight: 700 } }, spcFmt(r.watts)), React.createElement("span", { className: "spc-mono" }, spcFmt(r.maxWatts)), bar(r.pct),
+                                React.createElement("span", null, React.createElement("span", { className: "spc-chip", style: spcStatusStyle(r.status) }, r.status || "—")),
+                                React.createElement("span", { style: { fontSize: 11, color: "#64748B", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: r.model || "" }, r.model || "—")))
+                                : React.createElement("div", { className: "spc-empty" }, "No servers match the filter."))));
+                }))), document.body);
+    }
+    return React.createElement(React.Fragment, null,
+        React.createElement(DashCard, { title: "Server Power Consumption", sub: data && data.lastRunAt ? `Load vs PSU rating · last sync ${hhmm(data.lastRunAt)}` : "Load vs PSU rating", className: "dash-power-card", action: detailsBtn }, body),
+        modal);
+}
 function DashDeviceCounts({ assets = [], sites = [] }) {
     // Server Count per location and zone, split by manufacturer. Counts the hardware types the viewer picks with Modify;
     // until they pick, every hardware type whose name contains "server" is counted (all types if none match).
@@ -13226,7 +13344,7 @@ function DashboardOverview({ issues, assets, rackComponents = [], activities, ov
         ].map((k) => { const C = k.icon; const t = tone[k.tone]; return React.createElement("button", { key: k.label, className: "sample-kpi", onClick: () => goTo("inventory", null, { lifecycleHub: k.hub }), style: { ...accentVars(t.fg), '--kpi-ring': t.ring } },
             React.createElement("div", { className: "sample-kpi-icon", style: { background: t.bg, color: t.fg } }, React.createElement(C, { s: 18, c: t.fg })),
             React.createElement("div", { className: "sample-kpi-main" }, React.createElement("div", { className: "sample-kpi-label" }, k.label), React.createElement("div", { className: "sample-kpi-value" }, k.value), React.createElement("div", { className: "sample-kpi-hint" }, k.hint))); })),
-        React.createElement("div", { className: "dash-pair dash-trio", style: { marginBottom: 14 } }, React.createElement(DashPowerStatus, null), React.createElement(DashDeviceCounts, { assets: activeAssets, sites: allowedSites }), React.createElement(DashFirmwareCompliance, { assets: activeAssets })),
+        React.createElement("div", { className: "dash-pair dash-quad", style: { marginBottom: 14 } }, React.createElement(DashPowerStatus, null), React.createElement(DashServerPower, null), React.createElement(DashDeviceCounts, { assets: activeAssets, sites: allowedSites }), React.createElement(DashFirmwareCompliance, { assets: activeAssets })),
         React.createElement("div", { className: "neu-card anim-in d1", style: { padding: "18px 20px", marginBottom: 14 } }, [
             React.createElement("div", { key: "head", style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 } }, [
                 React.createElement("div", { key: "t", style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#17345D" } }, "⚡ Total Power Load by Location"),

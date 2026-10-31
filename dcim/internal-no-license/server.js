@@ -9315,6 +9315,53 @@ async function ensurePowerSnapshotLoaded() {
     if (raw && !Object.keys(powerSnapshot).length) { const p = JSON.parse(raw); if (p && typeof p === 'object') Object.assign(powerSnapshot, p); }
   } catch (e) { /* no snapshot yet */ }
 }
+// Server Power Consumption (main dashboard module): current draw and PSU capacity per location and zone, plus each
+// location's top 5 servers by draw. Pure database read of the numbers the 30-min auto-sync / Sync button save on
+// Asset Inventory (OME / OneView first; the Redfish reading is the fallback for a server neither appliance reports).
+// A server's capacity is ONE PSU's rating (the second PSU is redundancy), so utilisation = draw / that rating.
+app.get('/api/monitoring/server-power-consumption', authenticateToken, async (req, res) => {
+  try {
+    const allowed = await getAllowedSitesForUser(req.user);
+    if (!allowed.length) return res.json({ sites: [], anyData: false, lastRunAt: lastAutoSyncAt ? lastAutoSyncAt.getTime() : null });
+    const [rows] = await pool.query(
+      `SELECT id, site, zone, rack_no, device_name, serial_number, manufacturer, model, hardware_type,
+              hw_power_watts, hw_psu_max_watts, hw_power_source, hw_power_synced_at, redfish_power_watts
+         FROM assets
+        WHERE site IN (?) AND (lifecycle_status IS NULL OR lifecycle_status = 'Active')
+          AND (hw_power_watts IS NOT NULL OR hw_psu_max_watts IS NOT NULL OR redfish_power_watts IS NOT NULL)`, [allowed]);
+    const statusOf = (pct) => (pct == null ? null : pct >= 85 ? 'Critical' : pct >= 70 ? 'High' : 'Normal');
+    const bySite = new Map(allowed.map((st) => [st, { site: st, loadWatts: 0, capacityWatts: 0, loadWithCapWatts: 0, serversMonitored: 0, serversReporting: 0, serversOn: 0, asOf: null, zonesMap: new Map(), servers: [] }]));
+    for (const r of rows) {
+      const loc = bySite.get(r.site); if (!loc) continue;
+      const fromAppliance = r.hw_power_watts !== null && r.hw_power_watts !== undefined;
+      const watts = fromAppliance ? Number(r.hw_power_watts) : (r.redfish_power_watts != null ? Number(r.redfish_power_watts) : null);
+      const max = r.hw_psu_max_watts ? Number(r.hw_psu_max_watts) : null;
+      const source = fromAppliance ? (r.hw_power_source || 'Appliance') : (watts != null ? 'Redfish' : (r.hw_power_source || null));
+      loc.serversMonitored++;
+      const z = loc.zonesMap.get(r.zone || '-') || { zone: r.zone || '-', loadWatts: 0, capacityWatts: 0, loadWithCapWatts: 0, servers: 0, reporting: 0, on: 0 };
+      loc.zonesMap.set(r.zone || '-', z); z.servers++;
+      if (watts != null) {
+        loc.serversReporting++; z.reporting++; loc.loadWatts += watts; z.loadWatts += watts;
+        if (watts > 0) { loc.serversOn++; z.on++; }
+      }
+      if (max) { loc.capacityWatts += max; z.capacityWatts += max; if (watts != null) { loc.loadWithCapWatts += watts; z.loadWithCapWatts += watts; } }
+      if (r.hw_power_synced_at) { const t = new Date(r.hw_power_synced_at).getTime(); if (!loc.asOf || t < loc.asOf) loc.asOf = t; }
+      if (watts != null) {
+        const pct = max && watts != null ? Math.round((watts / max) * 100) : null;
+        loc.servers.push({ id: r.id, name: r.device_name || r.serial_number || r.id, serial: r.serial_number, zone: r.zone, rack: r.rack_no, make: r.manufacturer || null, model: r.model || null, source, watts, maxWatts: max, pct, status: watts === 0 ? 'Off' : statusOf(pct) });
+      }
+    }
+    const pctOf = (load, cap) => (cap > 0 ? Math.round((load / cap) * 100) : null);
+    const sites = [...bySite.values()].filter((l) => l.serversMonitored > 0).map((l) => ({
+      site: l.site, loadWatts: l.loadWatts, capacityWatts: l.capacityWatts, pct: pctOf(l.loadWithCapWatts, l.capacityWatts),
+      serversMonitored: l.serversMonitored, serversReporting: l.serversReporting, serversOn: l.serversOn, asOf: l.asOf,
+      zones: [...l.zonesMap.values()].sort((a, b) => String(a.zone).localeCompare(String(b.zone), undefined, { numeric: true })).map((z) => ({ zone: z.zone, loadWatts: z.loadWatts, capacityWatts: z.capacityWatts, pct: pctOf(z.loadWithCapWatts, z.capacityWatts), servers: z.servers, reporting: z.reporting, on: z.on })),
+      top: l.servers.sort((a, b) => b.watts - a.watts).slice(0, 5),
+    }));
+    res.json({ sites, anyData: sites.length > 0, lastRunAt: lastAutoSyncAt ? lastAutoSyncAt.getTime() : null, intervalMs: AUTO_SYNC_INTERVAL_MS });
+  } catch (e) { sendErr(res, e); }
+});
+
 app.get('/api/monitoring/power-summary', authenticateToken, async (req, res) => {
   try {
     await ensurePowerSnapshotLoaded();
