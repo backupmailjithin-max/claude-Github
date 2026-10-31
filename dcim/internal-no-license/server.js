@@ -2726,42 +2726,75 @@ async function fetchOneviewPower(site, zone, uri) {
   }
   return out;
 }
+// Pulls a watts figure out of an OME power response whose exact shape differs between OME versions:
+// a flat object, a {Value:[...]} list, or an array of samples. Prefers fields named like current/instant/average power.
+function omeWattsFromPayload(data) {
+  if (data == null) return null;
+  const pick = (o) => {
+    if (!o || typeof o !== 'object') return null;
+    const keys = Object.keys(o);
+    const rank = [/^(current|instant|instantaneous)/i, /(current|instant).*(power|watt)/i, /(power|watt).*(current|instant)/i, /^(average|avg).*(power|watt)/i, /^power(consumption|usage)?(watts)?$/i, /^value$/i];
+    for (const re of rank) { const k = keys.find((x) => re.test(x) && toWatts(o[x]) !== null); if (k) return toWatts(o[k]); }
+    return null;
+  };
+  if (Array.isArray(data)) { for (let i = data.length - 1; i >= 0; i -= 1) { const w = pick(data[i]); if (w !== null) return w; } return null; }
+  const direct = pick(data);
+  if (direct !== null) return direct;
+  for (const k of ['Value', 'value', 'Data', 'PowerUsage', 'Metrics']) { if (data[k] && typeof data[k] === 'object') { const w = omeWattsFromPayload(data[k]); if (w !== null) return w; } }
+  return null;
+}
 async function fetchOmePower(site, zone, deviceId) {
   const out = { powerWatts: null, psuMaxWatts: null };
   if (deviceId == null) return out;
   const stateKey = `${site}|${zone}`;
   const st = omePowerState[stateKey] || (omePowerState[stateKey] = { fails: 0, disabledUntil: 0 });
-  if (st.disabledUntil > Date.now()) return out; // Power Manager plugin not present/answering for this zone
+  if (st.disabledUntil > Date.now()) return out; // nothing answered power calls for this zone recently
   const session = await getOmeToken(site, zone);
   if (!session) return out;
   const headers = { 'X-Auth-Token': session.token, 'Content-Type': 'application/json' };
-  let reachedPlugin = false;
-  try {
-    // EntityType 0 = a single device (the group queries Dell documents use 1). Metric type 4 = instant system power.
-    const res = await monitorFetch(`${session.host}/api/MetricService/Metrics`, {
-      method: 'POST', headers,
-      body: JSON.stringify({ PluginId: OME_POWER_MANAGER_PLUGIN_ID, EntityType: 0, EntityId: Number(deviceId), MetricTypes: [4], Duration: 0, SortOrder: 0 }),
-    });
-    if (res.ok) {
-      reachedPlugin = true;
-      const data = await res.json().catch(() => null);
-      const rows = (data && Array.isArray(data.Value)) ? data.Value : [];
-      const row = rows.find((r) => Number(r.Type) === 4) || rows[0];
-      out.powerWatts = toWatts(row && row.Value);
-    }
-  } catch (e) { /* plugin call failed */ }
-  try {
-    const res = await monitorFetch(`${session.host}/api/PowerService/DeviceDetails`, {
-      method: 'POST', headers, body: JSON.stringify({ DeviceId: Number(deviceId) }),
-    });
-    if (res.ok) {
-      reachedPlugin = true;
-      const data = await res.json().catch(() => null);
-      out.psuMaxWatts = toWatts(data && data.EstimatedMaxPower);
-    }
-  } catch (e) { /* details call failed */ }
-  if (reachedPlugin) st.fails = 0;
-  else if (++st.fails >= 3) { st.disabledUntil = Date.now() + OME_POWER_RETRY_AFTER_MS; st.fails = 0; log.info(`OME power: no Power Manager answer for ${stateKey}; skipping power for ${Math.round(OME_POWER_RETRY_AFTER_MS / 60000)} min`); }
+  const id = Number(deviceId);
+  let answered = false;
+  const getJson = async (path) => {
+    try {
+      const res = await monitorFetch(`${session.host}${path}`, { headers });
+      if (!res.ok) return null;
+      answered = true;
+      return await res.json().catch(() => null);
+    } catch (e) { return null; }
+  };
+  // 1) Core OME (no plugin needed): PSU inventory gives the installed rated capacity.
+  const psu = await getJson(`/api/DeviceService/Devices(${id})/InventoryDetails('serverPowerSupplies')`);
+  const psus = psu && Array.isArray(psu.InventoryInfo) ? psu.InventoryInfo : [];
+  let rated = 0;
+  for (const p of psus) rated += toWatts(p.RatedMaxOutputPower) || toWatts(p.OutputWatts) || toWatts(p.Range1MaxInputPowerWatts) || 0;
+  if (rated > 0) out.psuMaxWatts = rated;
+  // 2) Core OME: per-device power usage.
+  const usage = await getJson(`/api/DeviceService/Devices(${id})/PowerUsageByDevice`);
+  out.powerWatts = omeWattsFromPayload(usage);
+  // 3) Power Manager plugin, only when core OME gave no live reading.
+  if (out.powerWatts === null) {
+    try {
+      const res = await monitorFetch(`${session.host}/api/MetricService/Metrics`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ PluginId: OME_POWER_MANAGER_PLUGIN_ID, EntityType: 0, EntityId: id, MetricTypes: [4], Duration: 0, SortOrder: 0 }),
+      });
+      if (res.ok) {
+        answered = true;
+        const data = await res.json().catch(() => null);
+        const rows = (data && Array.isArray(data.Value)) ? data.Value : [];
+        const row = rows.find((r) => Number(r.Type) === 4) || rows[0];
+        out.powerWatts = toWatts(row && row.Value);
+      }
+    } catch (e) { /* plugin not installed */ }
+  }
+  if (out.psuMaxWatts === null) {
+    try {
+      const res = await monitorFetch(`${session.host}/api/PowerService/DeviceDetails`, { method: 'POST', headers, body: JSON.stringify({ DeviceId: id }) });
+      if (res.ok) { answered = true; const data = await res.json().catch(() => null); out.psuMaxWatts = toWatts(data && data.EstimatedMaxPower); }
+    } catch (e) { /* plugin not installed */ }
+  }
+  if (answered) st.fails = 0;
+  else if (++st.fails >= 3) { st.disabledUntil = Date.now() + OME_POWER_RETRY_AFTER_MS; st.fails = 0; log.info(`OME power: no power endpoint answered for ${stateKey}; skipping power for ${Math.round(OME_POWER_RETRY_AFTER_MS / 60000)} min`); }
   return out;
 }
 // Writes the power numbers onto the matching Asset Inventory rows (matched by serial number within the site),
