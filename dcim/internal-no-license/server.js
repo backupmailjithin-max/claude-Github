@@ -2667,7 +2667,7 @@ const MONITOR_MAX_PAGES = 25; // 25 * 200 = 5000 devices ceiling, safety-net onl
 // Set MONITOR_POWER_FETCH=off to skip all of this (e.g. a very large estate).
 // ---------------------------------------------------------------------------
 const POWER_FETCH_ENABLED = String(process.env.MONITOR_POWER_FETCH || 'on').toLowerCase() !== 'off';
-const POWER_FETCH_CONCURRENCY = 6;
+const POWER_FETCH_CONCURRENCY = 10;
 const OME_POWER_MANAGER_PLUGIN_ID = '2F6D05BE-EE4B-4B0E-B873-C8D2F64A4625'; // Dell's published Power Manager plugin id
 const OME_POWER_RETRY_AFTER_MS = 30 * 60 * 1000;
 const omePsuCache = {}; // `${site}|${zone}|${deviceId}` -> { watts, at }  (PSU rating rarely changes)
@@ -2858,7 +2858,7 @@ async function fetchIdracWatts(ip) {
   idracState.badUntil[ip] = Date.now() + 30 * 60 * 1000; // every credential rejected: stop asking this host for a while
   return null;
 }
-const powerEnrichRunning = new Set();
+const powerEnrichRunning = new Map();
 // A fresh sync builds new device objects; keep the last known power numbers on them until the background pass refreshes them.
 function carryOverPower(prevDevices, devices) {
   if (!Array.isArray(prevDevices)) return;
@@ -2868,20 +2868,47 @@ function carryOverPower(prevDevices, devices) {
     if (p) { if (d.powerWatts == null) d.powerWatts = p.powerWatts == null ? null : p.powerWatts; if (d.psuMaxWatts == null) d.psuMaxWatts = p.psuMaxWatts == null ? null : p.psuMaxWatts; }
   }
 }
+// Fill in the last power numbers saved on Asset Inventory (matched by serial) so a freshly built snapshot - e.g. right
+// after a restart - already shows the last known values instead of blanks while the appliance is being asked again.
+async function seedPowerFromAssets(site, devices) {
+  if (!POWER_FETCH_ENABLED || !Array.isArray(devices) || !devices.length) return;
+  try {
+    const [rows] = await pool.query(
+      'SELECT UPPER(TRIM(serial_number)) AS sn, hw_power_watts AS w, hw_psu_max_watts AS mx FROM assets WHERE site = ? AND (hw_power_watts IS NOT NULL OR hw_psu_max_watts IS NOT NULL)', [site]);
+    const bySn = new Map(rows.map((r) => [r.sn, r]));
+    for (const d of devices) {
+      const r = d.serialNumber ? bySn.get(String(d.serialNumber).trim().toUpperCase()) : null;
+      if (!r) continue;
+      if (d.powerWatts == null && r.w != null) d.powerWatts = r.w;
+      if (d.psuMaxWatts == null && r.mx != null) d.psuMaxWatts = r.mx;
+    }
+  } catch (e) { /* column not there yet / DB busy: just no seed */ }
+}
+// Runs the per-device power lookups. Returns a promise the caller may wait on for a short budget (so the first
+// response already carries most numbers) while the rest finishes in the background without blocking the sync.
 function startPowerEnrichment(key, site, devices, fetchOne, source) {
-  if (!POWER_FETCH_ENABLED || powerEnrichRunning.has(key)) return;
-  powerEnrichRunning.add(key);
-  (async () => {
+  if (!POWER_FETCH_ENABLED) return Promise.resolve();
+  if (powerEnrichRunning.has(key)) return powerEnrichRunning.get(key);
+  const p = (async () => {
     try {
       await mapWithConcurrency(devices, POWER_FETCH_CONCURRENCY, async (d) => {
         if (d.deviceType !== undefined && d.deviceType !== null && Number(d.deviceType) !== 1000) return;
-        try { const p = await fetchOne(d); d.powerWatts = p.powerWatts; d.psuMaxWatts = p.psuMaxWatts; } catch (e) { /* leave as is */ }
+        try {
+          const r = await fetchOne(d);
+          if (r.powerWatts != null) d.powerWatts = r.powerWatts;
+          if (r.psuMaxWatts != null) d.psuMaxWatts = r.psuMaxWatts;
+        } catch (e) { /* keep what we had */ }
+        if (d.powerState === 'Off') d.powerWatts = 0;
       });
       await persistDevicePower(site, devices, source);
     } catch (e) { log.warn(`Power enrichment failed for ${key}: ${e.message}`); }
     finally { powerEnrichRunning.delete(key); }
   })();
+  powerEnrichRunning.set(key, p);
+  return p;
 }
+const POWER_WAIT_BUDGET_MS = 8000;
+const waitUpTo = (p, ms) => Promise.race([p, new Promise((r) => { setTimeout(r, ms).unref(); })]);
 // Writes the power numbers onto the matching Asset Inventory rows (matched by serial number within the site),
 // into their OWN columns - Inventory's serial/model/etc. are never touched. Only non-empty readings overwrite
 // (a transient failure keeps the last good value); a server reported Off is recorded as 0 W.
@@ -2956,12 +2983,13 @@ async function fetchOmeDevices(site, zone, forceRefresh = false) {
       catch (e) { d.firmwareVersion = null; } // one device's inventory call failing shouldn't break the whole list
     });
     carryOverPower(deviceSnapshotCache[key] && deviceSnapshotCache[key].devices, devices);
+    await seedPowerFromAssets(site, devices);
     deviceSnapshotCache[key] = { devices, fetchedAt: Date.now() };
-    startPowerEnrichment(key, site, devices, async (d) => {
+    await waitUpTo(startPowerEnrichment(key, site, devices, async (d) => {
       const p = await fetchOmePower(site, zone, d.id);
       if (p.powerWatts == null && d.powerState === 'On' && d.ipAddress) { const w = await fetchIdracWatts(d.ipAddress); if (w != null) p.powerWatts = w; }
       return p;
-    }, 'OME');
+    }, 'OME'), POWER_WAIT_BUDGET_MS);
     return devices;
   });
 }
@@ -3174,8 +3202,9 @@ async function fetchOneviewServers(site, zone, forceRefresh = false) {
       catch (e) { d.firmwareVersion = null; }
     });
     carryOverPower(deviceSnapshotCache[key] && deviceSnapshotCache[key].devices, devices);
+    await seedPowerFromAssets(site, devices);
     deviceSnapshotCache[key] = { devices, fetchedAt: Date.now() };
-    startPowerEnrichment(key, site, devices, (d) => fetchOneviewPower(site, zone, d.uri), 'ONEVIEW');
+    await waitUpTo(startPowerEnrichment(key, site, devices, (d) => fetchOneviewPower(site, zone, d.uri), 'ONEVIEW'), POWER_WAIT_BUDGET_MS);
     return devices;
   });
 }
