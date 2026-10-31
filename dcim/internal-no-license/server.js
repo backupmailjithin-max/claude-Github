@@ -2817,6 +2817,46 @@ async function fetchOmePower(site, zone, deviceId) {
 // Power numbers are filled in AFTER the device list is returned/cached (never inside the sync request), so a big
 // estate (e.g. 65+ servers) cannot push Sync past the browser's 30-second limit. The devices are the same objects
 // the snapshot cache holds, so the next page load/refresh sees the values; they are also saved to Asset Inventory.
+// Dell OME 4.8 does not report live watts, so for powered-on Dell servers the iDRAC itself is asked (Redfish Power,
+// PowerControl[0].PowerConsumedWatts) using the same REDFISH_CREDENTIALS list as the Multi-Vendor module. Care is taken
+// not to trip iDRAC's failed-login lockout: the credential that worked once is tried first everywhere, and a host
+// where every credential failed is left alone for 30 minutes. Disable with MONITOR_IDRAC_POWER=off.
+const IDRAC_POWER_ENABLED = String(process.env.MONITOR_IDRAC_POWER || 'on').toLowerCase() !== 'off';
+const idracState = { winner: null, badUntil: {} };
+function idracCandidates() {
+  const raw = String(process.env.REDFISH_CREDENTIALS || '').split(',').map((x) => x.trim()).filter(Boolean).map((pair) => {
+    const p = pair.split(':');
+    return p.length >= 3 ? { vendor: p[0].toLowerCase(), username: p[1], password: p.slice(2).join(':') } : null;
+  }).filter(Boolean);
+  const dell = raw.filter((c) => c.vendor === 'dell' || c.vendor === 'any');
+  if (dell.length) return dell;
+  const u = process.env.REDFISH_DEFAULT_USERNAME;
+  return u ? [{ vendor: null, username: u, password: process.env.REDFISH_DEFAULT_PASSWORD || '' }] : [];
+}
+async function fetchIdracWatts(ip) {
+  if (!IDRAC_POWER_ENABLED || !ip) return null;
+  if ((idracState.badUntil[ip] || 0) > Date.now()) return null;
+  const cands = idracCandidates();
+  if (!cands.length) return null;
+  // Once one credential has worked, use ONLY that one on other hosts (a wrong guess counts toward iDRAC lockout);
+  // while none has worked yet, walk the candidate list.
+  const ordered = idracState.winner != null && cands[idracState.winner] ? [cands[idracState.winner]] : cands;
+  for (const c of ordered) {
+    try {
+      const res = await monitorFetch(`https://${ip}/redfish/v1/Chassis/System.Embedded.1/Power`, {
+        headers: { Accept: 'application/json', Authorization: 'Basic ' + Buffer.from(`${c.username}:${c.password}`).toString('base64') },
+      });
+      if (res.status === 401 || res.status === 403) { await new Promise((r) => setTimeout(r, 250 + Math.floor(Math.random() * 250))); continue; }
+      if (!res.ok) return null; // reachable but no Power resource: not a credential problem
+      idracState.winner = cands.indexOf(c);
+      const data = await res.json().catch(() => null);
+      const pc = data && Array.isArray(data.PowerControl) ? data.PowerControl[0] : null;
+      return toWatts(pc && pc.PowerConsumedWatts);
+    } catch (e) { return null; } // unreachable BMC
+  }
+  idracState.badUntil[ip] = Date.now() + 30 * 60 * 1000; // every credential rejected: stop asking this host for a while
+  return null;
+}
 const powerEnrichRunning = new Set();
 // A fresh sync builds new device objects; keep the last known power numbers on them until the background pass refreshes them.
 function carryOverPower(prevDevices, devices) {
@@ -2916,7 +2956,11 @@ async function fetchOmeDevices(site, zone, forceRefresh = false) {
     });
     carryOverPower(deviceSnapshotCache[key] && deviceSnapshotCache[key].devices, devices);
     deviceSnapshotCache[key] = { devices, fetchedAt: Date.now() };
-    startPowerEnrichment(key, site, devices, (d) => fetchOmePower(site, zone, d.id), 'OME');
+    startPowerEnrichment(key, site, devices, async (d) => {
+      const p = await fetchOmePower(site, zone, d.id);
+      if (p.powerWatts == null && d.powerState === 'On' && d.ipAddress) { const w = await fetchIdracWatts(d.ipAddress); if (w != null) p.powerWatts = w; }
+      return p;
+    }, 'OME');
     return devices;
   });
 }
