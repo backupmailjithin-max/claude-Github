@@ -2670,6 +2670,7 @@ const POWER_FETCH_ENABLED = String(process.env.MONITOR_POWER_FETCH || 'on').toLo
 const POWER_FETCH_CONCURRENCY = 6;
 const OME_POWER_MANAGER_PLUGIN_ID = '2F6D05BE-EE4B-4B0E-B873-C8D2F64A4625'; // Dell's published Power Manager plugin id
 const OME_POWER_RETRY_AFTER_MS = 30 * 60 * 1000;
+const omePsuCache = {}; // `${site}|${zone}|${deviceId}` -> { watts, at }  (PSU rating rarely changes)
 const omePowerState = {}; // "site|zone" -> { fails, disabledUntil } so a zone without the plugin is not hammered once per device
 const oneviewMaxPowerCache = {}; // server uri (per host) -> { watts, at }: the calibrated maximum almost never changes
 
@@ -2773,12 +2774,15 @@ async function fetchOmePower(site, zone, deviceId) {
     } catch (e) { return null; }
   };
   // 1) Core OME (no plugin needed): PSU inventory gives the installed rated capacity.
-  const psu = await getJson(`/api/DeviceService/Devices(${id})/InventoryDetails('serverPowerSupplies')`, 'psu');
+  const psuKey = `${stateKey}|${id}`;
+  const psuHit = omePsuCache[psuKey];
+  const psu = (psuHit && Date.now() - psuHit.at < 24 * 3600 * 1000) ? null : await getJson(`/api/DeviceService/Devices(${id})/InventoryDetails('serverPowerSupplies')`, 'psu');
   const psus = psu && Array.isArray(psu.InventoryInfo) ? psu.InventoryInfo : [];
   // Server capacity = ONE PSU's rating (the other PSU is redundancy), so take the largest, not the sum.
   let rated = 0;
   for (const p of psus) rated = Math.max(rated, toWatts(p.RatedMaxOutputPower) || toWatts(p.OutputWatts) || toWatts(p.Range1MaxInputPowerWatts) || 0);
-  if (rated > 0) out.psuMaxWatts = rated;
+  if (rated > 0) { out.psuMaxWatts = rated; omePsuCache[psuKey] = { watts: rated, at: Date.now() }; }
+  else if (psuHit) out.psuMaxWatts = psuHit.watts;
   // 2) Core OME: per-device power usage.
   const usage = await getJson(`/api/DeviceService/Devices(${id})/PowerUsageByDevice`, 'usage');
   out.powerWatts = omeWattsFromPayload(usage);
@@ -2809,6 +2813,33 @@ async function fetchOmePower(site, zone, deviceId) {
   if (answered) st.fails = 0;
   else if (++st.fails >= 3) { st.disabledUntil = Date.now() + OME_POWER_RETRY_AFTER_MS; st.fails = 0; log.info(`OME power: no power endpoint answered for ${stateKey}; skipping power for ${Math.round(OME_POWER_RETRY_AFTER_MS / 60000)} min`); }
   return out;
+}
+// Power numbers are filled in AFTER the device list is returned/cached (never inside the sync request), so a big
+// estate (e.g. 65+ servers) cannot push Sync past the browser's 30-second limit. The devices are the same objects
+// the snapshot cache holds, so the next page load/refresh sees the values; they are also saved to Asset Inventory.
+const powerEnrichRunning = new Set();
+// A fresh sync builds new device objects; keep the last known power numbers on them until the background pass refreshes them.
+function carryOverPower(prevDevices, devices) {
+  if (!Array.isArray(prevDevices)) return;
+  const byId = new Map(prevDevices.map((d) => [d.id != null ? d.id : d.uri, d]));
+  for (const d of devices) {
+    const p = byId.get(d.id != null ? d.id : d.uri);
+    if (p) { if (d.powerWatts == null) d.powerWatts = p.powerWatts == null ? null : p.powerWatts; if (d.psuMaxWatts == null) d.psuMaxWatts = p.psuMaxWatts == null ? null : p.psuMaxWatts; }
+  }
+}
+function startPowerEnrichment(key, site, devices, fetchOne, source) {
+  if (!POWER_FETCH_ENABLED || powerEnrichRunning.has(key)) return;
+  powerEnrichRunning.add(key);
+  (async () => {
+    try {
+      await mapWithConcurrency(devices, POWER_FETCH_CONCURRENCY, async (d) => {
+        if (d.deviceType !== undefined && d.deviceType !== null && Number(d.deviceType) !== 1000) return;
+        try { const p = await fetchOne(d); d.powerWatts = p.powerWatts; d.psuMaxWatts = p.psuMaxWatts; } catch (e) { /* leave as is */ }
+      });
+      await persistDevicePower(site, devices, source);
+    } catch (e) { log.warn(`Power enrichment failed for ${key}: ${e.message}`); }
+    finally { powerEnrichRunning.delete(key); }
+  })();
 }
 // Writes the power numbers onto the matching Asset Inventory rows (matched by serial number within the site),
 // into their OWN columns - Inventory's serial/model/etc. are never touched. Only non-empty readings overwrite
@@ -2883,16 +2914,9 @@ async function fetchOmeDevices(site, zone, forceRefresh = false) {
       try { d.firmwareVersion = await fetchOmeSystemRom(site, zone, d.id); }
       catch (e) { d.firmwareVersion = null; } // one device's inventory call failing shouldn't break the whole list
     });
-    if (POWER_FETCH_ENABLED) {
-      // Servers only (chassis/storage/sleds have no per-server power meter); a failure leaves that device's power null.
-      await mapWithConcurrency(devices, POWER_FETCH_CONCURRENCY, async (d) => {
-        if (d.deviceType !== undefined && d.deviceType !== null && Number(d.deviceType) !== 1000) return;
-        try { const p = await fetchOmePower(site, zone, d.id); d.powerWatts = p.powerWatts; d.psuMaxWatts = p.psuMaxWatts; }
-        catch (e) { /* leave null */ }
-      });
-      persistDevicePower(site, devices, 'OME').catch(() => {});
-    }
+    carryOverPower(deviceSnapshotCache[key] && deviceSnapshotCache[key].devices, devices);
     deviceSnapshotCache[key] = { devices, fetchedAt: Date.now() };
+    startPowerEnrichment(key, site, devices, (d) => fetchOmePower(site, zone, d.id), 'OME');
     return devices;
   });
 }
@@ -3104,14 +3128,9 @@ async function fetchOneviewServers(site, zone, forceRefresh = false) {
       try { d.firmwareVersion = await fetchOneviewSystemRom(site, zone, d.uri); }
       catch (e) { d.firmwareVersion = null; }
     });
-    if (POWER_FETCH_ENABLED) {
-      await mapWithConcurrency(devices, POWER_FETCH_CONCURRENCY, async (d) => {
-        try { const p = await fetchOneviewPower(site, zone, d.uri); d.powerWatts = p.powerWatts; d.psuMaxWatts = p.psuMaxWatts; }
-        catch (e) { /* leave null */ }
-      });
-      persistDevicePower(site, devices, 'ONEVIEW').catch(() => {});
-    }
+    carryOverPower(deviceSnapshotCache[key] && deviceSnapshotCache[key].devices, devices);
     deviceSnapshotCache[key] = { devices, fetchedAt: Date.now() };
+    startPowerEnrichment(key, site, devices, (d) => fetchOneviewPower(site, zone, d.uri), 'ONEVIEW');
     return devices;
   });
 }
