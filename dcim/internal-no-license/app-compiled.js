@@ -379,6 +379,7 @@ const api = {
     getPowerSummary: () => apiFetch('/monitoring/power-summary'),
     getServerPowerConsumption: () => apiFetch('/monitoring/server-power-consumption'),
     getFirmwareCompliance: () => apiFetch('/monitoring/firmware-compliance'),
+    syncFirmwareCompliance: () => apiFetch('/monitoring/firmware-compliance/sync', { method: 'POST' }),
     getAssetConnectivity: (id) => apiFetch('/assets/' + encodeURIComponent(id) + '/connectivity'),
     deleteAssetConnectivity: (id) => apiFetch('/assets/' + encodeURIComponent(id) + '/connectivity', { method: 'DELETE' }),
     importConnectivity: (payload) => apiFetch('/connectivity/import', { method: 'POST', body: JSON.stringify(payload), timeoutMs: 120000 }),
@@ -12888,6 +12889,18 @@ function DashFirmwareCompliance({ assets = [] }) {
     const [sel, setSelRaw] = useState(() => { try { const v = JSON.parse(localStorage.getItem("dashFwcTypes")); return Array.isArray(v) ? v : null; } catch (e) { return null; } });   // null = every hardware type; otherwise the ticked types (remembered in this browser)
     const setSel = (v) => { setSelRaw(v); try { if (v === null) localStorage.removeItem("dashFwcTypes"); else localStorage.setItem("dashFwcTypes", JSON.stringify(v)); } catch (e) { /* storage blocked */ } };
     const [pickOpen, setPickOpen] = useState(false); // lifts the card above the ones below while the list is open
+    const [syncing, setSyncing] = useState(false);
+    const [syncMsg, setSyncMsg] = useState(null);   // { ok, text } shown for a few seconds after a manual Sync
+    const syncNow = () => {
+        if (syncing) return;
+        setSyncing(true); setSyncMsg(null);
+        api.syncFirmwareCompliance().then((r) => {
+            if (r && r.data) { setData(r.data); setErr(null); }
+            const u = r ? r.updated : 0, n = r ? r.noCache : 0;
+            setSyncMsg({ ok: n === 0, text: `Updated from latest cache \u00B7 ${u} zone${u === 1 ? "" : "s"}` + (n ? ` \u00B7 ${n} not synced yet (use Monitoring \u203A Sync)` : "") });
+        }).catch((e) => setSyncMsg({ ok: false, text: (e && e.status === 404) ? "The server does not have this update yet. Copy the latest server.js and restart." : `Sync failed (${(e && e.message) || "error"})` }))
+            .finally(() => { setSyncing(false); setTimeout(() => setSyncMsg(null), 9000); });
+    };
     const [allTypes, setAllTypes] = useState([]);   // every hardware type defined in DCIM (components excluded)
     useEffect(() => {
         let alive = true;
@@ -12938,6 +12951,7 @@ function DashFirmwareCompliance({ assets = [] }) {
         React.createElement("div", { style: { fontFamily: "Inter", fontSize: 9.5, fontWeight: 800, letterSpacing: ".04em", color: FWC_META[k].fg, textTransform: "uppercase" } }, FWC_META[k].label),
         React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 19, fontWeight: 800, color: "#0F172A", lineHeight: 1.15, fontVariantNumeric: "tabular-nums" } }, loading ? "—" : num(v)));
     const action = React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+        React.createElement("button", { onClick: syncNow, disabled: syncing, className: "neu-btn-secondary pdu-sync-btn" + (syncing ? " syncing" : ""), "data-fwc": "sync", "aria-label": "Sync firmware and device status from the latest cache", title: "Update firmware and device status from the latest Dell OME / HPE OneView data already cached (no appliance call)", style: { fontSize: 11, padding: "4px 9px", display: "flex", alignItems: "center", gap: 4, opacity: syncing ? 0.6 : 1 } }, React.createElement(RefreshCw, { s: 11 }), syncing ? "Syncing\u2026" : "Sync"),
         React.createElement("button", { onClick: () => setOpen(true), className: "neu-btn-secondary", "data-fwc": "open", style: { fontSize: 11, padding: "4px 10px" }, title: "Location / zone comparison, device list and export" }, "View details"),
         React.createElement(FwcTypePicker, { types: typeList, counts: typeCounts, value: sel || typeList, onChange: pickTypes, onOpen: setPickOpen }));
     const typeLine = React.createElement("div", { "data-fwc": "hwtype-summary", style: { fontFamily: "Inter", fontSize: 11.5, fontWeight: 700, color: "#334155" } }, !sel ? "All hardware types" : !sel.length ? "No hardware type selected" : sel.length <= 3 ? sel.join(", ") : `${sel.length} hardware types`);
@@ -12964,6 +12978,7 @@ function DashFirmwareCompliance({ assets = [] }) {
                                 !zones.length ? "Dell OME / HPE OneView is not configured for any zone, so there is no firmware data." : "OME / OneView has not reported yet. The first 30-minute sync fills this in."),
                 React.createElement("div", { style: { marginTop: "auto", fontFamily: "Inter", fontSize: 10, color: "#64748B", lineHeight: 1.4 } },
                     !empty && c.UNKNOWN > 0 ? React.createElement("div", { "data-fwc": "unk-note" }, "Unknown = firmware not read yet, or no target firmware set for the model in Monitoring.") : null,
+                    syncMsg ? React.createElement("div", { "data-fwc": "sync-msg", style: { color: syncMsg.ok ? "#059669" : "#B45309", fontWeight: 700, marginBottom: 2 } }, syncMsg.text) : null,
                     waiting > 0 ? React.createElement("div", { style: { color: "#B45309", fontWeight: 700 } }, `${waiting} zone${waiting === 1 ? "" : "s"} not reported yet`) : null,
                     lastSync ? `Last sync ${fwcWhen(lastSync)}` : ""))),
         open && React.createElement(FwcDetails, { rows, inv, missing, zones, lastSync, types: typeList, typeCounts, selTypes: sel, onTypes: pickTypes, onClose: () => setOpen(false) }));

@@ -9397,21 +9397,42 @@ app.get('/api/monitoring/power-summary', authenticateToken, async (req, res) => 
 
 
 // Firmware Compliance (dashboard module): a pure cache reader of what OME / OneView reported during the last 30-minute auto-sync.
+async function buildFwCompliancePayload(user) {
+  await ensureFwComplianceLoaded();
+  const allowed = await getAllowedSitesForUser(user);
+  const [zoneRows] = await pool.query('SELECT DISTINCT site, zone_name AS zone FROM zones WHERE site IN (?)', [allowed.length ? allowed : ['__none__']]);
+  const rows = [], zones = [];
+  zoneRows.forEach((z) => {
+    ['OME', 'ONEVIEW'].forEach((vk) => {
+      if (!getMonitorConfig(vk, z.site, z.zone)) return;
+      const snap = fwComplianceCache[snapshotKey(vk, z.site, z.zone)];
+      zones.push({ vendor: vk, site: z.site, zone: z.zone, reported: !!snap, fetchedAt: snap ? snap.fetchedAt : null, count: snap ? snap.items.length : 0 });
+      if (snap) snap.items.forEach((it) => rows.push({ vendor: vk, site: z.site, zone: z.zone, ...it, fetchedAt: snap.fetchedAt }));
+    });
+  });
+  return { rows, zones, lastRunAt: lastAutoSyncAt ? lastAutoSyncAt.getTime() : null, intervalMs: AUTO_SYNC_INTERVAL_MS, running: autoSyncRunning };
+}
 app.get('/api/monitoring/firmware-compliance', authenticateToken, async (req, res) => {
+  try { res.json(await buildFwCompliancePayload(req.user)); } catch (e) { sendErr(res, e); }
+});
+// Manual "Sync" on the dashboard's Firmware Compliance card: rebuilds the firmware + device-status snapshot of every zone
+// the user can see from the LATEST device data already cached by the appliance syncs (Monitoring Sync / 30-min auto-sync).
+// It never calls Dell OME / HPE OneView itself, so it is instant and adds no appliance load.
+app.post('/api/monitoring/firmware-compliance/sync', authenticateToken, async (req, res) => {
   try {
     await ensureFwComplianceLoaded();
     const allowed = await getAllowedSitesForUser(req.user);
     const [zoneRows] = await pool.query('SELECT DISTINCT site, zone_name AS zone FROM zones WHERE site IN (?)', [allowed.length ? allowed : ['__none__']]);
-    const rows = [], zones = [];
-    zoneRows.forEach((z) => {
-      ['OME', 'ONEVIEW'].forEach((vk) => {
-        if (!getMonitorConfig(vk, z.site, z.zone)) return;
-        const snap = fwComplianceCache[snapshotKey(vk, z.site, z.zone)];
-        zones.push({ vendor: vk, site: z.site, zone: z.zone, reported: !!snap, fetchedAt: snap ? snap.fetchedAt : null, count: snap ? snap.items.length : 0 });
-        if (snap) snap.items.forEach((it) => rows.push({ vendor: vk, site: z.site, zone: z.zone, ...it, fetchedAt: snap.fetchedAt }));
-      });
-    });
-    res.json({ rows, zones, lastRunAt: lastAutoSyncAt ? lastAutoSyncAt.getTime() : null, intervalMs: AUTO_SYNC_INTERVAL_MS, running: autoSyncRunning });
+    let updated = 0, noCache = 0;
+    for (const z of zoneRows) {
+      for (const vk of ['OME', 'ONEVIEW']) {
+        if (!getMonitorConfig(vk, z.site, z.zone)) continue;
+        if (!getCachedDevicesOnly(vk, z.site, z.zone)) { noCache++; continue; }
+        await refreshFwCompliance(vk, z.site, z.zone);
+        updated++;
+      }
+    }
+    res.json({ updated, noCache, at: Date.now(), data: await buildFwCompliancePayload(req.user) });
   } catch (e) { sendErr(res, e); }
 });
 
