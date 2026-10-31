@@ -624,7 +624,9 @@ function appBundlePath() {
   } catch (e) { /* no minified build */ }
   return src;
 }
-app.get('/app-compiled.js', (req, res, next) => sendStaticFile(req, res, next, appBundlePath(), req.query.v ? APP_CACHE : 'no-cache'));
+// The bundle is ALWAYS revalidated (ETag/304 costs a few bytes): a copied-over app-compiled.js must reach every browser on its next
+// load, never from a 24 h cache entry. X-App-Bundle tells which file was served (min/src + content hash) so a stale deployment is visible.
+app.get('/app-compiled.js', (req, res, next) => { const abs = appBundlePath(); res.set('X-App-Bundle', `${abs.endsWith('.min.js') ? 'min' : 'src'}:${_bundleCheck.hash}`); sendStaticFile(req, res, next, abs, 'no-cache'); });
 // Production HTML: always revalidated (ETag -> 304 when unchanged) so a deployment is picked up at once.
 // Served through getRenderedIndex(), not sendStaticFile(), because the app-compiled.js ?v= cache-buster
 // inside it is rewritten live from the bundle's own content hash - see getRenderedIndex() above.
