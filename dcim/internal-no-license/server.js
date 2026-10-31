@@ -1184,6 +1184,9 @@ async function initDB() {
     try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_port INT DEFAULT 443'); } catch (e) { /* already exists */ }
     try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_version VARCHAR(20)'); } catch (e) { /* already exists */ }
     try { await conn.query('ALTER TABLE assets ADD COLUMN bmc_firmware VARCHAR(100)'); } catch (e) { /* already exists */ }
+    // Host BIOS version exactly as the BMC reports it on every Redfish sync (always overwritten with the latest
+    // reading - unlike assets.firmware, which only fills once if blank).
+    try { await conn.query('ALTER TABLE assets ADD COLUMN bios_version VARCHAR(100)'); } catch (e) { /* already exists */ }
     try { await conn.query('ALTER TABLE assets ADD COLUMN health_status VARCHAR(20)'); } catch (e) { /* already exists */ }
     try { await conn.query('ALTER TABLE assets ADD COLUMN power_state VARCHAR(20)'); } catch (e) { /* already exists */ }
     try { await conn.query('ALTER TABLE assets ADD COLUMN last_redfish_sync_at DATETIME NULL'); } catch (e) { /* already exists */ }

@@ -416,6 +416,8 @@ const api = {
     // database problem. Raised to comfortably clear the backend's own ceiling.
     detectRedfish: (body) => apiFetch('/monitoring/redfish/detect', { method: 'POST', body: JSON.stringify(body), timeoutMs: 35000 }),
     saveRedfishCredentials: (assetId, body) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/credentials', { method: 'PUT', body: JSON.stringify(body) }),
+    startRedfishSync: (assetIds, site) => apiFetch('/monitoring/redfish/sync', { method: 'POST', body: JSON.stringify({ assetIds, site }) }),
+    getRedfishSyncJob: (jobId) => apiFetch('/monitoring/redfish/sync/' + encodeURIComponent(jobId)),
     syncRedfishAsset: (assetId) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/sync', { method: 'POST', timeoutMs: 35000 }),
     // Discover and Apply no longer run as one long held-open request - a scan across a large
     // site (1000s of assets) can legitimately take minutes, and a request held open that long
@@ -1584,7 +1586,7 @@ const REDFISH_COLUMNS = [
     { key: "powerState", label: "Power State" },
     { key: "powerWatts", label: "Power (W)", format: (v) => (v == null ? "—" : `${v} W`) },
     { key: "alertCount", label: "Alerts", format: (v) => (v == null ? "—" : String(v)) },
-    { key: "bmcFirmware", label: "BMC Firmware" },
+    { key: "biosVersion", label: "BIOS Version" },
     { key: "lastSyncAt", label: "Last Sync", format: (v) => (v ? new Date(v).toLocaleString() : "Never") },
 ];
 function rowsFromColumns(items, columns) { return items.map((r) => { const obj = {}; columns.forEach((c) => { obj[c.label] = c.format ? c.format(r[c.key], r) : (r[c.key] != null ? r[c.key] : ""); }); return obj; }); }
@@ -8269,8 +8271,7 @@ function RedfishDetectModal({ asset, onClose, onSaved }) {
                         React.createElement("div", null, React.createElement("span", { style: { color: "#64748B" } }, "Model: "), React.createElement("b", null, result.model || "—")),
                         React.createElement("div", null, React.createElement("span", { style: { color: "#64748B" } }, "Power draw: "), React.createElement("b", null, result.powerWatts != null ? result.powerWatts + " W" : "—")),
                         React.createElement("div", null, React.createElement("span", { style: { color: "#64748B" } }, "Serial: "), React.createElement("b", { style: { fontFamily: "'JetBrains Mono'" } }, result.serialNumber || "—")),
-                        React.createElement("div", null, React.createElement("span", { style: { color: "#64748B" } }, "BMC firmware: "), React.createElement("b", null, result.bmcFirmware || "—")),
-                        React.createElement("div", null, React.createElement("span", { style: { color: "#64748B" } }, "BIOS / host firmware: "), React.createElement("b", null, result.biosVersion || "—"))),
+                        React.createElement("div", null, React.createElement("span", { style: { color: "#64748B" } }, "BIOS version: "), React.createElement("b", { style: { fontFamily: "'JetBrains Mono'" } }, result.biosVersion || "—"))),
                     (result.temperatures || []).length > 0 && React.createElement("div", { style: { marginTop: 12 } },
                         React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, fontWeight: 700, color: "#475569", marginBottom: 5 } }, "Temperatures"),
                         React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, result.temperatures.map((t, i) => React.createElement("span", { key: i, style: { fontFamily: "Inter", fontSize: 11, padding: "3px 9px", borderRadius: 7, background: "#fff", border: "1px solid #E2E8F0" } }, `${t.name}: ${t.readingCelsius != null ? t.readingCelsius + "°C" : "—"}`)))),
@@ -8403,6 +8404,7 @@ function RedfishTab({ canEdit, allowedSites }) {
     const [openFilter, setOpenFilter] = useState(null);
     const [selectedIds, setSelectedIds] = useState(() => new Set());
     const [busyAction, setBusyAction] = useState(false);
+    const [syncState, setSyncState] = useState(null); // { running, processed, total, msg }
     const tableWrapRef = useRef(null);
     const load = () => { api.getRedfishAssets(site, showIgnored).then((r) => { setAssets(r); setErr(""); setSelectedIds(new Set()); }).catch((e) => setErr(e.message || "Could not load devices")); };
     useEffect(() => { load(); }, [site, showIgnored]);
@@ -8424,6 +8426,27 @@ function RedfishTab({ canEdit, allowedSites }) {
         catch (e) { alert(e.message || "Could not remove the selected devices' Redfish configuration"); }
         finally { setBusyAction(false); }
     };
+    // Sync = re-poll the saved-credential devices right now. Selected rows if any are ticked,
+    // otherwise every device currently shown (after the location / category / column filters).
+    const runSync = async (onlySelected) => {
+        if (syncState && syncState.running) return;
+        const base = onlySelected ? filtered.filter((a) => selectedIds.has(a.id)) : filtered;
+        const ids = base.filter((a) => a.redfishConfigured && !a.monitorIgnored).map((a) => a.id);
+        if (!ids.length) { setSyncState({ running: false, msg: "No configured devices to sync in this view - use Configure or Discover first." }); return; }
+        setSyncState({ running: true, processed: 0, total: ids.length, msg: "" });
+        try {
+            const st = await api.startRedfishSync(ids, "all");
+            let job = null;
+            for (let i = 0; i < 900; i++) {
+                await new Promise((r) => setTimeout(r, 1200));
+                job = await api.getRedfishSyncJob(st.jobId);
+                setSyncState({ running: job.status !== "done", processed: job.processed, total: job.total, msg: "" });
+                if (job.status === "done") break;
+            }
+            await load();
+            setSyncState({ running: false, msg: job ? `Synced ${job.reachable} of ${job.total} device(s)` + (job.unreachable ? ` · ${job.unreachable} unreachable` : "") + (job.skipped ? ` · ${job.skipped} skipped (already syncing)` : "") + " · " + new Date().toLocaleTimeString() : "" });
+        } catch (e) { setSyncState({ running: false, msg: e.message || "Sync failed", error: true }); }
+    };
     const ignoreSelected = async (ignored) => {
         const ids = Array.from(selectedIds); if (!ids.length) return;
         setBusyAction(true);
@@ -8441,7 +8464,7 @@ function RedfishTab({ canEdit, allowedSites }) {
             case "mgmtIp": return a.mgmtIp ? React.createElement("a", { href: `https://${a.mgmtIp}`, target: "_blank", rel: "noopener", style: { color: "#2563EB", textDecoration: "underline", fontFamily: "'JetBrains Mono'" } }, a.mgmtIp) : "—";
             case "healthStatus": return React.createElement(RedfishHealthPill, { status: a.healthStatus });
             case "alertCount": return a.alertCount == null ? React.createElement("span", { style: { color: "#94A3B8" } }, "—") : a.alertCount === 0 ? React.createElement("span", { style: { color: "#059669", fontWeight: 700 } }, "0") : React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 5, color: "#DC2626", fontWeight: 700 } }, React.createElement("span", { style: { width: 6, height: 6, borderRadius: "50%", background: "#DC2626" } }), a.alertCount);
-            case "bmcFirmware": return React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontSize: 11.5 } }, a.bmcFirmware || "—");
+            case "biosVersion": return React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontSize: 11.5 } }, a.biosVersion || "—");
             case "lastSyncAt": return React.createElement("span", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748B" } }, a.lastSyncAt ? new Date(a.lastSyncAt).toLocaleString() : "Never");
             case "rackNo": return a.rackNo || "—";
             case "hardwareType": return a.hardwareType || "Uncategorized";
@@ -8455,6 +8478,7 @@ function RedfishTab({ canEdit, allowedSites }) {
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15.5, fontWeight: 700, color: "#0F172A" } }, "Multi-Vendor Server Hardware (Redfish)"),
                 React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#475569", marginTop: 3, maxWidth: 680, lineHeight: 1.5 } }, "Works directly against any server's management port (Dell iDRAC, HPE iLO, Lenovo XCC, Cisco standalone IMC, NVIDIA DGX, and any other Redfish-capable BMC) — no vendor appliance needed. This is additional to Dell OME / HPE OneView above, not a replacement.")),
             canEdit && React.createElement("div", { style: { display: "flex", gap: 8 } },
+                React.createElement("button", { onClick: () => runSync(false), disabled: !!(syncState && syncState.running), className: "neu-btn-secondary", title: "Re-read health, power, alerts and BIOS version from every configured device shown below" }, syncState && syncState.running ? `Syncing ${syncState.processed || 0}/${syncState.total || 0}…` : "Sync"),
                 React.createElement("button", { onClick: () => setDiscoverOpen(true), className: "neu-btn-secondary" }, "Discover"),
                 React.createElement("button", { onClick: () => setModalAsset(null), className: "neu-btn-primary" }, "+ Test & Detect"))),
         React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 14 } },
@@ -8470,10 +8494,12 @@ function RedfishTab({ canEdit, allowedSites }) {
             activeColumnFilterCount > 0 && React.createElement("button", { onClick: () => setColumnFilters(makeEmptyListColumnFilters(REDFISH_COLUMNS)), className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "8px 11px" } }, `Clear column filters (${activeColumnFilterCount})`)),
         canEdit && selectedIds.size > 0 && React.createElement("div", { className: "neu-card", style: { display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", marginBottom: 10, flexWrap: "wrap" } },
             React.createElement("strong", { style: { fontFamily: "Inter", fontSize: 12, color: "#4F46E5" } }, `${selectedIds.size} selected`),
+            React.createElement("button", { disabled: busyAction || !!(syncState && syncState.running), onClick: () => runSync(true), className: "neu-btn-primary", style: { fontSize: 11.5 } }, "Sync Selected"),
             React.createElement("button", { disabled: busyAction, onClick: deleteSelected, className: "neu-btn-secondary", style: { fontSize: 11.5, color: "#DC2626" } }, "Delete Selected (Remove Redfish Config)"),
             React.createElement("button", { disabled: busyAction, onClick: () => ignoreSelected(true), className: "neu-btn-secondary", style: { fontSize: 11.5 } }, "Ignore Selected"),
             React.createElement("button", { disabled: busyAction, onClick: () => ignoreSelected(false), className: "neu-btn-secondary", style: { fontSize: 11.5 } }, "Un-ignore Selected"),
             React.createElement("button", { onClick: () => setSelectedIds(new Set()), className: "neu-btn-secondary", style: { fontSize: 11.5 } }, "Clear")),
+        syncState && syncState.msg && React.createElement("div", { style: { padding: "8px 12px", borderRadius: 9, background: syncState.error ? "rgba(220,38,38,.08)" : "rgba(5,150,105,.08)", border: "1px solid " + (syncState.error ? "rgba(220,38,38,.25)" : "rgba(5,150,105,.25)"), color: syncState.error ? "#B91C1C" : "#047857", fontFamily: "Inter", fontSize: 12, marginBottom: 12 } }, syncState.msg),
         err && React.createElement("div", { style: { padding: "9px 12px", borderRadius: 9, background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.25)", color: "#B91C1C", fontFamily: "Inter", fontSize: 12, marginBottom: 14 } }, err),
         !assets && !err && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 13, color: "#64748B", padding: 20 } }, "Loading…"),
         assets && !assets.length && React.createElement("div", { style: { padding: "40px 20px", textAlign: "center", fontFamily: "Inter", fontSize: 13, color: "#64748B" } }, "No assets with a management IP yet. Add one from Asset Inventory, or click \"Discover\" to scan assets that already have one."),

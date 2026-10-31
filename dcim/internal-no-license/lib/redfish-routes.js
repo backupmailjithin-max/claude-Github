@@ -465,7 +465,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
     // asset-tag-style value, not the vendor's real hardware serial, and is COALESCE-protected
     // so it's never silently overwritten. This field always reflects the latest Redfish poll.
     redfishSerialNumber: a.redfish_serial_number,
-    redfishConfigured: !!a.redfish_username, redfishVersion: a.redfish_version, bmcFirmware: a.bmc_firmware,
+    redfishConfigured: !!a.redfish_username, redfishVersion: a.redfish_version, bmcFirmware: a.bmc_firmware, biosVersion: a.bios_version,
     healthStatus: a.health_status, powerState: a.power_state, alertCount: a.redfish_alert_count,
     powerWatts: a.redfish_power_watts, hardwareType: a.hardware_type, monitorIgnored: !!a.redfish_monitor_ignored,
     lastSyncAt: a.last_redfish_sync_at, lastError: a.last_redfish_error,
@@ -534,7 +534,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
         if (!rows.length || !allowed.includes(rows[0].site)) continue;
         await pool.query(
           `UPDATE assets SET redfish_username = NULL, redfish_password = NULL, redfish_port = NULL,
-             redfish_version = NULL, bmc_firmware = NULL, health_status = NULL, power_state = NULL,
+             redfish_version = NULL, bmc_firmware = NULL, bios_version = NULL, health_status = NULL, power_state = NULL,
              redfish_alert_count = NULL, redfish_power_watts = NULL, redfish_monitor_ignored = 0,
              redfish_serial_number = NULL, last_redfish_sync_at = NULL, last_redfish_error = NULL
            WHERE id = ?`,
@@ -580,10 +580,10 @@ module.exports = function registerRedfishRoutes(app, deps) {
          manufacturer = COALESCE(NULLIF(manufacturer, ''), ?), model = COALESCE(NULLIF(model, ''), ?),
          serial_number = COALESCE(NULLIF(serial_number, ''), ?), firmware = COALESCE(NULLIF(firmware, ''), ?),
          redfish_serial_number = ?,
-         bmc_firmware = ?, redfish_version = ?, health_status = ?, power_state = ?, redfish_alert_count = ?,
+         bmc_firmware = ?, bios_version = COALESCE(?, bios_version), redfish_version = ?, health_status = ?, power_state = ?, redfish_alert_count = ?,
          redfish_power_watts = ?, last_redfish_sync_at = NOW(), last_redfish_error = NULL
        WHERE id = ?`,
-      [r.vendor, r.model, r.serialNumber, r.biosVersion, r.serialNumber, r.bmcFirmware, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
+      [r.vendor, r.model, r.serialNumber, r.biosVersion, r.serialNumber, r.bmcFirmware, r.biosVersion, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
     );
     return { reachable: true, ...r };
   }
@@ -602,6 +602,58 @@ module.exports = function registerRedfishRoutes(app, deps) {
         res.json(result);
       } finally { syncInFlight.delete(asset.id); }
     } catch (e) { sendErr(res, e); }
+  });
+
+  // Bulk "Sync": re-polls every configured, non-ignored device in scope (the given assetIds, or
+  // everything the caller can see at `site`) with its saved credentials, so the Multi-Vendor
+  // table's health / power / alerts / BIOS version are refreshed on demand instead of waiting for
+  // the background sweep. Runs as a background job (same reason as Discover/Apply: a big site can
+  // outlast a proxy's request timeout) - the page polls GET /sync/:jobId for progress. Devices
+  // already mid-sync are skipped, never double-hit.
+  const syncJobs = new Map();
+  let bulkSyncRunning = false;
+  app.post('/api/monitoring/redfish/sync', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+    try {
+      if (bulkSyncRunning) return res.status(409).json({ error: 'A Redfish sync is already running - wait for it to finish.' });
+      const { assetIds, site } = req.body || {};
+      const allowed = await getAllowedSitesForUser(req.user);
+      const conditions = ["mgmt_ip IS NOT NULL", "mgmt_ip <> ''", "redfish_username IS NOT NULL", "redfish_username <> ''", "redfish_monitor_ignored = 0"];
+      const params = [];
+      if (Array.isArray(assetIds) && assetIds.length) { conditions.push(`id IN (${assetIds.slice(0, 2000).map(() => '?').join(',')})`); params.push(...assetIds.slice(0, 2000)); }
+      if (site && site !== 'all') {
+        if (!allowed.includes(site)) return res.status(403).json({ error: 'Access denied for this site' });
+        conditions.push('site = ?'); params.push(site);
+      } else {
+        await applySiteScope(allowed, conditions, params);
+      }
+      const [rows] = await pool.query(`SELECT * FROM assets WHERE ${conditions.join(' AND ')}`, params);
+      const jobId = genId ? genId('RFS') : 'RFS-' + Date.now();
+      const job = { jobId, status: 'running', total: rows.length, processed: 0, reachable: 0, unreachable: 0, skipped: 0, startedAt: Date.now(), finishedAt: null };
+      syncJobs.set(jobId, job);
+      scheduleJobCleanup(syncJobs, jobId);
+      auditLog(req, 'REDFISH_SYNC', { entity: 'asset', status: 'success' }, { count: rows.length });
+      res.json({ jobId, total: rows.length });
+      bulkSyncRunning = true;
+      let idx = 0;
+      async function worker() {
+        while (idx < rows.length) {
+          const asset = rows[idx++];
+          if (syncInFlight.has(asset.id)) { job.skipped++; job.processed++; continue; }
+          syncInFlight.add(asset.id);
+          try { const r = await syncOneAsset(asset); if (r.reachable) job.reachable++; else job.unreachable++; }
+          catch (e) { job.unreachable++; }
+          finally { syncInFlight.delete(asset.id); job.processed++; }
+        }
+      }
+      Promise.all(Array.from({ length: Math.min(DISCOVERY_CONCURRENCY, rows.length) }, worker))
+        .catch((e) => log.warn('[redfish] bulk sync error: ' + e.message))
+        .finally(() => { job.status = 'done'; job.finishedAt = Date.now(); bulkSyncRunning = false; });
+    } catch (e) { bulkSyncRunning = false; sendErr(res, e); }
+  });
+  app.get('/api/monitoring/redfish/sync/:jobId', authenticateToken, async (req, res) => {
+    const job = syncJobs.get(req.params.jobId);
+    if (!job) return res.status(404).json({ error: 'Sync job not found (it may have expired)' });
+    res.json(job);
   });
 
   // In-memory job state for the two bulk Redfish operations below. A site can have 1000s of
@@ -791,10 +843,10 @@ module.exports = function registerRedfishRoutes(app, deps) {
                  manufacturer = COALESCE(NULLIF(manufacturer, ''), ?), model = COALESCE(NULLIF(model, ''), ?),
                  serial_number = COALESCE(NULLIF(serial_number, ''), ?), firmware = COALESCE(NULLIF(firmware, ''), ?),
                  redfish_serial_number = ?,
-                 bmc_firmware = ?, redfish_version = ?, health_status = ?, power_state = ?, redfish_alert_count = ?,
+                 bmc_firmware = ?, bios_version = COALESCE(?, bios_version), redfish_version = ?, health_status = ?, power_state = ?, redfish_alert_count = ?,
                  redfish_power_watts = ?, last_redfish_sync_at = NOW(), last_redfish_error = NULL
                WHERE id = ?`,
-              [r.credential.username, r.credential.password || '', r.vendor, r.model, r.serialNumber, r.biosVersion, r.serialNumber, r.bmcFirmware, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
+              [r.credential.username, r.credential.password || '', r.vendor, r.model, r.serialNumber, r.biosVersion, r.serialNumber, r.bmcFirmware, r.biosVersion, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
             );
             job.applied++;
           } finally { job.processed++; }
