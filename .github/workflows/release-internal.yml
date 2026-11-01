@@ -1,0 +1,98 @@
+name: Release - Internal update package
+
+# Pipeline for the INTERNAL edition (source: dcim/webapp + the one-file null-key overlay in dcim/internal-no-license,
+# licensing OFF). Produces a changed-files-only update package for a server that is already running, then proves it:
+# the package is applied to a stand-in for production (the baseline build), health-checked, rolled back, and the old
+# files are compared byte for byte. No installer, no runtimes, no customer packages are built here.
+# Note: GitHub lists "Run workflow" only for workflow files that exist on the default branch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_ref:
+        description: "Git ref (commit, tag or branch) of the build that is running in production now"
+        required: true
+        default: "fb3e20e"
+      allow_dependency_change:
+        description: "Allow npm dependency changes (you must run npm ci on the server yourself)"
+        type: boolean
+        default: false
+  push:
+    tags: ["internal-v*"]   # tag runs use the repository variable INTERNAL_BASELINE_REF as the baseline
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-internal-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    env:
+      BASELINE: ${{ inputs.baseline_ref || vars.INTERNAL_BASELINE_REF }}
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-pw
+          MYSQL_DATABASE: dcim_update_test
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pci-root-pw"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+
+      - name: Baseline given
+        run: |
+          [ -n "$BASELINE" ] || { echo "::error::No baseline. Give baseline_ref (workflow run) or set repository variable INTERNAL_BASELINE_REF."; exit 1; }
+          git rev-parse --verify "$BASELINE^{commit}"
+
+      - name: Install and unit tests
+        working-directory: dcim/webapp
+        run: |
+          npm ci --omit=dev || npm install --omit=dev
+          npm test
+
+      - name: Internal overlay is the licence-free one
+        run: |
+          grep -q "LICENSE_PUBLIC_KEY_PEM: *null" dcim/internal-no-license/lib/license-public-key.js
+
+      - name: Build update package (changed files only)
+        run: |
+          extra=""; [ "${{ inputs.allow_dependency_change }}" = "true" ] && extra="--allow-dependency-change"
+          bash packaging/internal/build-internal-update.sh --baseline "$BASELINE" --out dist $extra
+
+      - name: Package holds no runtimes, installers, tools or keys
+        run: |
+          z="$(ls dist/Internal-Update-Package-*.zip)"
+          if unzip -Z1 "$z" | grep -qiE 'node_modules|runtime/|\.exe$|\.deb$|\.rpm$|\.run$|license-(keygen|issue|generator|fingerprint)|seed-|cleanup-obsolete|build-min|\.pem$|(^|/)\.env$'; then
+            echo "::error::forbidden content in update package"; unzip -Z1 "$z"; exit 1; fi
+          unzip -Z1 "$z"
+
+      - name: Prove it - apply to the old build, health check, roll back
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: "3306"
+          DB_USER: root
+          DB_PASSWORD: ci-root-pw
+          DB_NAME: dcim_update_test
+        run: bash packaging/internal/test-update-cycle.sh --baseline "$BASELINE" --zip "$(ls dist/Internal-Update-Package-*.zip)"
+
+      - name: Checksum and summary
+        run: |
+          (cd dist && sha256sum Internal-Update-Package-*.zip) | tee dist/SHA256SUMS-internal.txt
+          { echo "### Internal update package"; echo "Baseline: \`$BASELINE\`  Source: \`$GITHUB_SHA\`"; echo '```'; cat dist/SHA256SUMS-internal.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: internal-update-package
+          path: |
+            dist/Internal-Update-Package-*.zip
+            dist/SHA256SUMS-internal.txt

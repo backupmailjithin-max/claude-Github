@@ -12,7 +12,17 @@ on:
   # Appliance) call this same, already-proven build+kit-smoke-test suite as
   # a reusable workflow instead of duplicating it. Purely additive - every
   # existing trigger/behavior above is unchanged.
-  workflow_call: {}
+  workflow_call:
+    inputs:
+      # Set by release-commercial.yml: runs every package gate in release mode (DCIM_RELEASE_BUILD=1), which
+      # refuses to build without the pinned vendor signing key and with unfilled customer-guide placeholders.
+      release_build:
+        type: boolean
+        default: false
+
+# Additive: empty/0 for every existing trigger, so behaviour is unchanged unless a caller asks for a release build.
+env:
+  DCIM_RELEASE_BUILD: ${{ inputs.release_build && '1' || '0' }}
 
 jobs:
   build-deb:
