@@ -13362,8 +13362,8 @@ function DashboardOverview({ issues, assets, rackComponents = [], activities, ov
     // Hardware Mix: one bar per hardware type, segmented by actual locations.
     const hardwareMix = {};
     activeAssets.forEach(a => {
-        const raw = a.hardwareType && String(a.hardwareType).trim() ? String(a.hardwareType).trim() : "Unknown";
-        const key = hwKey(raw);
+        const raw = dashMakeLabel(a.manufacturer); // Hardware Mix is by hardware make (manufacturer), not hardware type
+        const key = raw.toLowerCase();
         if (!hardwareMix[key])
             hardwareMix[key] = { label: raw, sites: {} };
         hardwareMix[key].sites[a.site] = (hardwareMix[key].sites[a.site] || 0) + 1;
@@ -13519,9 +13519,9 @@ function DashboardOverview({ issues, assets, rackComponents = [], activities, ov
                                     a.rackNo ? ` · ${a.rackNo}` : "")),
                             React.createElement("span", { className: "sample-activity-date" }, date ? String(date).slice(0, 10) : "—"));
                     }))),
-            React.createElement(DashCard, { title: "Hardware Mix", sub: `${hardwareRows.length} hardware type${hardwareRows.length === 1 ? "" : "s"} \u00B7 location-wise distribution`, action: React.createElement("button", { onClick: () => goTo("inventory", "all"), className: "sample-link-btn" }, "Inventory"), className: "hardware-mix-card" },
-                React.createElement("div", { className: "hw-hbar-chart", role: "img", "aria-label": "Hardware mix: every hardware type, split by location" },
-                    hardwareRows.map((row, ri) => { const rowBase = hardwareColor(row.hw); const shades = hwRowShades(rowBase, hardwareLocations.length); return (React.createElement("div", { key: row.hw, className: "hw-hbar-row" },
+            React.createElement(DashCard, { title: "Hardware Mix", sub: `${hardwareRows.length} hardware make${hardwareRows.length === 1 ? "" : "s"} \u00B7 location-wise distribution`, action: React.createElement("button", { onClick: () => goTo("inventory", "all"), className: "sample-link-btn" }, "Inventory"), className: "hardware-mix-card" },
+                React.createElement("div", { className: "hw-hbar-chart", role: "img", "aria-label": "Hardware mix: every hardware make, split by location" },
+                    hardwareRows.map((row, ri) => { const rowBase = dashMakeColor(row.hw); const shades = hwRowShades(rowBase, hardwareLocations.length); return (React.createElement("div", { key: row.hw, className: "hw-hbar-row" },
                         React.createElement("span", { className: "hw-hbar-label", title: row.hw }, row.hw),
                         React.createElement("div", { className: "hw-hbar-track" },
                             React.createElement("div", { className: "hw-hbar-stack", style: { width: `${Math.max((row.total / maxHardware) * 100, 6)}%` } }, hardwareLocations.filter(site => (row.sites[site] || 0) > 0).map(site => {
@@ -13536,7 +13536,7 @@ function DashboardOverview({ issues, assets, rackComponents = [], activities, ov
                         site,
                         " ",
                         React.createElement("b", null, activeAssets.filter(a => a.site === site).length)))),
-                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 9, color: "#475569", marginTop: 4 } }, "Each hardware type keeps its own color; light → dark within a row follows the location order above."))),
+                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 9, color: "#475569", marginTop: 4 } }, "Each hardware make keeps its own color; light → dark within a row follows the location order above."))),
             React.createElement(DashCard, { title: "Material Movement Details", sub: `${totalMovements} total records · ${inwardMovements} inward · ${outwardMovements} outward`, action: React.createElement("button", { onClick: () => goTo("movements", "all"), className: "sample-link-btn" }, "View all") },
                 React.createElement("div", { className: "sample-movement-list" },
                     recentMovementRows.length === 0 && React.createElement("div", { className: "sample-empty" }, "No material movement records available."),
@@ -13963,16 +13963,20 @@ td{padding:8px 10px;border-bottom:1px solid #1E293B;color:#E2E8F0}
                     React.createElement(Download, { s: 24, c: "#fff" })))));
 }
 /* ===== OVERALL SUMMARY REPORT (Dark Theme) ===== */
-function OverallSummaryModal({ assets, rackComponents, issues, activities, movements, racks, zones, allowedSites, onClose }) {
+function OverallSummaryModal({ assets, rackComponents, issues, activities, movements, racks, zones, allowedSites, pduSummary, onClose }) {
     const today = new Date();
     // Rack Elevation = Device U + Component U — merge components into the same
     // shape so zone/rack U-usage below counts both, same as DC Capacity.
+    // Asset counts are DEVICES only (same as the Dashboard's Installed Devices); rack components are merged in
+    // below only for rack U-space, never for any asset count.
+    const deviceAssets = (assets || []).filter((a) => (a && a.lifecycleStatus || "Active") === "Active");
     const activeAssets = [
-        ...(assets || []).filter((a) => (a && a.lifecycleStatus || "Active") === "Active"),
+        ...deviceAssets,
         ...(rackComponents || []).map(componentAsAssetShape),
     ];
     // Every permitted location is listed (even a brand-new one with no data yet), plus any site that only appears in the data.
-    const allSites = [...new Set([...(allowedSites || []), ...activeAssets.map(a => a.site), ...issues.map(i => i.site), ...activities.map(a => a.site), ...(movements || []).map(m => m.site), ...(zones || []).map(z => z.site)].filter(Boolean))].sort();
+    const allSites = [...new Set([...(allowedSites || []), ...deviceAssets.map(a => a.site), ...issues.map(i => i.site), ...activities.map(a => a.site), ...(movements || []).map(m => m.site), ...(zones || []).map(z => z.site)].filter(Boolean))].sort();
+    const singleLoc = allSites.length === 1; // one location: location-wise repeats of the same numbers are hidden
     // Re-use the same parse helpers from the main app
     function parseUPosition(pos) {
         const s = String(pos || "").trim();
@@ -14015,7 +14019,8 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                 ...siteAssets.map(a => a.zone || 'AZ-1'),
                 ...siteRacks.map(r => r.zone),
             ].filter(Boolean))];
-        const byHw = groupByHardwareType(siteAssets);
+        const siteDevices = deviceAssets.filter(a => a.site === site);
+        const byHw = groupByHardwareType(siteDevices);
         const bySeverity = {
             // "Open" means the same thing here as in Issue Tracker / Dashboard (isIssueOpen), not just "no completed date".
             Critical: siteIssues.filter(i => i.severity === 'critical' && isIssueOpen(i)).length,
@@ -14038,7 +14043,7 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
             const utilPct = totalU > 0 ? Math.round((usedU / totalU) * 100) : 0;
             return { zone: zn, totalRacks: totalR, usedRacks: usedR, emptyRacks: emptyR, utilPct, totalU, usedU };
         });
-        return { siteAssets, siteIssues, siteActivities, siteMovements, siteRacks, siteZones, byHw, bySeverity, zoneRackData };
+        return { siteAssets, siteDevices, siteIssues, siteActivities, siteMovements, siteRacks, siteZones, byHw, bySeverity, zoneRackData };
     }
     const colors = ['#6366F1', '#0EA5E9', '#10B981', '#F59E0B', '#EC4899', '#8B5CF6', '#DC2626', '#14B8A6', '#06B6D4', '#D97706'];
     const pieColors = ['#6366F1', '#0EA5E9', '#10B981', '#F59E0B', '#EC4899', '#8B5CF6'];
@@ -14073,7 +14078,7 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
         }));
     }
     // Global totals
-    const totalAssets = activeAssets.length;
+    const totalAssets = deviceAssets.length;
     const totalActivities = activities.length;
     // Same rack count the per-zone cards below (and DC Capacity) show - not just the racks planned on the floor.
     const totalRacks = allSites.reduce((sum, st) => sum + siteData(st).zoneRackData.reduce((z, d) => z + d.totalRacks, 0), 0);
@@ -14097,6 +14102,115 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
     const actSiteEntries = Object.entries(actBySite).sort((a, b) => b[1] - a[1]);
     const actReportSites = [...new Set([...Object.keys(actBySite), ...allSites])].sort();
     const summaryRef = useRef(null);
+    // Dashboard-module data that lives on the server (all are cache / database reads, no appliance calls).
+    const [mods, setMods] = useState({ power: null, spc: null, fw: null, targets: null });
+    useEffect(() => {
+        let alive = true;
+        const get = (fn) => fn().catch(() => null);
+        Promise.all([get(() => api.getPowerSummary()), get(() => api.getServerPowerConsumption()), get(() => api.getFirmwareCompliance()), get(() => api.getFirmwareModelTargets())])
+            .then(([power, spc, fw, targets]) => { if (alive) setMods({ power, spc, fw, targets }); });
+        return () => { alive = false; };
+    }, []);
+
+
+    // ---- Single-location Assets card: total devices, zone-wise counts, and rack components (kept separate) as a pie ----
+    const assetsSingle = () => {
+        const E = React.createElement;
+        const zoneCounts = {};
+        deviceAssets.forEach((a) => { const z = a.zone || "AZ-1"; zoneCounts[z] = (zoneCounts[z] || 0) + 1; });
+        const zoneList = Object.entries(zoneCounts).sort((x, y) => x[0].localeCompare(y[0], undefined, { numeric: true }));
+        const maxZ = Math.max(1, ...zoneList.map((e) => e[1]));
+        const compCounts = {};
+        (rackComponents || []).forEach((c) => { const k = String(c.hardwareType || "Other").trim() || "Other"; compCounts[k] = (compCounts[k] || 0) + 1; });
+        const compList = Object.entries(compCounts).sort((x, y) => y[1] - x[1]);
+        const compTotal = compList.reduce((n, e) => n + e[1], 0);
+        const lab = { fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "#64748B", fontWeight: 700, marginBottom: 8 };
+        return E("div", { "data-summary": "assets-single", style: { background: "linear-gradient(135deg, #1E293B 0%, #0F172A 100%)", borderRadius: 12, padding: 16, border: "1px solid #334155", display: "grid", gridTemplateColumns: "minmax(140px, 0.6fr) minmax(0, 1fr) minmax(0, 1fr)", gap: 20, alignItems: "stretch" } },
+            E("div", { style: { display: "flex", flexDirection: "column", justifyContent: "center", borderRight: "1px solid #334155", paddingRight: 16 } },
+                E("div", { style: lab }, "Total Assets"),
+                E("div", { style: { fontSize: 38, fontWeight: 800, color: "#6366F1", fontFamily: "'Space Grotesk'", lineHeight: 1 } }, totalAssets),
+                E("div", { style: { fontSize: 10, color: "#94A3B8", marginTop: 6 } }, "installed devices"),
+                E("div", { style: { fontSize: 9.5, color: "#64748B", marginTop: 3 } }, `+ ${compTotal} rack component${compTotal === 1 ? "" : "s"} (counted separately)`)),
+            E("div", { style: { minWidth: 0 } },
+                E("div", { style: lab }, "Zone-wise Assets"),
+                zoneList.length ? E("div", { style: { display: "flex", alignItems: "center", gap: 16 } },
+                    E("div", { style: { flexShrink: 0 } }, DonutChart(zoneCounts, 112, 15)),
+                    E("div", { style: { display: "flex", flexDirection: "column", gap: 5, minWidth: 0, flex: 1 } }, zoneList.map(([z, n], i) => E("div", { key: z, style: { display: "flex", alignItems: "center", gap: 7, fontSize: 10.5, color: "#CBD5E1" } },
+                        E("span", { style: { width: 8, height: 8, borderRadius: 2, background: pieColors[i % pieColors.length], flexShrink: 0 } }),
+                        E("span", { style: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, z),
+                        E("span", { style: { fontFamily: "'JetBrains Mono'", color: "#94A3B8" } }, `${n} (${Math.round(n / totalAssets * 100)}%)`))))) : E("div", { style: { fontSize: 11, color: "#64748B" } }, "No assets yet.")),
+            E("div", { style: { minWidth: 0, borderLeft: "1px solid #334155", paddingLeft: 18 } },
+                E("div", { style: lab }, "Rack Components"),
+                compTotal ? E("div", { style: { display: "flex", alignItems: "center", gap: 16 } },
+                    E("div", { style: { flexShrink: 0 } }, DonutChart(compCounts, 112, 15)),
+                    E("div", { style: { display: "flex", flexDirection: "column", gap: 5, minWidth: 0, flex: 1 } }, compList.map(([k, v], i) => E("div", { key: k, style: { display: "flex", alignItems: "center", gap: 7, fontSize: 10.5, color: "#CBD5E1" } },
+                        E("span", { style: { width: 8, height: 8, borderRadius: 2, background: pieColors[i % pieColors.length], flexShrink: 0 } }),
+                        E("span", { style: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, k),
+                        E("span", { style: { fontFamily: "'JetBrains Mono'", color: "#94A3B8" } }, `${v} (${Math.round(v / compTotal * 100)}%)`))))) : E("div", { style: { fontSize: 11, color: "#64748B", paddingTop: 6 } }, "No rack components recorded.")));
+    };
+    // ---- Operations snapshot: ONLY the Dashboard figures this summary did not already show, one row per location ----
+    const dashModules = () => {
+        const E = React.createElement;
+        const sc = siteColorMap(allSites);
+        const inScope = (x) => x && allSites.includes(x.site);
+        const pw = mods.power && Array.isArray(mods.power.sites) ? mods.power.sites.filter(inScope) : null;
+        const sp = mods.spc && Array.isArray(mods.spc.sites) ? mods.spc.sites.filter(inScope) : null;
+        const pduRows = pduSummary && Array.isArray(pduSummary.bySite) ? pduSummary.bySite.filter(inScope) : null;
+        let fwRows = null;
+        if (mods.fw && mods.targets) fwRows = (mods.fw.rows || []).filter(inScope).map((r) => { const list = (r.vendor === "OME" ? mods.targets.ome : mods.targets.oneview) || []; const tg = list.find((t) => fwcModelKey(t.model) === fwcModelKey(r.model)); return { ...r, status: fwcStatusOf(r.current, tg && tg.targetVersion).status }; });
+        const srv = deviceAssets.filter((a) => /server/i.test(String(a.hardwareType || "")));
+        const bucket = (i) => { const s2 = getStatus(i).label; return s2 === "Completed" ? "Completed" : ["Faulty part in store", "Returned to OEM"].includes(s2) ? "Resolved" : ["In progress", "Part received", "Scheduled", "Overdue"].includes(s2) ? "In Progress" : "New"; };
+        const lcN = (st, v) => (assets || []).filter((a) => a && a.site === st && a.lifecycleStatus === v).length;
+        const kw = (w) => (Number(w || 0) / 1000).toFixed(1);
+        const pctC = (p) => (p >= 85 ? "#F87171" : p >= 70 ? "#FBBF24" : "#34D399");
+        const dash = E("span", { style: { color: "#475569" } }, "—");
+        const mk = (st) => { const m = {}; srv.filter((a) => a.site === st).forEach((a) => { const k = dashMakeLabel(a.manufacturer); m[k] = (m[k] || 0) + 1; }); return m; };
+        // one entry per location
+        const rows = allSites.map((st) => {
+            const p = pw && pw.find((r) => r.site === st), s = sp && sp.find((r) => r.site === st), d = pduRows && pduRows.find((r) => r.site === st);
+            const f = fwRows ? fwcCount(fwRows.filter((r) => r.site === st)) : null;
+            const iss = issues.filter((i) => i.site === st);
+            return { st, p, s, d, f, makes: mk(st), srvN: srv.filter((a) => a.site === st).length,
+                iss: { New: iss.filter((i) => bucket(i) === "New").length, "In Progress": iss.filter((i) => bucket(i) === "In Progress").length, Resolved: iss.filter((i) => bucket(i) === "Resolved").length, Completed: iss.filter((i) => bucket(i) === "Completed").length },
+                tr: { pend: lcN(st, "Transferred"), store: lcN(st, "In Store"), rej: lcN(st, "Transfer Refused") } };
+        });
+        const sum = (f) => rows.reduce((n, r) => n + (f(r) || 0), 0);
+        const totals = { st: "All locations", p: { on: sum((r) => r.p && r.p.on), off: sum((r) => r.p && r.p.off), unknown: sum((r) => r.p && r.p.unknown) },
+            s: rows.some((r) => r.s) ? { loadWatts: sum((r) => r.s && r.s.loadWatts), capacityWatts: sum((r) => r.s && r.s.capacityWatts) } : null, d: rows.some((r) => r.d) ? { totalKw: sum((r) => r.d && r.d.totalKw), ratedKw: sum((r) => r.d && r.d.ratedKw) } : null,
+            f: fwRows ? fwcCount(fwRows) : null, makes: (() => { const m = {}; rows.forEach((r) => Object.entries(r.makes).forEach(([k, v]) => { m[k] = (m[k] || 0) + v; })); return m; })(), srvN: srv.length,
+            iss: { New: sum((r) => r.iss.New), "In Progress": sum((r) => r.iss["In Progress"]), Resolved: sum((r) => r.iss.Resolved), Completed: sum((r) => r.iss.Completed) }, tr: { pend: sum((r) => r.tr.pend), store: sum((r) => r.tr.store), rej: sum((r) => r.tr.rej) } };
+        const th = (t, extra) => E("th", { style: { textAlign: "right", padding: "5px 8px", fontSize: 8.5, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: .5, whiteSpace: "nowrap", ...extra } }, t);
+        const grp = (t, span, color) => E("th", { colSpan: span, style: { padding: "6px 8px", fontSize: 10, fontWeight: 800, color, textAlign: "center", borderLeft: "1px solid #334155", borderBottom: `2px solid ${color}55`, textTransform: "uppercase", letterSpacing: .6 } }, t);
+        const td = (v, color, first) => E("td", { style: { padding: "7px 8px", textAlign: "right", fontFamily: "'Space Grotesk'", fontSize: 12.5, fontWeight: 800, color: color || "#fff", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", borderLeft: first ? "1px solid #334155" : undefined } }, v);
+        const nameCell = (r, isTotal) => E("td", { style: { padding: "7px 8px", whiteSpace: "nowrap" } }, E("span", { style: { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, fontWeight: 800, color: "#E2E8F0" } }, !isTotal && E("span", { style: { width: 8, height: 8, borderRadius: "50%", background: sc[r.st] || "#6366F1" } }), r.st));
+        const lineA = (r, isTotal) => {
+            const sPct = r.s && r.s.capacityWatts > 0 ? Math.round(r.s.loadWatts / r.s.capacityWatts * 100) : null;
+            const dPct = r.d && r.d.ratedKw > 0 ? Math.round(r.d.totalKw / r.d.ratedKw * 100) : null;
+            const mkTxt = Object.entries(r.makes).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${k} ${v}`).join(" · ");
+            return E("tr", { key: r.st, style: { borderTop: "1px solid #273449", background: isTotal ? "#0F172A" : "transparent" } }, nameCell(r, isTotal),
+                r.p ? td(r.p.on, "#34D399", true) : td(dash, null, true), r.p ? td(r.p.off, "#F87171") : td(dash), r.p ? td(r.p.unknown, "#94A3B8") : td(dash),
+                r.s ? td(kw(r.s.loadWatts) + " / " + kw(r.s.capacityWatts), "#fff", true) : td(dash, null, true), sPct != null ? td(sPct + "%", pctC(sPct)) : td(dash),
+                r.d ? td(r.d.totalKw.toFixed(1) + " / " + r.d.ratedKw.toFixed(1), "#fff", true) : td(dash, null, true), dPct != null ? td(dPct + "%", pctC(dPct)) : td(dash),
+                E("td", { style: { padding: "7px 8px", textAlign: "left", fontSize: 10.5, color: "#CBD5E1", whiteSpace: "nowrap", borderLeft: "1px solid #334155" } }, r.srvN ? E("span", null, E("b", { style: { color: "#fff", fontSize: 12.5, marginRight: 6 } }, r.srvN), mkTxt) : dash));
+        };
+        const lineB = (r, isTotal) => E("tr", { key: r.st, style: { borderTop: "1px solid #273449", background: isTotal ? "#0F172A" : "transparent" } }, nameCell(r, isTotal),
+            r.f ? td(r.f.total ? r.f.pct.toFixed(0) + "%" : "—", r.f.total && r.f.pct >= 90 ? "#34D399" : r.f.total && r.f.pct >= 70 ? "#FBBF24" : "#F87171", true) : td(dash, null, true), r.f ? td(r.f.OUTDATED, r.f.OUTDATED ? "#F87171" : "#94A3B8") : td(dash), r.f ? td(r.f.UNKNOWN, "#94A3B8") : td(dash),
+            td(r.iss.New, "#F87171", true), td(r.iss["In Progress"], "#FBBF24"), td(r.iss.Resolved, "#60A5FA"), td(r.iss.Completed, "#34D399"),
+            td(r.tr.pend, r.tr.pend ? "#FBBF24" : "#94A3B8", true), td(r.tr.store, r.tr.store ? "#fff" : "#94A3B8"), td(r.tr.rej, r.tr.rej ? "#F87171" : "#94A3B8"));
+        const tbl = (groups, heads, lineFn) => E("div", { style: { overflowX: "auto", marginBottom: 6 } }, E("table", { style: { width: "100%", borderCollapse: "collapse" } },
+            E("thead", null, E("tr", null, E("th", null), groups.map(([t, n, c]) => grp(t, n, c))), E("tr", null, th("Location", { textAlign: "left" }), heads.map(([t, ex], i) => th(t, ex)))),
+            E("tbody", null, rows.map((r) => lineFn(r, false)), rows.length > 1 && lineFn(totals, true))));
+        const loading = mods.power === null && mods.spc === null && mods.fw === null;
+        return E("div", { "data-summary": "dashboard-modules", style: { background: "#1E293B", borderRadius: 12, padding: 18, border: "1px solid #334155", marginBottom: 20 } },
+            E("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 6, marginBottom: 12 } },
+                E("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#fff" } }, "Operations Snapshot"),
+                E("div", { style: { fontSize: 10.5, color: "#64748B" } }, "Dashboard figures not shown elsewhere in this summary · one row per location" + (loading ? " · loading…" : ""))),
+            tbl([["Server Power", 3, "#34D399"], ["Power Consumption", 2, "#38BDF8"], ["PDU Load", 2, "#F472B6"], ["Servers by Make", 1, "#A78BFA"]],
+                [["On", { borderLeft: "1px solid #334155" }], ["Off"], ["Unk"], ["kW load / rated", { borderLeft: "1px solid #334155" }], ["Use"], ["kW / rated", { borderLeft: "1px solid #334155" }], ["Use"], ["Total · make", { textAlign: "left", borderLeft: "1px solid #334155" }]], lineA),
+            tbl([["Firmware", 3, "#FBBF24"], ["Issue Status", 4, "#F87171"], ["Transfers", 3, "#2DD4BF"]],
+                [["Compliant", { borderLeft: "1px solid #334155" }], ["Old"], ["Unk"], ["New", { borderLeft: "1px solid #334155" }], ["In prog"], ["Resolved"], ["Done"], ["Pending", { borderLeft: "1px solid #334155" }], ["In store"], ["Rejected"]], lineB),
+            E("div", { style: { marginTop: 8, fontSize: 9.5, color: "#64748B" } }, "Installed devices, racks, utilization, asset distribution, hardware and movements are shown in the sections of this summary."));
+    };
     // Shared by both the PNG and PDF downloads: clones the actual rendered
     // Overall Summary (so the export matches the on-screen design exactly,
     // graphics and all, instead of a separately-built template) and rasterizes
@@ -14228,7 +14342,7 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
     // here previously made the big total and this per-site breakdown disagree
     // whenever rack components existed or an asset had a non-Active status.
     const assetBySite = {};
-    activeAssets.forEach(a => { assetBySite[a.site] = (assetBySite[a.site] || 0) + 1; });
+    deviceAssets.forEach(a => { assetBySite[a.site] = (assetBySite[a.site] || 0) + 1; });
     // Location-wise Material Movements summary for the executive summary card.
     const movementSummaryBySite = allSites.map(site => {
         const siteMovements = (movements || []).filter(m => m.site === site);
@@ -14262,17 +14376,18 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                         " Download Summary PDF"),
                     React.createElement("button", { onClick: onClose, style: { width: 36, height: 36, borderRadius: 10, background: "#1E293B", border: "1px solid #334155", color: "#94A3B8", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" } },
                         React.createElement(X, { s: 16, c: "#94A3B8" })))),
-            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "minmax(220px, 0.7fr) minmax(0, 1.3fr)", gap: 12, marginBottom: 20 } },
-                React.createElement("div", { style: { background: "linear-gradient(135deg, #1E293B 0%, #0F172A 100%)", borderRadius: 12, padding: 14, border: "1px solid #334155", textAlign: "center" } },
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: singleLoc ? "1fr" : "minmax(220px, 0.7fr) minmax(0, 1.3fr)", gap: 12, marginBottom: 20 } },
+                singleLoc && assetsSingle(),
+                React.createElement("div", { style: { background: "linear-gradient(135deg, #1E293B 0%, #0F172A 100%)", borderRadius: 12, padding: 14, border: "1px solid #334155", textAlign: "center", display: singleLoc ? "none" : undefined } },
                     React.createElement("div", { style: { fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "#64748B", fontWeight: 700 } }, "Assets"),
                     React.createElement("div", { style: { fontSize: 24, fontWeight: 800, color: "#6366F1", marginTop: 6, fontFamily: "'Space Grotesk'" } }, totalAssets),
                     // Devices + rack components combined - called out explicitly since the
                     // Dashboard's "Installed Devices" tile is device-only, so the two numbers
                     // can legitimately differ once rack components exist; without this label
                     // that difference reads as a data-sync bug rather than what it is.
-                    React.createElement("div", { style: { fontSize: 8.5, color: "#64748B", marginTop: 2 } }, "devices + rack components"),
-                    React.createElement("div", { style: { fontSize: 9, color: "#94A3B8", marginTop: 4, fontFamily: "'JetBrains Mono'" } }, Object.entries(assetBySite).map(([s, v]) => `${s}: ${v}`).join(' · '))),
-                React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 14, border: "1px solid #334155" } },
+                    React.createElement("div", { style: { fontSize: 8.5, color: "#64748B", marginTop: 2 } }, "installed devices (rack components not counted)"),
+                    React.createElement("div", { style: { fontSize: 9, color: "#94A3B8", marginTop: 4, fontFamily: "'JetBrains Mono'" } }, singleLoc ? '' : Object.entries(assetBySite).map(([s, v]) => `${s}: ${v}`).join(' · '))),
+                React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 14, border: "1px solid #334155", display: singleLoc ? "none" : undefined } },
                     React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 } },
                         React.createElement("div", null,
                             React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 800, color: "#fff" } }, "Material Movements Summary"),
@@ -14293,6 +14408,7 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                         React.createElement("div", { style: { fontSize: 10, color: "#94A3B8", textAlign: "right", fontFamily: "'JetBrains Mono'" } },
                             r.total,
                             " total")))) : React.createElement("div", { style: { fontSize: 10, color: '#64748B' } }, "No material movement records available.")))),
+            dashModules(),
             React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 18, border: "1px solid #334155", marginBottom: 20 } },
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, marginBottom: 14, color: "#fff" } }, "DC Activity Record Summary"),
                 React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 16 } }, [
@@ -14302,8 +14418,8 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                 ].map(k => React.createElement("div", { key: k.label, style: { textAlign: "center", padding: "11px 6px", background: "#0F172A", borderRadius: 10, border: "1px solid #334155" } },
                     React.createElement("div", { style: { fontSize: 21, fontWeight: 800, color: k.color, fontFamily: "'Space Grotesk'" } }, k.value),
                     React.createElement("div", { style: { fontSize: 9, color: "#64748B", textTransform: "uppercase", letterSpacing: .5, marginTop: 4 } }, k.label)))),
-                React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 } },
-                    React.createElement("div", null,
+                React.createElement("div", { style: { display: "grid", gridTemplateColumns: singleLoc ? "1fr" : "1fr 1fr", gap: 18 } },
+                    React.createElement("div", { style: singleLoc ? { display: "none" } : undefined },
                         React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: "#94A3B8", marginBottom: 10, textTransform: "uppercase" } }, "Activities by Location"),
                         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 8 } }, actSiteEntries.length ? actSiteEntries.map(([site, count]) => React.createElement("div", { key: site, style: { background: "#0F172A", border: "1px solid #334155", borderRadius: 9, padding: "10px 12px" } },
                             React.createElement("div", { style: { fontSize: 10, color: "#94A3B8", fontWeight: 700, textTransform: "uppercase", letterSpacing: .5 } }, site),
@@ -14320,28 +14436,26 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                             ": ",
                             actCompletedBySite[site] || 0)))),
                     React.createElement("div", null,
-                        React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: "#94A3B8", marginBottom: 10, textTransform: "uppercase" } }, "By Activity Type"),
+                        React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: "#94A3B8", marginBottom: 10, textTransform: "uppercase" } }, "Activity Notes"),
                         // A short text summary instead of a donut chart - the counts are
                         // already captured per type, so a ranked list reads faster than a
                         // chart + separate legend did.
                         (() => {
-                            const actTypeEntries = Object.entries(actByType).sort((a, b) => b[1] - a[1]);
-                            if (!actTypeEntries.length)
+                            const toMs = (a) => Date.parse(a.startDate || a.completionDate || "") || 0;
+                            const list = [...activities].sort((x, y) => toMs(y) - toMs(x));
+                            if (!list.length)
                                 return React.createElement("div", { style: { fontSize: 11, color: "#64748B" } }, "No activity records.");
-                            const [topType, topCount] = actTypeEntries[0];
-                            const topPct = actTotal ? Math.round((topCount / actTotal) * 100) : 0;
+                            const short = (t) => { const x = String(t || "").replace(/\s+/g, " ").trim(); return x.length > 80 ? x.slice(0, 77) + "\u2026" : x; };
+                            const shown = list.slice(0, 8);
                             return React.createElement(React.Fragment, null,
-                                React.createElement("div", { style: { fontSize: 11, color: "#CBD5E1", marginBottom: 10, lineHeight: 1.5 } },
-                                    `${actTotal} activit${actTotal === 1 ? "y" : "ies"} across ${actTypeEntries.length} type${actTypeEntries.length === 1 ? "" : "s"} — mostly `,
-                                    React.createElement("b", { style: { color: "#fff" } }, topType),
-                                    ` (${topCount}, ${topPct}%).`),
-                                React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, actTypeEntries.map(([k, v], i) => {
-                                    const pct = actTotal ? Math.round((v / actTotal) * 100) : 0;
-                                    return React.createElement("div", { key: k, style: { display: "flex", alignItems: "center", gap: 8, fontSize: 10.5, color: "#CBD5E1", background: "#0F172A", border: "1px solid #1E293B", borderRadius: 6, padding: "5px 8px" } },
-                                        React.createElement("span", { style: { width: 7, height: 7, borderRadius: 2, background: pieColors[i % pieColors.length], flexShrink: 0 } }),
-                                        React.createElement("span", { style: { flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, k),
-                                        React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", color: "#94A3B8", flexShrink: 0 } }, `${v} (${pct}%)`));
-                                })));
+                                React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, shown.map((a, i) => {
+                                    const done = !!a.completionDate;
+                                    return React.createElement("div", { key: a.id || i, title: String(a.description || ""), style: { display: "flex", alignItems: "center", gap: 8, fontSize: 10.5, color: "#CBD5E1", background: "#0F172A", border: "1px solid #1E293B", borderRadius: 6, padding: "6px 9px" } },
+                                        React.createElement("span", { style: { width: 7, height: 7, borderRadius: "50%", background: done ? "#10B981" : "#F59E0B", flexShrink: 0 }, title: done ? "Completed" : "In progress" }),
+                                        React.createElement("span", { style: { flex: "1 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, short(a.description) || a.activityType || "Activity"),
+                                        React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", color: "#64748B", flexShrink: 0, fontSize: 9.5 } }, (singleLoc ? "" : a.site + " \u00B7 ") + (a.zone || "AZ-1") + " \u00B7 " + String(a.startDate || a.completionDate || "").slice(0, 10)));
+                                })),
+                                list.length > shown.length && React.createElement("div", { style: { fontSize: 9.5, color: "#64748B", marginTop: 6 } }, `Latest ${shown.length} of ${list.length} activities`));
                         })()))),
             React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 18, border: "1px solid #334155", marginBottom: 20 } },
                 React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 } },
@@ -14409,20 +14523,20 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                     React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 16, fontWeight: 800, color: "#fff", marginBottom: 12, paddingBottom: 8, borderBottom: "1px solid #334155", display: "flex", alignItems: "center", gap: 10 } },
                         React.createElement("span", { style: { width: 10, height: 10, borderRadius: "50%", background: summarySiteColor[site] || '#6366F1' } }),
                         site,
-                        React.createElement("span", { style: { fontSize: 12, color: "#64748B", fontWeight: 400, marginLeft: 8 } },
-                            sd.siteAssets.length,
+                        React.createElement("span", { style: { fontSize: 12, color: "#64748B", fontWeight: 400, marginLeft: 8, display: singleLoc ? "none" : undefined } },
+                            sd.siteDevices.length,
                             " assets \u00B7 ",
                             sd.siteIssues.length,
                             " issues \u00B7 ",
                             sd.siteActivities.length,
                             " activities")),
-                    React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 } },
-                        React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 16, border: "1px solid #334155" } },
+                    React.createElement("div", { style: { display: "grid", gridTemplateColumns: singleLoc ? "1fr" : "1fr 1fr", gap: 14, marginBottom: 14 } },
+                        React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 16, border: "1px solid #334155", display: singleLoc ? "none" : undefined } },
                             React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, marginBottom: 10, color: "#fff" } }, "Hardware Types"),
                             HorizontalBars(sd.byHw, maxHw, 16)),
                         React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 16, border: "1px solid #334155" } },
-                            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, marginBottom: 10, color: "#fff" } }, "Material Movements Summary"),
-                            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6, marginBottom: 10 } },
+                            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, marginBottom: 10, color: "#fff" } }, singleLoc ? "Material Movements Summary" : "Items Moved"),
+                            React.createElement("div", { style: { display: singleLoc ? "grid" : "none", gridTemplateColumns: "repeat(3, 1fr)", gap: 6, marginBottom: 10 } },
                                 React.createElement("div", { style: { textAlign: "center", background: "#0F172A", borderRadius: 8, padding: "7px 4px" } },
                                     React.createElement("div", { style: { fontSize: 16, fontWeight: 800, color: "#fff" } }, sd.siteMovements.length),
                                     React.createElement("div", { style: { fontSize: 8, color: "#64748B", textTransform: "uppercase" } }, "Total")),
@@ -14485,7 +14599,7 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                                 "."))),
                     (() => {
                         const hwTypesSeen = {};
-                        sd.siteAssets.forEach(a => { if (a.hardwareType) {
+                        sd.siteDevices.forEach(a => { if (a.hardwareType) {
                             const k = hwKey(a.hardwareType);
                             if (!hwTypesSeen[k])
                                 hwTypesSeen[k] = a.hardwareType;
@@ -14498,16 +14612,16 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                             const row = { hw };
                             let total = 0;
                             zoneNames.forEach(zn => {
-                                const cnt = sd.siteAssets.filter(a => hwEquals(a.hardwareType, hw) && (a.zone || "AZ-1") === zn).length;
+                                const cnt = sd.siteDevices.filter(a => hwEquals(a.hardwareType, hw) && (a.zone || "AZ-1") === zn).length;
                                 row[zn] = cnt;
                                 total += cnt;
                             });
                             row.total = total;
                             return row;
                         });
-                        const grandTotal = { hw: "Grand Total", total: sd.siteAssets.length };
+                        const grandTotal = { hw: "Grand Total", total: sd.siteDevices.length };
                         zoneNames.forEach(zn => {
-                            grandTotal[zn] = sd.siteAssets.filter(a => (a.zone || "AZ-1") === zn).length;
+                            grandTotal[zn] = sd.siteDevices.filter(a => (a.zone || "AZ-1") === zn).length;
                         });
                         const allRows = [...pivotRows, grandTotal];
                         const colW = Math.max(110, 220 / (zoneNames.length + 1));
@@ -17365,7 +17479,7 @@ function DataCenterDashboard() {
         !loading && tab === "settings" && React.createElement(SettingsPage, { users: users, onRefresh: loadAll, locations: locations, currentUser: currentUser, isAdmin: !!isAdmin, isGlobalAdmin: isGlobalAdmin, onChangePassword: () => setPwdModalOpen(true) }),
         pwdModalOpen && React.createElement(PasswordChangeModal, { onClose: () => setPwdModalOpen(false), isAdmin: false, targetUser: null }),
         reportOpen && React.createElement(ReportModal, { assets: filteredAssets, issues: siteRestrictedIssues, activities: siteRestrictedActivities, movements: siteRestrictedMovements, onClose: () => setReportOpen(false) }),
-        summaryModalOpen && React.createElement(OverallSummaryModal, { assets: siteRestrictedAssets, rackComponents: siteRestrictedRackComponents, issues: siteRestrictedIssues, activities: siteRestrictedActivities, movements: siteRestrictedMovements, racks: siteRestrictedRacks, zones: siteRestrictedZones, allowedSites: allowedSites, onClose: () => setSummaryModalOpen(false) }),
+        summaryModalOpen && React.createElement(OverallSummaryModal, { assets: siteRestrictedAssets, rackComponents: siteRestrictedRackComponents, issues: siteRestrictedIssues, activities: siteRestrictedActivities, movements: siteRestrictedMovements, racks: siteRestrictedRacks, zones: siteRestrictedZones, allowedSites: allowedSites, pduSummary: pduSummary, onClose: () => setSummaryModalOpen(false) }),
         lifecycleActionAsset && React.createElement(AssetLifecycleActionModal, { key: (lifecycleActionAsset.id || "") + "|" + (lifecycleActionPreset || ""), asset: lifecycleActionAsset, initialAction: lifecycleActionPreset, allowedSites: allowedSites, zones: siteRestrictedZones, racks: siteRestrictedRacks, rackTypes: rackTypes, onClose: () => { setLifecycleActionAsset(null); setLifecycleActionPreset(null); }, onSaved: async () => { setLifecycleActionAsset(null); setLifecycleActionPreset(null); setSelectedAssetIds(new Set()); await loadAll(); showToast("success", "Asset lifecycle updated"); } }),
         manageDCModalOpen && React.createElement(ManageDCCapacityModal, { onClose: () => setManageDCModalOpen(false), canEdit: canEdit, isAdmin: isAdmin, canManageLocations: isGlobalAdmin, currentSite: manageDCSite || capacitySite, onAddLocation: () => setLocationModalOpen(true), onDeleteLocation: () => setDeleteLocationModalOpen(true), onAddZone: () => setZoneModalOpen(true), onAddRack: () => setRackAddModalOpen(true) }),
         rackModal && React.createElement(RackLayoutModal, { rack: rackModal, assets: siteRestrictedAssets, rackComponents: siteRestrictedRackComponents, racks: siteRestrictedRacks, zones: siteRestrictedZones, onClose: () => setRackModal(null), onViewInventory: viewRackInInventory }),
