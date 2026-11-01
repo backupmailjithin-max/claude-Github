@@ -1452,7 +1452,7 @@ async function initDB() {
     for (const ddl of ["ALTER TABLE firmware_jobs ADD COLUMN source VARCHAR(20) NOT NULL DEFAULT 'dcim'", 'ALTER TABLE firmware_jobs ADD COLUMN job_name VARCHAR(255) NULL']) {
       try { await conn.query(ddl); } catch (e) { /* column already exists */ }
     }
-    try { await conn.query('DELETE FROM firmware_jobs WHERE started_at < ?', [Date.now() - 14 * 24 * 3600 * 1000]); } catch (e) { /* housekeeping only */ }
+    try { await conn.query('DELETE FROM firmware_jobs WHERE started_at < ?', [Date.now() - 31 * 24 * 3600 * 1000]); } catch (e) { /* housekeeping only */ }
 
     // Consolidate hardware types that differ only by case (e.g. "DellServer",
     // "Dellserver", "DELLServer" from data entered before normalization was
@@ -3979,6 +3979,9 @@ async function applyOneviewFirmware(site, zone, deviceUris, bundleUri, forceInst
 // ---- Persistent per-server firmware job records (table firmware_jobs) ----
 const FW_JOB_LIST_RUNNING_MS = 12 * 3600 * 1000; // a job still "Running" after this long is no longer listed
 const FW_JOB_LIST_DONE_MS = 2 * 3600 * 1000;     // finished jobs stay listed this long
+const FW_JOB_HISTORY_DAYS = 30;                  // job log kept (and viewable on the Firmware Jobs tab) for this many days
+const FW_JOB_HISTORY_MS = FW_JOB_HISTORY_DAYS * 24 * 3600 * 1000;
+let fwJobsLastPrune = 0;
 function fwJobAggregate(rows) {
   if (rows.some((r) => r.state === 'Running')) return 'Running';
   return rows.every((r) => r.state === 'Failed') ? 'Failed' : 'Completed';
@@ -4181,13 +4184,14 @@ async function fwJobsTick(force) {
   if (!force && Date.now() - fwJobsLastTick < 8000) return;
   fwJobsTickBusy = true;
   try {
+    if (Date.now() - fwJobsLastPrune > 24 * 3600 * 1000) { fwJobsLastPrune = Date.now(); try { await pool.query('DELETE FROM firmware_jobs WHERE started_at < ?', [Date.now() - (FW_JOB_HISTORY_DAYS + 1) * 24 * 3600 * 1000]); } catch (e) { /* housekeeping only */ } }
     const [zoneRows] = await pool.query('SELECT DISTINCT site, zone_name AS zone FROM zones');
     for (const z of zoneRows) {
       if (getMonitorConfig('ONEVIEW', z.site, z.zone)) { try { await scanOneviewExternalFirmware(z.site, z.zone); } catch (e) { log.warn(`[firmware-jobs] OneView scan ${z.site}/${z.zone}: ${String(e.message).slice(0, 120)}`); } }
       if (getMonitorConfig('OME', z.site, z.zone)) { try { await scanOmeExternalFirmware(z.site, z.zone); } catch (e) { log.warn(`[firmware-jobs] OME scan ${z.site}/${z.zone}: ${String(e.message).slice(0, 120)}`); } }
     }
     // Keep every running row current, whoever started it and whether or not anyone has the page open.
-    const [running] = await pool.query("SELECT DISTINCT vendor, site, zone, job_ref, device_id FROM firmware_jobs WHERE state='Running' AND started_at > ? AND job_ref IS NOT NULL", [Date.now() - FW_JOB_LIST_RUNNING_MS]);
+    const [running] = await pool.query("SELECT DISTINCT vendor, site, zone, job_ref, device_id FROM firmware_jobs WHERE state='Running' AND started_at > ? AND job_ref IS NOT NULL", [Date.now() - FW_JOB_HISTORY_MS]);
     for (const g of running) {
       try {
         const result = g.vendor === 'ome' ? await getOmeJobStatus(g.site, g.zone, g.job_ref)
@@ -4214,7 +4218,7 @@ app.get('/api/monitoring/firmware/jobs/scan', authenticateToken, requireRole(['A
 app.get('/api/monitoring/firmware/jobs/active', authenticateToken, async (req, res) => {
   try {
     if (req.query.refresh === '1') fwJobsTick(false).catch(() => { });
-    const histHours = Math.min(72, Math.max(0, Number(req.query.history) || 0));
+    const histHours = Math.min(FW_JOB_HISTORY_DAYS * 24, Math.max(0, Number(req.query.history) || 0));
     const allowed = await getAllowedSitesForUser(req.user);
     if (!allowed.length) return res.json({ jobs: [] });
     const where = ['site IN (?)'];
@@ -4223,7 +4227,7 @@ app.get('/api/monitoring/firmware/jobs/active', authenticateToken, async (req, r
     if (req.query.zone) { where.push('zone=?'); params.push(String(req.query.zone)); }
     const now = Date.now();
     const [rows] = await pool.query(`SELECT * FROM firmware_jobs WHERE ${where.join(' AND ')} AND ((state='Running' AND started_at > ?) OR (state<>'Running' AND finished_at > ?)) ORDER BY started_at ASC, id ASC`,
-      [...params, now - FW_JOB_LIST_RUNNING_MS, now - Math.max(FW_JOB_LIST_DONE_MS, histHours * 3600 * 1000)]);
+      [...params, now - Math.max(FW_JOB_LIST_RUNNING_MS, histHours * 3600 * 1000), now - Math.max(FW_JOB_LIST_DONE_MS, histHours * 3600 * 1000)]);
     const groups = new Map();
     rows.forEach((r) => {
       const gk = `${r.vendor}|${r.site}|${r.zone}|${r.job_ref}|${r.started_at}`;

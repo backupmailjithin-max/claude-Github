@@ -8533,10 +8533,11 @@ function FirmwareJobsTab({ canEdit }) {
     const [fSite, setFSite] = useState("all");
     const [fVendor, setFVendor] = useState("all");
     const [fState, setFState] = useState("all");
+    const [fDays, setFDays] = useState(30); // how far back the list goes (the server keeps 30 days)
     const [open, setOpen] = useState({});
     useEffect(() => {
         let alive = true;
-        const load = (refresh) => api.getActiveFirmwareJobs(24, refresh).then((r) => { if (alive) { setJobs((r && r.jobs) || []); setErr(""); } }).catch((e) => { if (alive) setErr(e.message || "Could not load firmware jobs"); });
+        const load = (refresh) => api.getActiveFirmwareJobs(720, refresh).then((r) => { if (alive) { setJobs((r && r.jobs) || []); setErr(""); } }).catch((e) => { if (alive) setErr(e.message || "Could not load firmware jobs"); });
         load(true);
         const t = setInterval(() => load(false), 8000);
         return () => { alive = false; clearInterval(t); };
@@ -8546,16 +8547,16 @@ function FirmwareJobsTab({ canEdit }) {
         try {
             const r = await api.scanFirmwareJobs();
             setScan(r);
-            const j = await api.getActiveFirmwareJobs(24, false);
+            const j = await api.getActiveFirmwareJobs(720, false);
             setJobs((j && j.jobs) || []);
         } catch (e) { setScanErr(e.message || "Scan failed"); }
         setScanBusy(false);
     };
     const all = jobs || [];
     const sites = Array.from(new Set(all.map((j) => j.site))).sort();
-    const shown = all.filter((j) => (fSite === "all" || j.site === fSite) && (fVendor === "all" || j.vendor === fVendor) && (fState === "all" || j.status === fState))
+    const shown = all.filter((j) => (fSite === "all" || j.site === fSite) && (fVendor === "all" || j.vendor === fVendor) && (fState === "all" || j.status === fState) && (j.startedAt >= Date.now() - fDays * 86400000))
         .sort((x, y) => ((y.status === "Running") - (x.status === "Running")) || (y.startedAt - x.startedAt));
-    const count = (s) => all.filter((j) => j.status === s).length;
+    const count = (s) => all.filter((j) => j.status === s && j.startedAt >= Date.now() - fDays * 86400000).length;
     const sel = { padding: "6px 10px", borderRadius: 8, border: "1px solid #CBD5E1", background: "#fff", fontFamily: "Inter", fontSize: 12, color: "#0F172A" };
     const chip = (label, n, color) => React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 12px", borderRadius: 999, background: color + "18", color, fontFamily: "Inter", fontSize: 12, fontWeight: 700 } }, label, React.createElement("span", { style: { fontVariantNumeric: "tabular-nums" } }, n));
     const grid = "16px 112px minmax(110px, 0.9fr) 84px minmax(110px, 0.9fr) minmax(100px, 0.8fr) minmax(120px, 1.3fr) 56px minmax(120px, 1fr)";
@@ -8563,12 +8564,13 @@ function FirmwareJobsTab({ canEdit }) {
         React.createElement("div", { style: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 12 } },
             React.createElement("div", null,
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15.5, fontWeight: 700, color: "#0F172A" } }, "Firmware Update Jobs"),
-                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#475569", marginTop: 3, maxWidth: 640, lineHeight: 1.5 } }, "Every firmware update running or finished in the last 24 hours at the locations you can access — started from DCIM or directly in Dell OME / HPE OneView (the appliances are checked about every 30 seconds). A server with a running update is locked in DCIM.")),
+                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#475569", marginTop: 3, maxWidth: 640, lineHeight: 1.5 } }, "Every firmware update running or finished in the last 30 days at the locations you can access — started from DCIM or directly in Dell OME / HPE OneView (the appliances are checked about every 30 seconds). A server with a running update is locked in DCIM.")),
             React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } }, chip("Running", count("Running"), "#2563EB"), chip("Completed", count("Completed"), "#059669"), chip("Failed", count("Failed"), "#DC2626"))),
         React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 } },
             React.createElement("select", { value: fSite, onChange: (e) => setFSite(e.target.value), style: sel, "aria-label": "Filter by location" }, React.createElement("option", { value: "all" }, "All locations"), sites.map((s) => React.createElement("option", { key: s, value: s }, s))),
             React.createElement("select", { value: fVendor, onChange: (e) => setFVendor(e.target.value), style: sel, "aria-label": "Filter by vendor" }, React.createElement("option", { value: "all" }, "Dell OME + HPE OneView"), React.createElement("option", { value: "ome" }, "Dell OME"), React.createElement("option", { value: "oneview" }, "HPE OneView")),
-            React.createElement("select", { value: fState, onChange: (e) => setFState(e.target.value), style: sel, "aria-label": "Filter by status" }, React.createElement("option", { value: "all" }, "Any status"), React.createElement("option", { value: "Running" }, "Running"), React.createElement("option", { value: "Completed" }, "Completed"), React.createElement("option", { value: "Failed" }, "Failed"))),
+            React.createElement("select", { value: fState, onChange: (e) => setFState(e.target.value), style: sel, "aria-label": "Filter by status" }, React.createElement("option", { value: "all" }, "Any status"), React.createElement("option", { value: "Running" }, "Running"), React.createElement("option", { value: "Completed" }, "Completed"), React.createElement("option", { value: "Failed" }, "Failed")),
+            React.createElement("select", { value: fDays, onChange: (e) => setFDays(Number(e.target.value)), style: sel, "aria-label": "Filter by period" }, React.createElement("option", { value: 1 }, "Last 24 hours"), React.createElement("option", { value: 7 }, "Last 7 days"), React.createElement("option", { value: 30 }, "Last 30 days"))),
         canEdit && React.createElement("div", { style: { marginBottom: 12 } },
             React.createElement("button", { className: "neu-btn-secondary", disabled: scanBusy, onClick: runScan, style: { fontSize: 11.5, padding: "5px 12px" }, title: "Ask every configured Dell OME / HPE OneView appliance right now which firmware updates are running" }, scanBusy ? "Scanning appliances\u2026" : "Scan appliances now"),
             scanErr && React.createElement("span", { style: { marginLeft: 10, color: "#B91C1C", fontFamily: "Inter", fontSize: 12 } }, scanErr),
