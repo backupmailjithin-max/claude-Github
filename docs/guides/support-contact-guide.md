@@ -1,18 +1,31 @@
 # DCIM Support Contact Guide
 
-## Your vendor's support details
-
-The vendor fills in this table before delivering the kit to the customer.
+## Vendor support details
 
 | Item | Detail |
 |---|---|
-| Vendor company | ______________________________ |
-| Support email | ______________________________ |
-| Support phone | ______________________________ |
-| Support hours and time zone | ______________________________ |
-| Licence requests / renewals | ______________________________ |
-| Emergency escalation | ______________________________ |
-| Customer account / contract reference | ______________________________ |
+| Vendor company | [[FILL IN: vendor company name]] |
+| Support email | [[FILL IN: support email address]] |
+| Escalation email | [[FILL IN: escalation email address]] |
+| Support phone | [[FILL IN: phone number with country code]] |
+| Support hours and time zone | [[FILL IN: days, hours and time zone]] |
+| Licence requests, renewals, rebinds | [[FILL IN: licence request email address]] |
+| Customer account / contract reference | [[FILL IN: filled per customer at handover]] |
+
+> **Vendor only:** every bracketed *FILL IN* value in the table above must be replaced before the kit is delivered. A release build (`DCIM_RELEASE_BUILD=1`) refuses to produce a kit while any remain. Run `packaging/tools/check-doc-placeholders.sh` to check.
+
+## Severity levels and targets
+
+Targets are measured from the time your request is received during the support hours above.
+
+| Severity | Definition | First response | Update interval | Target resolution or workaround |
+|---|---|---|---|---|
+| 1 - Critical | Production unavailable or *Application locked*, no workaround | 1 hour | every 2 hours | 4 hours |
+| 2 - High | Major function unavailable, or a workaround is in use | 4 hours | daily | 2 business days |
+| 3 - Medium | A function is degraded; most users can work | 1 business day | every 3 business days | 5 business days |
+| 4 - Low | Question, cosmetic issue or enhancement request | 2 business days | on request | next release |
+
+Severity 1 requests are made by phone as well as email. Escalate to the escalation email when a target is missed or the business impact grows.
 
 The same support email and contact can be shown inside DCIM through the Setup Wizard (organisation settings *supportEmail* and *supportContact*), so your own users know whom to ask.
 

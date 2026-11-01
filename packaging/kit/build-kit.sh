@@ -63,8 +63,12 @@ if [ -d "$REPO_ROOT/docs/guides" ]; then
   mkdir -p "$KIT/common/docs/guides"
   cp "$REPO_ROOT/docs/guides/"*.md "$KIT/common/docs/guides/" 2>/dev/null || warn "no guide files found in $REPO_ROOT/docs/guides"
 fi
+# Release builds must not ship unfilled vendor contact details or other placeholders.
+if [ "${DCIM_RELEASE_BUILD:-0}" = "1" ]; then
+  bash "$REPO_ROOT/packaging/tools/check-doc-placeholders.sh" "$KIT/common/docs/guides" || { echo "[build-kit] ERROR: customer guides contain unfilled placeholders" >&2; exit 1; }
+fi
 # Commercial delivery gate: these guides are mandatory. A kit without them must not be produced.
-for g in customer-licensing-guide license-activation-guide license-renewal-guide support-contact-guide customer-handover-kit architecture-overview; do
+for g in customer-licensing-guide license-activation-guide license-renewal-guide support-contact-guide customer-handover-kit architecture-overview machine-rebind-procedure lost-license-recovery-guide; do
   [ -f "$KIT/common/docs/guides/$g.md" ] || { echo "[build-kit] ERROR: mandatory customer guide missing: docs/guides/$g.md" >&2; exit 1; }
 done
 
@@ -127,6 +131,7 @@ Full details: \`common/docs/guides/installation-guide.md\` section 5.
 | \`common/docs/guides/backup-guide.md\`, \`disaster-recovery-guide.md\` | Backups and DR |
 | \`common/docs/guides/customer-licensing-guide.md\`, \`license-activation-guide.md\`, \`license-renewal-guide.md\` | Licence, trial, activation and renewal |
 | \`common/docs/guides/support-contact-guide.md\`, \`customer-handover-kit.md\`, \`architecture-overview.md\` | Support, handover checklist, how the product is built |
+| \`common/docs/guides/machine-rebind-procedure.md\`, \`lost-license-recovery-guide.md\` | Moving the licence to a new server; recovering a lost licence |
 | \`common/docs/RELEASE_NOTES.md\`, \`KNOWN_LIMITATIONS.md\`, \`UPGRADE_MATRIX.md\` | What's in this release |
 | \`common/docs/VERSION_REPORT.md\`, \`DEPENDENCY_REPORT.md\` | Exact versions bundled in this build |
 | \`MANIFEST.txt\`, \`CHECKSUMS.sha256\` | Verify this kit hasn't been tampered with |
