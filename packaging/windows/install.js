@@ -29,6 +29,16 @@ const { spawnSync, execFileSync } = require('child_process');
 
 const SERVICE_NAME = 'DCIM';
 const EMBEDDED_DB_SERVICE_NAME = 'DCIMMariaDB';
+// Dedicated, restricted account the DCIM service runs as - not LocalSystem - mirroring the Linux
+// package's unprivileged 'dcim' system user. Created on first install if missing; its password is
+// reset (and the service reconfigured) on every install/upgrade/repair, so nothing needs to persist it.
+const SERVICE_ACCOUNT_NAME = 'DcimSvc';
+// Code paths the service account gets Read&Execute but explicitly NOT Write/Delete on, mirroring the
+// Linux unit's ReadOnlyPaths= list (packaging/linux/dcim.service.template) - so a compromised or misused
+// application process cannot rewrite the licensing code, the licence public key or the integrity manifest.
+const CODE_READONLY_NAMES = ['server.js', 'lib', 'ocr', 'libs', 'media', 'node_modules', 'tools',
+  'app-compiled.js', 'app-compiled.min.js', 'index.html', 'setup-wizard.html', 'deployment-dashboard.html',
+  'schema.sql', 'package.json', 'package-lock.json', 'integrity.manifest.json'];
 const MIN_NODE_MAJOR = 18;
 const MIN_FREE_MB = 500;
 
@@ -106,7 +116,7 @@ function defaultOpts() {
     CorsOrigin: '',
     AdminUser: '',
     AdminPassword: '',
-    CspMode: 'report-only',
+    CspMode: 'enforce',
     AuditRetentionDays: 365,
     Yes: false,
   };
@@ -279,6 +289,7 @@ function writeEnvFile(opts) {
     `CSP_MODE=${opts.CspMode}`,
     `AUDIT_RETENTION_DAYS=${opts.AuditRetentionDays}`,
     'NODE_ENV=production',
+    'INTEGRITY_MODE=enforce',
     '',
   ].join('\n');
   fs.writeFileSync(envPath, content, { encoding: 'ascii' });
@@ -332,7 +343,7 @@ function syncPayload(opts, paths) {
   if (srcFull === destFull) {
     log(`Application payload is already staged directly at ${dest}; nothing to copy.`);
   } else {
-    mirrorTree(paths.payloadWebapp, dest, new Set(['uploads', 'backups', 'logs', '.env']));
+    mirrorTree(paths.payloadWebapp, dest, new Set(['uploads', 'backups', 'logs', '.env', 'license.lic', '.trial-state', '.license-clock']));
   }
   for (const d of ['uploads', 'backups', 'logs']) {
     fs.mkdirSync(path.join(dest, d), { recursive: true });
@@ -525,6 +536,84 @@ async function setupEmbeddedDb(opts, paths) {
   opts.DbPort = opts.EmbeddedDbPort;
 }
 
+
+function runOrDie(cmd, args, what) {
+  const res = spawnSync(cmd, args, { encoding: 'utf8' });
+  if (res.status !== 0) die(`${what} failed (exit ${res.status}): ${(res.stderr || res.stdout || '').trim()}`);
+  return res.stdout || '';
+}
+function localAccountExists(name) {
+  return spawnSync('net', ['user', name], { encoding: 'utf8' }).status === 0;
+}
+// Grants the account the right to log on as a service (SeServiceLogonRight) via secedit's local security
+// policy import, since the account is created fresh and NSSM/sc.exe do not reliably grant this right by
+// themselves. No extra tooling required beyond what Windows already ships.
+function grantServiceLogonRight(accountName) {
+  const tmp = path.join(os.tmpdir(), `dcim-secpol-${process.pid}.inf`);
+  const db = path.join(os.tmpdir(), `dcim-secpol-${process.pid}.sdb`);
+  runOrDie('secedit', ['/export', '/cfg', tmp, '/areas', 'USER_RIGHTS'], 'secedit /export (reading current local security policy)');
+  // secedit writes its .inf as UTF-16LE (with a BOM), not UTF-8/ASCII - reading it as 'utf8' would
+  // misinterpret every other byte as a null and corrupt every regex match/replace below, and writing
+  // the result back as 'utf8' would then give secedit /configure a file it (at best) rejects outright.
+  let cfg = fs.readFileSync(tmp, 'utf16le');
+  const sidRes = spawnSync('powershell', ['-NoProfile', '-Command', `(New-Object System.Security.Principal.NTAccount('${accountName}')).Translate([System.Security.Principal.SecurityIdentifier]).Value`], { encoding: 'utf8' });
+  const sid = sidRes.status === 0 ? sidRes.stdout.trim() : null;
+  if (!sid) die(`could not resolve the SID of local account '${accountName}' (needed to grant it the "log on as a service" right).`);
+  const entry = `*${sid}`;
+  const headerRe = new RegExp('(\\[Privilege Rights\\]\\r?\\n)');
+  function grant(right) {
+    const lineRe = new RegExp('^' + right + '\\s*=.*' + entry.replace('*', '\\*'), 'm');
+    if (lineRe.test(cfg)) return;
+    const assignRe = new RegExp('^(' + right + '\\s*=\\s*)(.*)$', 'm');
+    if (assignRe.test(cfg)) cfg = cfg.replace(assignRe, (m, pfx, rest) => pfx + (rest ? rest + ',' : '') + entry);
+    else cfg = cfg.replace(headerRe, '$1' + right + ' = ' + entry + '\r\n');
+  }
+  grant('SeServiceLogonRight');
+  // Explicitly deny interactive/network/remote-desktop logon - this account only ever logs on as a service.
+  grant('SeDenyInteractiveLogonRight');
+  grant('SeDenyNetworkLogonRight');
+  grant('SeDenyRemoteInteractiveLogonRight');
+  fs.writeFileSync(tmp, cfg, 'utf16le');
+  runOrDie('secedit', ['/configure', '/db', db, '/cfg', tmp, '/areas', 'USER_RIGHTS'], 'secedit /configure (granting "log on as a service")');
+  try { fs.unlinkSync(tmp); fs.unlinkSync(db); } catch { /* best effort cleanup */ }
+}
+// Creates (or, on a re-run, just resets the password of) the dedicated low-privilege account the DCIM
+// service runs as. Not added to any admin group; not granted interactive logon.
+function ensureServiceAccount() {
+  const name = SERVICE_ACCOUNT_NAME;
+  const password = randomPassword(24) + '!1Aa';   // satisfies default Windows complexity policy
+  if (!localAccountExists(name)) {
+    runOrDie('net', ['user', name, password, '/add', '/expires:never', '/passwordchg:no', '/comment:DCIM service account - not for interactive logon'], `creating local account '${name}'`);
+    log(`Created dedicated service account '${name}' (not an administrator; no interactive logon).`);
+  } else {
+    runOrDie('net', ['user', name, password], `resetting the password of local account '${name}'`);
+  }
+  grantServiceLogonRight(name);
+  return { name: `.\\${name}`, password };
+}
+// Read&Execute for the service account across the whole webapp tree, EXCEPT the application code paths
+// (CODE_READONLY_NAMES), which get an explicit DENY on write/delete rights - a misused or compromised
+// application process still cannot rewrite its own licensing/integrity code. Mirrors the Linux unit.
+function applyServiceAccountAcls(accountName, appDir) {
+  runOrDie('icacls', [appDir, '/grant', `${accountName}:(OI)(CI)(RX,AD,WD)`], `granting '${accountName}' access to ${appDir}`);
+  // AD/WD (add subdirectory/write data, i.e. create+write files) covers uploads/backups/logs/.env/license.lic/
+  // .trial-state/.license-clock living directly under webapp/, without granting Modify on the code paths below.
+  // (OI)(CI) (object-inherit/container-inherit) are DIRECTORY-only inheritance flags - icacls rejects them on a
+  // plain file target ("The parameter is incorrect"), which would otherwise make every one of the several
+  // file-level denies below (server.js, package.json, integrity.manifest.json, the HTML entry points, ...)
+  // silently fail. Pick the right ACE form per target instead of assuming every protected name is a directory.
+  let locked = 0, failed = [];
+  for (const name of CODE_READONLY_NAMES) {
+    const p = path.join(appDir, name);
+    let st; try { st = fs.statSync(p); } catch { continue; }
+    const ace = st.isDirectory() ? `${accountName}:(OI)(CI)(WD,AD,WA,DE,DC)` : `${accountName}:(WD,AD,WA,DE,DC)`;
+    const res = spawnSync('icacls', [p, '/deny', ace], { encoding: 'utf8' });
+    if (res.status === 0) locked++; else failed.push(name);
+  }
+  if (failed.length) log(`WARNING: could not apply the read-only-code deny ACL to: ${failed.join(', ')} - these paths may remain writable by '${accountName}'. Check manually with: icacls "${appDir}\\<name>"`);
+  log(`Applied read-only-code ACLs for '${accountName}' on ${appDir} (${locked} paths locked${failed.length ? `, ${failed.length} failed` : ''}).`);
+}
+
 function installWindowsService(opts, paths) {
   const nodeBin = fs.existsSync(path.join(opts.InstallDir, 'runtime', 'node', 'node.exe'))
     ? path.join(opts.InstallDir, 'runtime', 'node', 'node.exe')
@@ -536,7 +625,10 @@ function installWindowsService(opts, paths) {
     spawnSync(nssm, ['stop', SERVICE_NAME]);
     spawnSync(nssm, ['remove', SERVICE_NAME, 'confirm']);
   }
+  const account = ensureServiceAccount();
+  applyServiceAccountAcls(account.name, appDir);
   invokeNssm(nssm, 'install', SERVICE_NAME, nodeBin, 'server.js');
+  invokeNssm(nssm, 'set', SERVICE_NAME, 'ObjectName', account.name, account.password);
   invokeNssm(nssm, 'set', SERVICE_NAME, 'AppDirectory', appDir);
   invokeNssm(nssm, 'set', SERVICE_NAME, 'AppStdout', path.join(appDir, 'logs', 'service-stdout.log'));
   invokeNssm(nssm, 'set', SERVICE_NAME, 'AppStderr', path.join(appDir, 'logs', 'service-stderr.log'));
@@ -549,7 +641,7 @@ function installWindowsService(opts, paths) {
     setServiceDependency(SERVICE_NAME, EMBEDDED_DB_SERVICE_NAME);
   }
   startService(SERVICE_NAME);
-  log(`Installed Windows service '${SERVICE_NAME}' (auto-start on boot).`);
+  log(`Installed Windows service '${SERVICE_NAME}' (auto-start on boot, running as '${account.name}' - not LocalSystem).`);
 }
 
 function syncPortsFromEnv(opts, explicitParams) {
@@ -590,7 +682,11 @@ function backupBeforeChange(opts) {
       const m = line.match(/^([A-Z_]+)=(.*)$/);
       if (m) env[m[1]] = m[2];
     }
-    const args = ['-h', env.DB_HOST, '-u', env.DB_USER];
+    const args = ['-h', env.DB_HOST];
+    // The embedded database listens on its own port (not 3306); without -P the
+    // snapshot silently had no database dump.
+    if (env.DB_PORT) args.push('-P', env.DB_PORT);
+    args.push('-u', env.DB_USER);
     if (env.DB_PASSWORD) args.push(`-p${env.DB_PASSWORD}`);
     let gtidFlag = [];
     try {
@@ -600,6 +696,8 @@ function backupBeforeChange(opts) {
       // feature-detect instead of assuming either engine.
       const help = execFileSync(dump, ['--help'], { encoding: 'utf8' });
       if (help.includes('--set-gtid-purged')) gtidFlag = ['--set-gtid-purged=OFF'];
+      // MySQL 8's mysqldump reads information_schema.COLUMN_STATISTICS, which MariaDB servers (incl. the bundled DB) lack.
+      if (help.includes('--column-statistics')) gtidFlag.push('--column-statistics=0');
     } catch { /* ignore */ }
     args.push('--single-transaction', ...gtidFlag, '--routines', '--triggers', env.DB_NAME);
     const sqlPath = path.join(backupDir, 'database.sql');

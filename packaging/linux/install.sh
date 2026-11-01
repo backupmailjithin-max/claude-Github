@@ -38,7 +38,7 @@ DB_NAME="dcim"
 CORS_ORIGIN=""
 ADMIN_USER=""
 ADMIN_PASSWORD=""
-CSP_MODE="report-only"
+CSP_MODE="enforce"
 AUDIT_RETENTION_DAYS="365"
 ASSUME_YES=0
 PURGE_DATA=0
@@ -77,7 +77,7 @@ Options:
   --cors-origin ORIGIN
   --admin-user USER     (install only) replace the seeded "admin" username on first install
   --admin-password PASS (install only) replace the seeded "admin" password on first install
-  --csp-mode MODE       enforce | report-only (default) | off
+  --csp-mode MODE       enforce (default) | report-only | off
   --audit-retention-days N  days of audit log to keep; 0 = forever (default: 365)
   --yes                 non-interactive, assume defaults / confirmations
   --purge-data          (uninstall only) also remove the database and data files
@@ -335,6 +335,7 @@ CORS_ORIGIN=$CORS_ORIGIN
 CSP_MODE=$CSP_MODE
 AUDIT_RETENTION_DAYS=$AUDIT_RETENTION_DAYS
 NODE_ENV=production
+INTEGRITY_MODE=enforce
 EOF
   chmod 600 "$ENV_FILE"
   chown "$SERVICE_USER:$SERVICE_USER" "$ENV_FILE"
@@ -366,24 +367,28 @@ sync_payload() {
   install -d -m 755 "$INSTALL_DIR"
   if command -v rsync >/dev/null 2>&1; then
     rsync -a --delete \
-      --exclude '.env' --exclude 'uploads' --exclude 'backups' --exclude 'logs' \
+      --exclude '.env' --exclude 'uploads' --exclude 'backups' --exclude 'logs' --exclude 'license.lic' --exclude '.trial-state' --exclude '.license-clock' \
       "$source_webapp/" "$INSTALL_DIR/webapp/"
   else
     mkdir -p "$INSTALL_DIR/webapp"
     for item in "$source_webapp"/*; do
       base="$(basename "$item")"
-      case "$base" in .env|uploads|backups|logs) continue ;; esac
+      case "$base" in .env|uploads|backups|logs|license.lic|.trial-state|.license-clock) continue ;; esac
       rm -rf "${INSTALL_DIR:?}/webapp/${base}"
       cp -a "$item" "$INSTALL_DIR/webapp/$base"
     done
   fi
   mkdir -p "$INSTALL_DIR/webapp/uploads" "$INSTALL_DIR/webapp/backups" "$INSTALL_DIR/webapp/logs"
+  # Vendor-only licence tooling is never installed on a customer machine.
+  rm -f "$INSTALL_DIR"/webapp/tools/license-*.js "$INSTALL_DIR/webapp/tools/Run-License-Generator.bat" "$INSTALL_DIR/webapp/tools/LICENSE-ISSUE-TEMPLATE.txt"
   if [ -d "$PAYLOAD_RUNTIME" ]; then
     rm -rf "$INSTALL_DIR/runtime"
     install -d "$INSTALL_DIR/runtime"
     cp -a "$PAYLOAD_RUNTIME" "$INSTALL_DIR/runtime/node"
   fi
   chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
+  # Re-assert the secret-bearing .env permissions on every install/upgrade/repair.
+  [ -f "$ENV_FILE" ] && chmod 600 "$ENV_FILE" && chown "$SERVICE_USER:$SERVICE_USER" "$ENV_FILE" || true
 }
 
 install_systemd_unit() {
@@ -590,7 +595,7 @@ install_cli_utilities() {
   if [ -f "$PAYLOAD_WEBAPP/server.js" ] && [ "$(cd "$PAYLOAD_WEBAPP" 2>/dev/null && pwd)" != "$(cd "$INSTALL_DIR/webapp" 2>/dev/null && pwd)" ]; then
     install -d -m 755 "$CACHED_WEBAPP_DIR"
     if command -v rsync >/dev/null 2>&1; then
-      rsync -a --delete --exclude '.env' --exclude 'uploads' --exclude 'backups' --exclude 'logs' \
+      rsync -a --delete --exclude '.env' --exclude 'uploads' --exclude 'backups' --exclude 'logs' --exclude 'license.lic' --exclude '.trial-state' --exclude '.license-clock' \
         "$PAYLOAD_WEBAPP/" "$CACHED_WEBAPP_DIR/"
     else
       cp -a "$PAYLOAD_WEBAPP/." "$CACHED_WEBAPP_DIR/"
@@ -616,6 +621,10 @@ backup_before_change() {
     host="$(sed -n 's/^DB_HOST=//p' "$ENV_FILE")"; user="$(sed -n 's/^DB_USER=//p' "$ENV_FILE")"
     pass="$(sed -n 's/^DB_PASSWORD=//p' "$ENV_FILE")"; name="$(sed -n 's/^DB_NAME=//p' "$ENV_FILE")"
     local pw_arg=(); [ -n "$pass" ] && pw_arg=(-p"$pass")
+    # The embedded database listens on its own port (3307), not the default
+    # 3306 - without -P the pre-change snapshot silently had no database dump.
+    local dbport port_arg=()
+    dbport="$(sed -n 's/^DB_PORT=//p' "$ENV_FILE")"; [ -n "$dbport" ] && port_arg=(-P "$dbport")
     # --set-gtid-purged=OFF: found via real execution against MySQL 8 (choco's
     # mysql package on the Windows path) - mysqldump failed outright with
     # "Couldn't execute 'FLUSH TABLES': Access denied; you need (at least one
@@ -629,8 +638,15 @@ backup_before_change() {
     # all ("unknown option"), which broke the previously-working MariaDB path
     # outright the first time this was added unconditionally.
     local gtid_flag=()
-    "$dump_bin" --help 2>/dev/null | grep -q -- '--set-gtid-purged' && gtid_flag=(--set-gtid-purged=OFF)
-    if "$dump_bin" -h "${host:-localhost}" -u "${user:-dcim}" "${pw_arg[@]}" --single-transaction "${gtid_flag[@]}" --routines --triggers "${name:-dcim}" 2>"$backup_dir/mysqldump.err" | gzip > "$backup_dir/database.sql.gz"; then
+    # Capture --help once: `... | grep -q` under pipefail can report failure when
+    # grep exits early and the client gets SIGPIPE, silently dropping the flag.
+    local dump_help; dump_help="$("$dump_bin" --help 2>/dev/null || true)"
+    case "$dump_help" in *--set-gtid-purged*) gtid_flag=(--set-gtid-purged=OFF) ;; esac
+    # MySQL 8's mysqldump queries information_schema.COLUMN_STATISTICS, which
+    # MariaDB servers (including the bundled embedded DB) do not have - the dump
+    # then aborts. Feature-detected: MariaDB's own client does not know the flag.
+    case "$dump_help" in *--column-statistics*) gtid_flag+=(--column-statistics=0) ;; esac
+    if "$dump_bin" -h "${host:-localhost}" "${port_arg[@]}" -u "${user:-dcim}" "${pw_arg[@]}" --single-transaction "${gtid_flag[@]}" --routines --triggers "${name:-dcim}" 2>"$backup_dir/mysqldump.err" | gzip > "$backup_dir/database.sql.gz"; then
       log "Database snapshot saved to $backup_dir/database.sql.gz"
     else
       rm -f "$backup_dir/database.sql.gz"
@@ -813,6 +829,10 @@ do_install() {
 
 do_upgrade() {
   existing_install_present || die "No existing installation found at $INSTALL_DIR; use --mode install instead."
+  # Use the port/DB settings of the installed .env (not the command-line defaults) for the
+  # port check and the post-restart health wait - otherwise an install on a custom port
+  # reports "not healthy" on every upgrade/repair that does not re-pass --port.
+  reload_env_for_summary
   run_validations
   backup_before_change
   systemctl stop "$SERVICE_NAME" 2>/dev/null || true
@@ -829,6 +849,7 @@ do_upgrade() {
 
 do_repair() {
   repair_target_present || die "No existing installation found at $INSTALL_DIR; use --mode install instead."
+  reload_env_for_summary   # see do_upgrade: honour the installed .env's port for validation and health wait
   run_validations
   ensure_service_user
   backup_before_change
@@ -848,6 +869,7 @@ do_repair() {
       install -d -m 750 "$(dirname "$ENV_FILE")"
       cp -a "$latest_env" "$ENV_FILE"
       chmod 640 "$ENV_FILE"
+      reload_env_for_summary
     else
       die "No .env found at $ENV_FILE and no prior backup contains one; repair cannot recover the configuration. Restore it manually (e.g. from an external backup) or reinstall with --mode install."
     fi

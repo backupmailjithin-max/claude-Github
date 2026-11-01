@@ -13,6 +13,7 @@
 //                                      or `node tools/license-fingerprint.js` run on
 //                                      their machine; omit for a non-machine-bound
 //                                      license, e.g. for evaluation copies)
+//     [--allow-unbound]                 (required to omit --machine-id - opts out of machine binding)
 //     [--out acme-corp.lic]            (default: <customer-slug>.lic)
 const crypto = require('crypto');
 const fs = require('fs');
@@ -36,12 +37,16 @@ const args = parseArgs(process.argv.slice(2));
 function usageError(msg) {
   console.error('Error:', msg);
   console.error('');
-  console.error('Usage: node tools/license-issue.js --private-key <path> --customer "<name>" [--max-users N] [--expires YYYY-MM-DD] [--machine-id <id>] [--out <file>.lic]');
+  console.error('Usage: node tools/license-issue.js --private-key <path> --customer "<name>" --machine-id <id> [--max-users N] [--expires YYYY-MM-DD] [--out <file>.lic]\n       (or --allow-unbound instead of --machine-id, to intentionally issue a non-machine-bound license)');
   process.exit(1);
 }
 
 if (!args['private-key']) usageError('--private-key is required (from tools/license-keygen.js).');
 if (!args.customer) usageError('--customer "<name>" is required.');
+// Machine-bound by default for customer releases: an unbound license (no --machine-id) validates on any
+// machine, which is the easiest way for a license to end up shared beyond the one customer it was issued
+// to. --allow-unbound is the explicit opt-out for evaluation copies and other intentionally unbound cases.
+if (!args['machine-id'] && !args['allow-unbound']) usageError('--machine-id is required for a customer release (pass the fingerprint from Settings -> License, or `node tools/license-fingerprint.js` run on their machine). Pass --allow-unbound to intentionally issue a non-machine-bound license (e.g. an evaluation copy).');
 
 let privateKey;
 try {

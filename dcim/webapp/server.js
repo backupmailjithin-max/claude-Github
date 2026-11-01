@@ -22,6 +22,9 @@ if (IS_PRODUCTION && !JWT_SECRET) throw new Error('JWT_SECRET is required when N
 // see docs/LICENSING.md. LICENSE_FILE lets an install point at a license
 // dropped somewhere other than its default location next to .env.
 const LICENSE_FILE = process.env.LICENSE_FILE || path.join(__dirname, 'license.lic');
+// Security events raised inside lib/license.js (tampered license file, clock rollback, ...) go to the audit log.
+license.setSecurityListener((type, details) => auditLog(null, type, { status: 'failure', username: 'system', entity: 'license', details }));
+license.secureLicenseFile(LICENSE_FILE);   // older versions wrote license.lic world-readable; content is never changed
 
 // =====================================================================
 // PHASE-1 HARDENING - shared infrastructure
@@ -114,6 +117,9 @@ async function auditLog(req, action, o = {}) {
     );
   } catch (e) { log.warn('[audit] could not write audit record:', e.message); }
 }
+// Integrity of the licensing code (lib/integrity.js). Verified here, as early as the logger exists, so INTEGRITY_MODE=enforce
+// can refuse normal startup. Audit events raised before the database is ready are queued and written once it is.
+license.ensureIntegrity({ log, defer: true });
 
 // ---- Upload security ----
 // extension -> accepted declared MIME types + file signature (magic bytes) check
@@ -283,10 +289,10 @@ if (CORS_ORIGIN) {
   app.use(cors());
 }
 // ---- HARDENING: Content-Security-Policy ----
-// CSP_MODE = report-only (default: violations are reported, nothing is blocked) | enforce | off.
+// CSP_MODE = enforce (default: violations are blocked and reported) | report-only (reported only) | off.
 // Inline <script> blocks of index.html are allowed by SHA-256 hash (computed from the file that is actually served), so 'unsafe-inline' is not needed for scripts.
 // The browser talks only to this same origin (Dell OME / HPE OneView are called by the server, never by the browser). CSP_EXTRA_CONNECT / CSP_EXTRA_IMG add origins if ever needed.
-const CSP_MODE = (() => { const v = String(process.env.CSP_MODE || 'report-only').toLowerCase(); return ['enforce', 'report-only', 'off'].includes(v) ? v : 'report-only'; })();
+const CSP_MODE = (() => { const v = String(process.env.CSP_MODE || 'enforce').toLowerCase(); return ['enforce', 'report-only', 'off'].includes(v) ? v : 'enforce'; })();
 // Session Timeout: read once at startup, same "write to .env + restart" pattern as
 // CSP_MODE/JWT_SECRET above (see the Setup Wizard's Security tab) - defaults to the
 // previous hardcoded 8h if unset or invalid, so an upgrade with no .env change behaves
@@ -314,9 +320,22 @@ function getRenderedIndex() {
   _indexCache = { htmlMtime: st.mtimeMs, bundleHash, html, cspHashes: hashes.join(' ') };
   return _indexCache;
 }
-function buildCspValue() {
+// Inline <script> hashes for the stand-alone admin pages (setup wizard / deployment dashboard), so they keep working when CSP_MODE=enforce.
+const ADMIN_PAGES = { '/setup-wizard.html': 'setup-wizard.html', '/deployment-dashboard.html': 'deployment-dashboard.html' };
+const _adminCspCache = {};
+function adminPageHashes(reqPath) {
+  const name = ADMIN_PAGES[reqPath]; if (!name) return null;
+  const f = path.join(__dirname, name);
+  const st = fs.statSync(f); const c = _adminCspCache[name];
+  if (c && c.mtime === st.mtimeMs) return c.hashes;
+  const html = fs.readFileSync(f, 'utf8').replace(/<!--[\s\S]*?-->/g, ''); const hashes = [];
+  html.replace(/<script(?![^>]*\bsrc\s*=)[^>]*>([\s\S]*?)<\/script>/gi, (m, body) => { if (body.trim()) hashes.push(`'sha256-${nodeCrypto.createHash('sha256').update(body.replace(/\r\n?/g, '\n'), 'utf8').digest('base64')}'`); return m; });
+  _adminCspCache[name] = { mtime: st.mtimeMs, hashes: hashes.join(' ') };
+  return _adminCspCache[name].hashes;
+}
+function buildCspValue(reqPath) {
   try {
-    const { cspHashes } = getRenderedIndex();
+    const cspHashes = (reqPath && adminPageHashes(reqPath)) || getRenderedIndex().cspHashes;
     const conn = ["'self'", cspExtra('CSP_EXTRA_CONNECT')].filter(Boolean).join(' '); const img = ["'self'", 'data:', 'blob:', cspExtra('CSP_EXTRA_IMG')].filter(Boolean).join(' ');
     return ["default-src 'self'", `script-src 'self' ${cspHashes}`.trim(), "style-src 'self' 'unsafe-inline'", `img-src ${img}`, "font-src 'self' data:", "media-src 'self' blob:", `connect-src ${conn}`, "worker-src 'self' blob:", "object-src 'none'", "base-uri 'self'", "form-action 'self'", "frame-ancestors 'self'", 'report-uri /api/csp-report'].join('; ');
   } catch (e) { return ''; }
@@ -356,7 +375,7 @@ app.use((req, res, next) => {
   res.set('X-Content-Type-Options', 'nosniff');
   res.set('X-Frame-Options', 'SAMEORIGIN');
   res.set('Referrer-Policy', 'same-origin');
-  if (CSP_MODE !== 'off' && !req.path.startsWith('/api/')) { const cv = buildCspValue(); if (cv) res.set(CSP_MODE === 'enforce' ? 'Content-Security-Policy' : 'Content-Security-Policy-Report-Only', cv); }
+  if (CSP_MODE !== 'off' && !req.path.startsWith('/api/')) { const cv = buildCspValue(req.path); if (cv) res.set(CSP_MODE === 'enforce' ? 'Content-Security-Policy' : 'Content-Security-Policy-Report-Only', cv); }
   // PHASE-1 hardening headers
   res.set('Permissions-Policy', 'geolocation=(), microphone=(), camera=(), payment=(), usb=(), serial=()');
   res.set('Cross-Origin-Opener-Policy', 'same-origin');
@@ -737,7 +756,8 @@ async function initDB() {
     // it. Without this, a customer who deleted the demo locations entirely
     // to start clean with their own sites would see "Sample Site A"/
     // "Sample Site B" silently reappear on the next restart.
-    const freshInstall = (await conn.query('SELECT COUNT(*) as cnt FROM users'))[0][0].cnt === 0;
+    const SEED_SAMPLE = String(process.env.SEED_SAMPLE_DATA === undefined ? '1' : process.env.SEED_SAMPLE_DATA).trim() !== '0';   // SEED_SAMPLE_DATA=0 in .env: production install with no demo sites/assets/accounts
+    const freshInstall = (await conn.query('SELECT COUNT(*) as cnt FROM users'))[0][0].cnt === 0 && SEED_SAMPLE;
 
     await conn.query(`
       CREATE TABLE IF NOT EXISTS assets (
@@ -1075,12 +1095,25 @@ async function initDB() {
     // OneView devices. Always reflects the latest poll (live state), same
     // as health_status/power_state above - never COALESCE-protected.
     try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_alert_count INT NULL'); } catch (e) { /* already exists */ }
+    // Lets an admin exclude a device from the Multi-Vendor (Redfish) monitoring
+    // list without touching its Asset Inventory record - for devices that have
+    // a management IP captured (storage arrays, network switches, firewalls,
+    // etc.) but aren't meant to be polled over Redfish. Hidden from the default
+    // list view; still filterable back in with "Show ignored".
+    try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_monitor_ignored TINYINT(1) NOT NULL DEFAULT 0'); } catch (e) { /* already exists */ }
 
     // ---- Widen id columns (VARCHAR(20) -> VARCHAR(50)) ----
     // Bulk-upsert generates IDs like AST-<13-digit timestamp>-<batch index>,
     // which can exceed 20 chars and fail with "Data too long for column 'id'".
     try { await conn.query('ALTER TABLE assets MODIFY id VARCHAR(50)'); } catch (e) { /* already migrated */ }
     try { await conn.query('ALTER TABLE issues MODIFY id VARCHAR(50)'); } catch (e) { /* already migrated */ }
+
+    // ---- Issue Tracker: Cancelled status ----
+    // A cancelled issue is a terminal, closed state distinct from "Completed" -
+    // it never went through repair, it was called off (duplicate, mis-reported,
+    // no longer applicable, etc.) and always needs a short reason on record.
+    try { await conn.query('ALTER TABLE issues ADD COLUMN cancelled_date DATETIME NULL'); } catch (e) { /* already exists */ }
+    try { await conn.query('ALTER TABLE issues ADD COLUMN cancel_reason TEXT NULL'); } catch (e) { /* already exists */ }
     try { await conn.query('ALTER TABLE dc_activities MODIFY id VARCHAR(50)'); } catch (e) { /* already migrated */ }
     try { await conn.query('ALTER TABLE material_movements MODIFY id VARCHAR(50)'); } catch (e) { /* already migrated */ }
     try { await conn.query('ALTER TABLE locations MODIFY id VARCHAR(50)'); } catch (e) { /* already migrated */ }
@@ -1545,15 +1578,17 @@ async function initDB() {
         'INSERT INTO users (username, password_hash, name, role, location_access, status) VALUES (?,?,?,?,?,?)',
         ['admin', hash, 'System Administrator', 'Admin', 'All', 'Active']
       );
-      const hash2 = await bcrypt.hash('pass', 10);
-      await conn.query(
-        'INSERT INTO users (username, password_hash, name, role, location_access, status) VALUES (?,?,?,?,?,?)',
-        ['site-a-op', hash2, 'Site A Operator', 'Operator', 'Sample Site A', 'Active']
-      );
-      await conn.query(
-        'INSERT INTO users (username, password_hash, name, role, location_access, status) VALUES (?,?,?,?,?,?)',
-        ['site-b-op', hash2, 'Site B Operator', 'Operator', 'Sample Site B', 'Active']
-      );
+      if (SEED_SAMPLE) {   // the two demo operator accounts only exist on a sample-data install (SEED_SAMPLE_DATA=0 skips them)
+        const hash2 = await bcrypt.hash('pass', 10);
+        await conn.query(
+          'INSERT INTO users (username, password_hash, name, role, location_access, status) VALUES (?,?,?,?,?,?)',
+          ['site-a-op', hash2, 'Site A Operator', 'Operator', 'Sample Site A', 'Active']
+        );
+        await conn.query(
+          'INSERT INTO users (username, password_hash, name, role, location_access, status) VALUES (?,?,?,?,?,?)',
+          ['site-b-op', hash2, 'Site B Operator', 'Operator', 'Sample Site B', 'Active']
+        );
+      }
       log.info('✓ Users seeded');
     }
 
@@ -1687,7 +1722,7 @@ async function syncIssuesForAsset(conn, oldSerial, a) {
   if (a.serial && a.serial !== oldSerial) await conn.query('UPDATE issues SET asset_id = ? WHERE asset_id = ?', [a.serial, oldSerial]);
   const key = a.serial || oldSerial;
   await conn.query(
-    'UPDATE issues SET site = ?, zone = ?, rack_no = ?, u_position = ? WHERE asset_id = ? AND completed_date IS NULL',
+    'UPDATE issues SET site = ?, zone = ?, rack_no = ?, u_position = ? WHERE asset_id = ? AND completed_date IS NULL AND cancelled_date IS NULL',
     [a.site, a.zone || 'AZ-1', a.rackNo || null, a.position || null, key]
   );
 }
@@ -1798,7 +1833,7 @@ async function normalizeAllUFormat(conn) {
     const nf = normalizeUFormat(r.position, r.height);
     if (!nf.changed) continue;
     await conn.query('UPDATE assets SET position = ?, height = ? WHERE id = ?', [nf.position, nf.height, r.id]);
-    if (r.serial_number) await conn.query('UPDATE issues SET u_position = ? WHERE asset_id = ? AND completed_date IS NULL', [nf.position, r.serial_number]);
+    if (r.serial_number) await conn.query('UPDATE issues SET u_position = ? WHERE asset_id = ? AND completed_date IS NULL AND cancelled_date IS NULL', [nf.position, r.serial_number]);
     fixedU++;
   }
   return fixedU;
@@ -2088,7 +2123,7 @@ async function assertSiteAccess(user, site) {const allowed = await getAllowedSit
   return allowed;
 }
 
-const ISSUE_DATE_FIELDS = ['reportedDate', 'diagnosedDate', 'receivedDate', 'scheduledDate', 'completedDate', 'movedToStoreDate', 'returnedToOemDate'];
+const ISSUE_DATE_FIELDS = ['reportedDate', 'diagnosedDate', 'receivedDate', 'scheduledDate', 'completedDate', 'movedToStoreDate', 'returnedToOemDate', 'cancelledDate'];
 
 // Auth middleware
 // PERF: the dashboard fires several API calls in parallel per page load, and
@@ -2123,7 +2158,7 @@ function mustChangeBlocked(req, res) {
 // can only reach license-management routes on an unlicensed/expired install -
 // same allow-list pattern as MUST_CHANGE_ALLOWED above. A no-op (never
 // blocks) until lib/license-public-key.js has a real key configured.
-const LICENSE_ALLOWED = new Set(['POST /api/auth/logout', 'POST /api/auth/heartbeat', 'GET /api/auth/me', 'GET /api/license/status', 'GET /api/license/fingerprint', 'POST /api/license/activate']);
+const LICENSE_ALLOWED = new Set(['POST /api/auth/logout', 'POST /api/auth/heartbeat', 'GET /api/auth/me', 'PATCH /api/auth/change-password', 'GET /api/license/status', 'GET /api/license/fingerprint', 'POST /api/license/activate']);
 function licenseBlocked(req, res) {
   const status = license.getLicenseStatus(LICENSE_FILE);
   if (!status.enforced || status.valid) return false;
@@ -2257,22 +2292,30 @@ function decodeLicenseInput(req) {
 
 app.post('/api/license/activate', authenticateToken, requireGlobalAdmin, licenseUpload.single('license'), async (req, res) => {
   try {
+    const upBytes = req.file ? req.file.size : (req.body && typeof req.body.code === 'string' ? req.body.code.length : 0);
+    const rejectUpload = (action, reason, extra) => auditLog(req, action, { status: 'failure', entity: 'license', details: Object.assign({ reason, bytes: upBytes }, extra || {}) });
     const decoded = decodeLicenseInput(req);
-    if (decoded.error) return res.status(400).json({ error: decoded.error });
+    if (decoded.error) { await rejectUpload('LICENSE_UPLOAD_INVALID', decoded.error); return res.status(400).json({ error: decoded.error }); }
     const parsed = decoded.parsed;
     if (!parsed || parsed.alg !== 'Ed25519' || typeof parsed.payloadJson !== 'string' || typeof parsed.signature !== 'string') {
+      await rejectUpload('LICENSE_UPLOAD_INVALID', 'not a recognized license');
       return res.status(400).json({ error: 'That is not a recognized license.' });
     }
-    await fs.promises.writeFile(LICENSE_FILE, decoded.buffer);
-    const status = license.getLicenseStatus(LICENSE_FILE);
-    if (!status.valid) {
-      // Keep the file either way (so the admin/support can see exactly what
-      // was uploaded and why it failed), just report the real reason.
-      return res.status(400).json({ error: `License file saved, but is not valid: ${status.reason}`, status });
+    // Validate FIRST; only a fully valid license is written (temp file, mode 600, atomic rename).
+    // A rejected upload never touches the license that is currently installed.
+    const installed = license.installLicense(decoded.buffer, LICENSE_FILE);
+    if (!installed.ok) {
+      const r = installed.result;
+      const tampered = r.code === 'BAD_SIGNATURE' || r.code === 'CORRUPT_PAYLOAD' || r.code === 'NOT_JSON' || r.code === 'MALFORMED';
+      await rejectUpload(tampered ? 'LICENSE_UPLOAD_TAMPERED' : 'LICENSE_ACTIVATE_FAILED', r.reason,
+        r.payload ? { code: r.code, licenseId: r.payload.licenseId || null, customer: r.payload.customer || null } : { code: r.code });
+      return res.status(400).json({ error: `License not applied (your existing license, if any, is unchanged): ${r.reason}`, status: license.getLicenseStatus(LICENSE_FILE) });
     }
+    const status = license.getLicenseStatus(LICENSE_FILE);
     auditLog(req, 'LICENSE_ACTIVATE', { entity: 'license', details: { licenseId: status.license && status.license.licenseId, customer: status.license && status.license.customer } });
     res.json({ success: true, status });
   } catch (e) {
+    auditLog(req, 'LICENSE_ACTIVATE_FAILED', { status: 'failure', entity: 'license', details: { reason: 'server error: ' + (e && e.message) } });
     sendErr(res, e);
   }
 });
@@ -2983,7 +3026,7 @@ app.get('/api/monitoring/search', authenticateToken, async (req, res) => {
         for (const d of snap.devices || []) {
           if (![d.name, d.model, d.serialNumber, d.ipAddress].some((f) => norm(f).includes(q))) continue;
           total++;
-          if (results.length < LIMIT) results.push({ site: z.site, zone: z.zone, vendor: label, name: d.name || null, model: d.model || null, serialNumber: d.serialNumber || null, ipAddress: d.ipAddress || null, healthStatus: d.healthStatus || null, powerState: d.powerState || null, firmwareVersion: d.firmwareVersion || null, fetchedAt: snap.fetchedAt });
+          if (results.length < LIMIT) results.push({ site: z.site, zone: z.zone, vendor: label, id: d.id != null ? d.id : null, uri: d.uri || null, name: d.name || null, model: d.model || null, serialNumber: d.serialNumber || null, ipAddress: d.ipAddress || null, healthStatus: d.healthStatus || null, powerState: d.powerState || null, firmwareVersion: d.firmwareVersion || null, fetchedAt: snap.fetchedAt });
         }
       }
     }
@@ -3843,17 +3886,6 @@ app.post('/api/monitoring/firmware/apply', authenticateToken, requireRole(['Admi
       invalidateDeviceSnapshot(vendor === 'ome' ? 'OME' : 'ONEVIEW', site, zone);
       Object.assign(res.locals.auditExtra, { jobRef: String(r.jobRef || '').slice(0, 500), submitted: toSubmit.length - ((r.failed && r.failed.length) || 0), failedToSubmit: (r.failed && r.failed.length) || 0, skippedBusy: skipped.length,
         ...(r.failed && r.failed.length ? { failedDetail: r.failed.slice(0, 20).map((f) => ({ id: f.uri, error: String(f.error).slice(0, 160) })) } : {}) });
-
-      // Audit trail — this is a privileged action against production hardware.
-      await pool.query(
-        `INSERT INTO dc_activities (id, site, zone, hardware_type, activity_type, description, start_date, completion_date, created_by)
-         VALUES (?,?,?,?,?,?,?,?,?)`,
-        [genId('ACT'), site, zone, vendor === 'ome' ? 'DellServer' : 'HPServer', 'Firmware Update',
-         `Firmware update submitted via Monitoring for ${toSubmit.length} device(s) against ${baselineId} (job ref: ${r.jobRef || 'pending'})` +
-         (r.failed && r.failed.length ? ` — ${r.failed.length} of ${toSubmit.length} device(s) failed to submit and were not included` : '') +
-         (skipped.length ? ` — ${skipped.length} other device(s) in the original selection were skipped (already had an update in progress)` : ''),
-         normalizeDateInput(new Date()), null, user.name || user.username]
-      );
 
       try {
         const failedSet = new Set((r.failed || []).map((f) => String(f.uri)));
@@ -5373,7 +5405,7 @@ app.delete('/api/assets/:id', authenticateToken, requireRole(['Admin','Operator'
     const [[{ movementCount }]] = await pool.query('SELECT COUNT(*) AS movementCount FROM asset_movements WHERE asset_id = ?', [req.params.id]);
     if (Number(movementCount) > 0) return res.status(409).json({ error: 'This asset has lifecycle history and cannot be permanently deleted. Use Decommission / Archive instead.' });
     if (rows[0].serial_number) {
-      const [[{ cnt }]] = await pool.query('SELECT COUNT(*) AS cnt FROM issues WHERE asset_id = ? AND completed_date IS NULL', [rows[0].serial_number]);
+      const [[{ cnt }]] = await pool.query('SELECT COUNT(*) AS cnt FROM issues WHERE asset_id = ? AND completed_date IS NULL AND cancelled_date IS NULL', [rows[0].serial_number]);
       if (cnt > 0) return res.status(409).json({ error: `This asset still has ${cnt} open issue(s). Close or delete them in the Issue Tracker first.` });
     }
     await pool.query('DELETE FROM assets WHERE id = ?', [req.params.id]);
@@ -5739,7 +5771,7 @@ app.post('/api/assets/bulk-upsert', authenticateToken, requireRole(['Admin','Ope
         col === 'site' ? r.site : col === 'zone' ? (r.zone || 'AZ-1') : col === 'rack_no' ? (r.rackNo || null) : (r.position || null),
       ]));
       await conn.query(
-        `UPDATE issues SET ${caseSql} WHERE asset_id IN (?) AND completed_date IS NULL`,
+        `UPDATE issues SET ${caseSql} WHERE asset_id IN (?) AND completed_date IS NULL AND cancelled_date IS NULL`,
         [...caseParams, openIssueRefresh.map((r) => r.serial)]
       );
     }
@@ -6178,7 +6210,8 @@ app.get('/api/issues', authenticateToken, async (req, res) => {
       description: r.description, severity: r.severity, partRequired: !!r.part_required, partName: r.part_name,
       reportedDate: toDateTimeStr(r.reported_date), diagnosedDate: toDateTimeStr(r.diagnosed_date), receivedDate: toDateTimeStr(r.received_date),
       scheduledDate: toDateTimeStr(r.scheduled_date), completedDate: toDateTimeStr(r.completed_date),
-      movedToStoreDate: toDateTimeStr(r.moved_to_store_date), returnedToOemDate: toDateTimeStr(r.returned_to_oem_date), notes: r.notes
+      movedToStoreDate: toDateTimeStr(r.moved_to_store_date), returnedToOemDate: toDateTimeStr(r.returned_to_oem_date), notes: r.notes,
+      cancelledDate: toDateTimeStr(r.cancelled_date), cancelReason: r.cancel_reason
     }));
     res.json(mapped);
   } catch (e) {
@@ -6205,6 +6238,9 @@ app.post('/api/issues', authenticateToken, requireRole(['Admin','Operator']), as
     await assertSiteAccess(req.user, i.site);
     if (!i.title || !String(i.title).trim()) return res.status(400).json({ error: 'Issue title is required' });
     i.severity = normalizeSeverity(i.severity);
+    if (i.cancelledDate && !(i.cancelReason && String(i.cancelReason).trim())) {
+      return res.status(400).json({ error: 'A reason is required to cancel an issue.' });
+    }
 
     await applyIssueAssetLink(i);
     releaseTicketLock = await acquireTicketLock();
@@ -6221,9 +6257,9 @@ app.post('/api/issues', authenticateToken, requireRole(['Admin','Operator']), as
     const assetId = (i.assetId && String(i.assetId).trim() !== '') ? String(i.assetId).trim() : null;
     const id = genId('INC');
     await pool.query(
-      `INSERT INTO issues (id, ticket_no, asset_id, asset_type, site, zone, rack_no, u_position, location_detail, title, description, severity, part_required, part_name, reported_date, diagnosed_date, received_date, scheduled_date, completed_date, moved_to_store_date, returned_to_oem_date, notes)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [id, i.ticketNo, assetId, i.assetType, i.site, i.zone || 'AZ-1', i.rackNo, i.uPosition, i.locationDetail, i.title, i.description, i.severity, i.partRequired, i.partName, i.reportedDate, i.diagnosedDate, i.receivedDate, i.scheduledDate, i.completedDate, i.movedToStoreDate, i.returnedToOemDate, i.notes]
+      `INSERT INTO issues (id, ticket_no, asset_id, asset_type, site, zone, rack_no, u_position, location_detail, title, description, severity, part_required, part_name, reported_date, diagnosed_date, received_date, scheduled_date, completed_date, moved_to_store_date, returned_to_oem_date, notes, cancelled_date, cancel_reason)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [id, i.ticketNo, assetId, i.assetType, i.site, i.zone || 'AZ-1', i.rackNo, i.uPosition, i.locationDetail, i.title, i.description, i.severity, i.partRequired, i.partName, i.reportedDate, i.diagnosedDate, i.receivedDate, i.scheduledDate, i.completedDate, i.movedToStoreDate, i.returnedToOemDate, i.notes, i.cancelledDate, i.cancelReason]
     );
     res.json({ id, ...i, assetId: assetId });
   } catch (e) {
@@ -6242,12 +6278,15 @@ app.patch('/api/issues/:id', authenticateToken, requireRole(['Admin','Operator']
     await assertSiteAccess(req.user, i.site);
     if (!i.title || !String(i.title).trim()) return res.status(400).json({ error: 'Issue title is required' });
     i.severity = normalizeSeverity(i.severity);
+    if (i.cancelledDate && !(i.cancelReason && String(i.cancelReason).trim())) {
+      return res.status(400).json({ error: 'A reason is required to cancel an issue.' });
+    }
     const keepExistingLink = i.site === existingRows[0].site && String(i.assetId || '').trim() === String(existingRows[0].asset_id || '').trim();
     await applyIssueAssetLink(i, { keepExistingLink });
 
     await pool.query(
-      `UPDATE issues SET ticket_no=?, asset_id=?, asset_type=?, site=?, zone=?, rack_no=?, u_position=?, location_detail=?, title=?, description=?, severity=?, part_required=?, part_name=?, reported_date=?, diagnosed_date=?, received_date=?, scheduled_date=?, completed_date=?, moved_to_store_date=?, returned_to_oem_date=?, notes=? WHERE id=?`,
-      [i.ticketNo, i.assetId, i.assetType, i.site, i.zone, i.rackNo, i.uPosition, i.locationDetail, i.title, i.description, i.severity, i.partRequired, i.partName, i.reportedDate, i.diagnosedDate, i.receivedDate, i.scheduledDate, i.completedDate, i.movedToStoreDate, i.returnedToOemDate, i.notes, req.params.id]
+      `UPDATE issues SET ticket_no=?, asset_id=?, asset_type=?, site=?, zone=?, rack_no=?, u_position=?, location_detail=?, title=?, description=?, severity=?, part_required=?, part_name=?, reported_date=?, diagnosed_date=?, received_date=?, scheduled_date=?, completed_date=?, moved_to_store_date=?, returned_to_oem_date=?, notes=?, cancelled_date=?, cancel_reason=? WHERE id=?`,
+      [i.ticketNo, i.assetId, i.assetType, i.site, i.zone, i.rackNo, i.uPosition, i.locationDetail, i.title, i.description, i.severity, i.partRequired, i.partName, i.reportedDate, i.diagnosedDate, i.receivedDate, i.scheduledDate, i.completedDate, i.movedToStoreDate, i.returnedToOemDate, i.notes, i.cancelledDate, i.cancelReason, req.params.id]
     );
     res.json({ success: true });
   } catch (e) {
@@ -7277,7 +7316,7 @@ app.post('/api/racks/move', authenticateToken, requireRole(['Admin']), async (re
       if (!sameSpot) {
         // Issues keep a copy of zone / rack no. - keep the open ones pointing at the rack's new name.
         await conn.query(
-          'UPDATE issues SET zone = ?, rack_no = ? WHERE site = ? AND zone = ? AND UPPER(TRIM(rack_no)) = UPPER(TRIM(?)) AND completed_date IS NULL',
+          'UPDATE issues SET zone = ?, rack_no = ? WHERE site = ? AND zone = ? AND UPPER(TRIM(rack_no)) = UPPER(TRIM(?)) AND completed_date IS NULL AND cancelled_date IS NULL',
           [targetZone, targetRackNo, site, zone, rackNo]
         );
         // Floor View positions are keyed by rack number: carry the tile position across a rename in the
@@ -7858,7 +7897,11 @@ const crypto = require('crypto'); // zlib is required once, near the top of the 
 // a restore). Encrypted credential values inside it only decrypt on a server with the same
 // JWT_SECRET they were encrypted under -- restoring to a different server still needs those
 // passwords re-entered via the wizard, exactly as Config Export/Import already documents.
-const BACKUP_TABLES = ['locations', 'rack_types', 'hardware_types', 'zones', 'racks', 'floor_plans', 'users', 'assets', 'rack_components', 'asset_movements', 'issues', 'dc_activities', 'material_movements', 'material_movement_documents', 'firmware_targets', 'firmware_model_targets', 'asset_connectivity', 'asset_hw_details', 'app_settings'];
+const BACKUP_TABLES = ['locations', 'rack_types', 'hardware_types', 'zones', 'racks', 'floor_plans', 'users', 'assets', 'rack_components', 'asset_movements', 'issues', 'dc_activities', 'material_movements', 'material_movement_documents', 'firmware_targets', 'firmware_model_targets', 'asset_connectivity', 'asset_hw_details', 'pdus', 'app_settings'];
+// Tables that may legitimately not exist yet on a given install (pdus is created by lib/pdu-routes.js at startup). A missing one is simply left out of a backup
+// and left alone by a restore - never an error, and never turned into an empty list that would wipe data.
+const BACKUP_OPTIONAL_TABLES = new Set(['pdus']);
+const isNoSuchTable = (e) => !!e && (e.code === 'ER_NO_SUCH_TABLE' || e.errno === 1146);
 const BACKUP_FORMAT = 'dc-dashboard-backup', BACKUP_VERSION = 1;
 const BACKUP_RETENTION_DAYS = Math.max(1, Number(process.env.BACKUP_RETENTION_DAYS) || 7); // configurable; default widened from the old hardcoded 3 to 7 per the packaging review
 const BACKUP_TIME = /^([01]\d|2[0-3]):([0-5]\d)$/.test(process.env.BACKUP_TIME || '') ? process.env.BACKUP_TIME : '23:00';   // HH:MM server time
@@ -7908,7 +7951,7 @@ async function buildBackup(kind, by) {
   try {
     await conn.query('SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ');
     await conn.query('START TRANSACTION WITH CONSISTENT SNAPSHOT');          // every table as of the same instant
-    for (const t of BACKUP_TABLES) { const [rows] = await conn.query({ sql: `SELECT * FROM \`${t}\``, typeCast: dateStringCast }); tables[t] = rows; }
+    for (const t of BACKUP_TABLES) { try { const [rows] = await conn.query({ sql: `SELECT * FROM \`${t}\`${t === 'app_settings' ? " WHERE k NOT LIKE 'license.%'" : ''}`, typeCast: dateStringCast }); tables[t] = rows; } catch (e) { if (BACKUP_OPTIONAL_TABLES.has(t) && isNoSuchTable(e)) continue; throw e; } }   // license.* (trial record) stays per machine - never exported
     await conn.query('COMMIT');
   } finally { conn.release(); }
   const files = {}, skippedFiles = [];
@@ -7921,7 +7964,7 @@ async function buildBackup(kind, by) {
     }
   } catch (e) { /* no uploads folder yet */ }
   const sha256 = crypto.createHash('sha256').update(JSON.stringify({ tables, files })).digest('hex');
-  const counts = {}; BACKUP_TABLES.forEach((t) => { counts[t] = tables[t].length; });
+  const counts = {}; BACKUP_TABLES.forEach((t) => { if (tables[t]) counts[t] = tables[t].length; });
   const manifest = { format: BACKUP_FORMAT, version: BACKUP_VERSION, appVersion: APP_VERSION, createdAt: new Date().toISOString(), createdBy: by || 'system', kind, counts, fileCount: Object.keys(files).length, skippedFiles, sha256, tables, files };
   return { buffer: zlib.gzipSync(Buffer.from(JSON.stringify(manifest)), { level: 6 }), manifest };
 }
@@ -8023,7 +8066,7 @@ function parseBackupBuffer(buf) {
   if (m.fileCount != null && Number(m.fileCount) !== Object.keys(files).length) throw httpErr(400, 'The backup file list is incomplete (attachment count mismatch). Nothing was changed.');
   return m;
 }
-async function currentCounts() { const out = {}; for (const t of BACKUP_TABLES) { const [[r]] = await pool.query(`SELECT COUNT(*) AS c FROM \`${t}\``); out[t] = r.c; } return out; }
+async function currentCounts() { const out = {}; for (const t of BACKUP_TABLES) { try { const [[r]] = await pool.query(`SELECT COUNT(*) AS c FROM \`${t}\``); out[t] = r.c; } catch (e) { if (BACKUP_OPTIONAL_TABLES.has(t) && isNoSuchTable(e)) continue; throw e; } } return out; }
 
 // ---- restore: all or nothing ----
 async function restoreManifest(m, by) {
@@ -8036,12 +8079,14 @@ async function restoreManifest(m, by) {
     for (const t of BACKUP_TABLES) {
       const rows = m.tables[t];
       if (!rows) { untouched.push(t); continue; }                                   // an older backup without this table: leave the current one alone
-      const [cols] = await conn.query(`SHOW COLUMNS FROM \`${t}\``); const known = new Set(cols.map((c) => c.Field));
-      await conn.query(`DELETE FROM \`${t}\``);
-      if (rows.length) {
-        const use = Object.keys(rows[0]).filter((c) => known.has(c));
-        for (let i = 0; i < rows.length; i += 300) {
-          const chunk = rows.slice(i, i + 300);
+      let cols; try { [cols] = await conn.query(`SHOW COLUMNS FROM \`${t}\``); } catch (e) { if (BACKUP_OPTIONAL_TABLES.has(t) && isNoSuchTable(e)) { untouched.push(t); continue; } throw e; }
+      const known = new Set(cols.map((c) => c.Field));
+      await conn.query(t === 'app_settings' ? "DELETE FROM `app_settings` WHERE k NOT LIKE 'license.%'" : `DELETE FROM \`${t}\``);   // keep this machine's own trial record
+      const rowsIn = t === 'app_settings' ? rows.filter((r) => !String(r && r.k || '').startsWith('license.')) : rows;
+      if (rowsIn.length) {
+        const use = Object.keys(rowsIn[0]).filter((c) => known.has(c));
+        for (let i = 0; i < rowsIn.length; i += 300) {
+          const chunk = rowsIn.slice(i, i + 300);
           await conn.query(`INSERT INTO \`${t}\` (${use.map((c) => `\`${c}\``).join(',')}) VALUES ?`, [chunk.map((r) => use.map((c) => (r[c] === undefined ? null : r[c])))]);
         }
       }
@@ -8787,12 +8832,45 @@ async function startServer() {
       process.exitCode = 1;
       return;
     }
-    await initDB();
-    await setupRoutesModule.applyIntegrationEnv();
-    await pduRoutesModule.ensureSchema();
+    const integrityEnforced = license.integrityEnforced();
+    if (integrityEnforced) {
+      // INTEGRITY_MODE=enforce and a protected file failed verification: refuse normal startup. No schema migrations, no
+      // integration setup, no background jobs - only the HTTP gate's allow-list (/api/health, /api/license/*, sign-in) is served.
+      log.error('[startup] INTEGRITY ENFORCED - refusing normal startup (migrations and background jobs skipped). See the [integrity] message above for the reference ID and recovery steps.');
+    } else {
+      await initDB();
+      await setupRoutesModule.applyIntegrationEnv();
+      await pduRoutesModule.ensureSchema();
+    }
+    license.flushIntegrityEvents();   // audit rows queued before the database was ready
+    // 10-day free trial + auto-lock (see lib/license.js). Only when licensing is enforced.
+    if (license.isLicensingConfigured()) {
+      try {
+        const t = await license.initTrial({ filePath: path.join(__dirname, '.trial-state'), dbGet: getSetting, dbSet: setSetting, log });
+        license.startIntegrityMonitor(LICENSE_FILE, log);   // signed-manifest check of the licensing code + licence-file watch (lib/integrity.js)
+        const st = license.getLicenseStatus(LICENSE_FILE);
+        log.info(`[license] mode=${st.mode}${t && st.mode === 'trial' ? `, ${t.daysLeft} day(s) left (ends ${t.endsAt.slice(0, 10)})` : ''}`);
+        let lastMode = st.mode;
+        const watcher = setInterval(() => {
+          const cur = license.getLicenseStatus(LICENSE_FILE).mode;
+          if (cur !== lastMode) { if (cur === 'locked') log.warn('[license] LOCKED - free trial ended and no valid license is active.'); lastMode = cur; }
+        }, 60 * 1000);
+        if (watcher.unref) watcher.unref();
+      } catch (e) { log.warn('[license] trial initialisation failed: ' + e.message); }
+    }
     // BIND_HOST (optional, e.g. 127.0.0.1 when nginx is the only entry point). Unset = all interfaces, exactly as before.
     httpServer = app.listen(...(process.env.BIND_HOST ? [PORT, process.env.BIND_HOST] : [PORT]), () => {
       log.info(`[startup] DCIM server v${APP_VERSION} listening on port ${PORT} (${IS_PRODUCTION ? 'production' : 'development'}, node ${process.version}, pid ${process.pid}, db ${DB_NAME})`);
+      if (license.integrityEnforced()) {   // strict integrity mode: stay minimal
+        auditLog(null, 'SERVER_START_REFUSED', { status: 'failure', username: 'system', entity: 'server', details: { reason: 'integrity enforce mode', port: Number(PORT) } });
+        log.error(`[startup] Listening in RESTRICTED integrity mode on port ${PORT}: only /api/health and /api/license/* (plus sign-in) are served.`);
+        return;
+      }
+      if (IS_PRODUCTION) {   // production hygiene hints (log only, never blocks start)
+        if (!CORS_ORIGIN || CORS_ORIGIN.split(',').map((v) => v.trim()).includes('*')) log.warn('[security] CORS_ORIGIN is unset or "*" - set it to this site\'s real URL (e.g. https://dcim.example.com) in .env.');
+        if (CSP_MODE !== 'enforce') log.warn(`[security] CSP_MODE is "${CSP_MODE}" - "enforce" is recommended in production.`);
+        try { const m = fs.statSync(path.join(__dirname, '.env')).mode & 0o077; if (m && process.platform !== 'win32') log.warn('[security] .env is readable by other users - run: chmod 600 .env'); } catch (e) { /* no .env file (variables supplied by the service) */ }
+      }
       { // REVIEW: audit-trail retention (AUDIT_RETENTION_DAYS, default 365; 0 = keep forever). Deletes in small batches so it never locks the table for long.
         const keepDays = process.env.AUDIT_RETENTION_DAYS !== undefined && process.env.AUDIT_RETENTION_DAYS !== '' ? Math.max(0, Number(process.env.AUDIT_RETENTION_DAYS) || 0) : 365;
         const purgeAudit = async () => { try { let total = 0, n; do { const [r] = await pool.query('DELETE FROM audit_logs WHERE created_at < (NOW() - INTERVAL ? DAY) LIMIT 2000', [keepDays]); n = r.affectedRows; total += n; } while (n === 2000); if (total) log.info(`[audit] purged ${total} audit_logs rows older than ${keepDays} days`); } catch (e) { log.warn('[audit] retention purge skipped: ' + e.message); } };

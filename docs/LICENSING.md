@@ -29,6 +29,86 @@ below. This document is for you, not your customers.
 See `dcim/webapp/lib/license.js` for the full verification logic and
 `docs/guides/` wherever you'd like to fold this into customer-facing docs.
 
+## 10-day free trial and auto-lock
+
+When licensing is on (a public key is configured) and no valid `license.lic`
+is present, the app starts a **10-day free trial** the first time the server
+runs. Everything works and a banner shows the days left. On day 11 the app
+**locks itself**: every API call except sign-out, change-password and the
+license routes returns `402 LICENSE_REQUIRED`, and the UI shows an
+"Application locked" screen with the machine ID and Activate / Upload .lic.
+Activating a valid license unlocks immediately, no restart; data is never
+touched.
+
+- The trial start is recorded in two places - `.trial-state` next to
+  `server.js` (HMAC-signed with the machine fingerprint) and the
+  `license.trialStartedAt` / `license.trialSig` keys in `app_settings`. The
+  earliest valid copy wins, so deleting one does not restart the clock.
+  An edited or copied record counts as an ended trial.
+- The machine ID shown in the app is now derived from the OS **machine-id**
+  (Linux `/etc/machine-id`, Windows MachineGuid), so a hostname or network-card
+  change no longer breaks a license or trial bound to it. Licenses issued
+  earlier against the old ID (machine-id + MAC + hostname) are still accepted
+  unchanged; those keep the old sensitivity to hostname/NIC changes until the
+  vendor re-issues them against the new ID. If a host has no OS machine-id the
+  composite ID is used.
+- The latest time the install has ever seen is kept (signed) in `.license-clock`
+  and in `app_settings` (`license.clockSeen*`, excluded from backup/restore) and
+  is used for license-expiry and trial checks, so winding the system clock back
+  does not revive an expired license or trial. Recovery if a wrong future clock
+  poisoned it: stop the service, delete `.license-clock`, run
+  `DELETE FROM app_settings WHERE k LIKE 'license.clock%';`, start the service.
+- **Startup integrity check.** Every package carries `integrity.manifest.json`: SHA-256 of
+  `server.js`, `lib/license.js`, `lib/license-public-key.js` and `lib/integrity.js`, signed with a throw-away
+  Ed25519 key created during the build (no signing material is stored or shipped). At startup, and when a
+  protected file changes (checked once a minute), the app verifies the manifest. A mismatch writes an
+  `INTEGRITY_VIOLATION` audit event (`LICENSE_PUBLIC_KEY_REPLACED` when the licence public key differs),
+  logs a warning and adds `integrity.warnings` to `GET /api/license/status`. Default mode is `warn` - nothing is
+  blocked. Optional: `INTEGRITY_MODE=restricted` in `.env` locks the app on a failed check (activation and
+  sign-out stay reachable). Risky service environment overrides (`NODE_OPTIONS` with `--require/--import/--inspect`,
+  `NODE_PATH`, `LD_PRELOAD`) are reported the same way. After hand-copying a changed file onto an install, the
+  warning stays until a manifest built for that file set is installed (`INTEGRITY_MODE=warn` meanwhile).
+- **Strict mode (`INTEGRITY_MODE=enforce`).** If `server.js`, `lib/license.js`, `lib/license-public-key.js` or
+  `lib/integrity.js` differ from the manifest, or the manifest is invalid/missing, the server refuses normal
+  startup (no schema migrations, no background jobs) and an HTTP gate answers `503` to everything except
+  `/api/health`, `/api/license/*` and the sign-in routes needed to reach them (`POST /api/auth/login|logout`,
+  `GET /api/auth/me`). Each refusal carries a reference ID (`INT-<timestamp>-<8 hex>`), also in the
+  `INTEGRITY_ENFORCED` audit event, the service log and `GET /api/license/status`. Activation works as usual
+  through the API. Recovery: restore the packaged files (`dcim-repair` / the repair utility / `dcim-rollback`)
+  and restart; set `INTEGRITY_MODE=warn` only for a deliberate, trusted change.
+- `license.lic` is watched while the service runs: an unexpected change or removal is audited once
+  (`LICENSE_FILE_MODIFIED` / `LICENSE_FILE_REMOVED`), a bad signature as `LICENSE_TAMPERED`.
+- Known limit: wiping both trial records restarts the trial.
+- Activation validates the upload first and only then atomically replaces
+  `license.lic` (mode 600); a rejected upload leaves the installed license
+  untouched. Rejected uploads, tampered stored licenses, clock rollback and
+  tampered trial/clock state are written to the audit log
+  (`LICENSE_UPLOAD_INVALID`, `LICENSE_UPLOAD_TAMPERED`, `LICENSE_ACTIVATE_FAILED`,
+  `LICENSE_TAMPERED`, `LICENSE_CLOCK_ROLLBACK`, `LICENSE_TRIAL_TAMPERED`).
+- Upgrade / repair keep `license.lic`, `.trial-state` and `.license-clock` (excluded from the
+  installers' sync/delete step). Do not ship either file in a package.
+- To restart the clock on a TEST machine: delete `.trial-state` and run
+  `DELETE FROM app_settings WHERE k LIKE 'license.%'`.
+
+### Clock rollback
+
+The server remembers the latest time it has seen (signed, stored next to the trial record and in the database). Setting the system clock back, or deleting one of the two trial copies, does not give extra days: the trial uses the later of "now" and the last time seen.
+
+### What customer packages leave out
+
+The licence generator, key tool and issue template (`tools/license-*.js`, `Run-License-Generator.bat`, `LICENSE-ISSUE-TEMPLATE.txt`) are vendor-only and are not included in the Windows, deb or rpm packages. The same applies to the standalone-executable build step (`tools/Build-License-Generator-Exe.bat`, `tools/sea-config.json`) and its output (`tools/dcim-license-generator-v2.exe`) - see "Generating a license remotely, without Node.js" below.
+
+### Generating a license remotely, without Node.js
+
+`tools/license-generator-wizard.js` needs Node.js on the machine that runs it. For a vendor who travels, or works from a machine where installing Node isn't practical, build it once into a single standalone `.exe` (Node's built-in "Single Executable Application" feature - no paid tools, no network access needed by the resulting file):
+
+1. On any Windows machine that **does** have Node.js installed, run `tools\Build-License-Generator-Exe.bat` once. It produces `tools\dcim-license-generator-v2.exe`.
+2. Copy that one `.exe` file anywhere - a USB drive, a laptop with no internet, a customer site. It needs nothing else installed to run, not even Node.js.
+3. `Run-License-Generator.bat` automatically prefers the `.exe` when present, so nothing about day-to-day use changes.
+4. Rebuild it only when `license-generator-wizard.js` itself changes.
+
+This `.exe` is exactly as powerful as the licence generator script it was built from - it can mint a valid license file with any private key it's pointed at. Treat it like the `.js` tool it replaces: **never** ship it, or the build script that makes it, to a customer. It is stripped from every package by the same build-gate and installer exclusions that strip `Run-License-Generator.bat` (see `packaging/appliance/build-appliance.sh`, `packaging/linux/build-deb.sh`, `packaging/linux/build-rpm.sh`, the Windows `.iss` scripts, and `packaging/tools/validate-package.js`).
+
 ## One-time setup (do this once, ever)
 
 1. **Generate your signing keypair**, on a machine you control — never on a
@@ -99,6 +179,23 @@ See `dcim/webapp/lib/license.js` for the full verification logic and
      -H "Content-Type: application/json" \
      -d '{"code":"<the activation code>"}'
    ```
+
+## Vendor-signed integrity manifest (anti-tamper trust root)
+
+`integrity.manifest.json` lists the SHA-256 of `server.js`, `lib/license.js`, `lib/license-public-key.js`, `lib/integrity.js` and
+`lib/integrity-public-key.js`. Until you pin a vendor integrity key it is self-signed by the build (tamper evidence only, as before).
+Pinning the key makes it **vendor-signed**: only you can produce a manifest the app will accept.
+
+One-time, on your own machine (never in CI, never on a customer machine):
+
+1. `node packaging/tools/integrity-keygen.js --out ~/secure/dcim-integrity.pem --install` - writes the private key (mode 600, refused inside the repo) and pins the public key in `lib/integrity-public-key.js`, `lib/integrity.js` and `lib/license.js`. Commit those three files. Back the private key up offline.
+2. Every build signs with it: `export DCIM_INTEGRITY_SIGN_KEY_FILE=~/secure/dcim-integrity.pem` (Linux/appliance builds), or add the repo secret `DCIM_INTEGRITY_SIGN_KEY` (Windows job). Set `DCIM_REQUIRE_VENDOR_SIGNATURE=1` (or repo variable `DCIM_REQUIRE_VENDOR=1`) so a release build fails instead of falling back to a self-signed manifest.
+3. Hot-fix zips: after editing any protected file, re-run `node packaging/tools/make-integrity-manifest.js --webapp <dir> --sign-key <key>` and ship the new manifest with the files.
+
+The private key is never packaged: the build gate fails if a key file sits inside the package tree, and a vendor-signed manifest carries no key at all.
+Set `INTEGRITY_MODE=enforce` in the customer `.env` to refuse start-up on file tampering **and** on runtime hijacking (`NODE_OPTIONS` loading code,
+`NODE_PATH`, `LD_PRELOAD`, an open debugger/inspector, a SIGUSR1 inspector request, or a patched signature primitive).
+See `LICENSING-ANTI-CRACK-REVIEW-2026-10-22.md`.
 
 ## What this does and doesn't protect against
 

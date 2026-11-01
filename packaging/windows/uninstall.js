@@ -51,6 +51,16 @@ removeDcimService(SERVICE_NAME, nssm);
 // deleted files.
 removeDcimService(EMBEDDED_DB_SERVICE_NAME, nssm);
 
+// The dedicated, restricted account the DCIM service ran as (install.js's ensureServiceAccount) only
+// ever exists to run that service - once the service is gone, remove the account too, so uninstall
+// doesn't leave a stray local user behind. Independent of -PurgeData (that flag is about data files).
+const SERVICE_ACCOUNT_NAME = 'DcimSvc';
+if (spawnSync('net', ['user', SERVICE_ACCOUNT_NAME], { stdio: 'ignore' }).status === 0) {
+  const res = spawnSync('net', ['user', SERVICE_ACCOUNT_NAME, '/delete'], { encoding: 'utf8' });
+  if (res.status === 0) log(`Removed the dedicated service account '${SERVICE_ACCOUNT_NAME}'.`);
+  else log(`WARNING: could not remove local account '${SERVICE_ACCOUNT_NAME}' (exit ${res.status}) - remove it manually with: net user ${SERVICE_ACCOUNT_NAME} /delete`);
+}
+
 if (PurgeData) {
   log(`Removing ${InstallDir} (application files, uploads, backups, logs, .env, and the embedded database if one was used) ...`);
   try { fs.rmSync(InstallDir, { recursive: true, force: true }); } catch { /* best effort */ }

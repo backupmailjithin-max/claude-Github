@@ -27,6 +27,18 @@ read -r -p "This will stop DCIM, restore files/.env from $SNAPSHOT_DIR, and rest
 systemctl stop "$SERVICE_NAME" 2>/dev/null || true
 
 if [ -f "$SNAPSHOT_DIR/webapp-files.tar.gz" ]; then
+  # Remove application files that a newer version introduced (present now, absent
+  # from the snapshot) so the rolled-back tree matches the snapshot. Never touches
+  # customer data/config: node_modules, uploads, backups, logs, .env, licence and
+  # trial records are preserved.
+  snap_list="$(mktemp)"; cur_list="$(mktemp)"
+  if tar -tzf "$SNAPSHOT_DIR/webapp-files.tar.gz" 2>/dev/null | sed 's#/$##' | sort -u > "$snap_list" && [ -s "$snap_list" ]; then
+    ( cd "$INSTALL_DIR" && find webapp \( -path webapp/node_modules -o -path webapp/ocr/vendor/node_modules -o -path webapp/uploads -o -path webapp/backups -o -path webapp/logs \) -prune -o \( -type f -o -type l \) -print | sort -u ) > "$cur_list"
+    comm -13 "$snap_list" "$cur_list" | grep -vE '^webapp/(\.env|\.trial-state|\.license-clock|license\.lic)$' | while IFS= read -r extra; do
+      rm -f -- "$INSTALL_DIR/$extra" && log "Removed file introduced by the newer version: $extra"
+    done || true
+  fi
+  rm -f "$snap_list" "$cur_list"
   log "Restoring application files..."
   tar -xzf "$SNAPSHOT_DIR/webapp-files.tar.gz" -C "$INSTALL_DIR"
 fi
@@ -43,8 +55,9 @@ if [ -f "$SNAPSHOT_DIR/database.sql.gz" ]; then
     host="$(sed -n 's/^DB_HOST=//p' "$ENV_FILE")"; user="$(sed -n 's/^DB_USER=//p' "$ENV_FILE")"
     pass="$(sed -n 's/^DB_PASSWORD=//p' "$ENV_FILE")"; name="$(sed -n 's/^DB_NAME=//p' "$ENV_FILE")"
     pw_arg=(); [ -n "$pass" ] && pw_arg=(-p"$pass")
+    dbport="$(sed -n 's/^DB_PORT=//p' "$ENV_FILE")"; port_arg=(); [ -n "$dbport" ] && port_arg=(-P "$dbport")
     log "Restoring database '$name' from $SNAPSHOT_DIR/database.sql.gz ..."
-    gunzip -c "$SNAPSHOT_DIR/database.sql.gz" | "$mysql_bin" -h "${host:-localhost}" -u "${user:-dcim}" "${pw_arg[@]}" "${name:-dcim}"
+    gunzip -c "$SNAPSHOT_DIR/database.sql.gz" | "$mysql_bin" -h "${host:-localhost}" "${port_arg[@]}" -u "${user:-dcim}" "${pw_arg[@]}" "${name:-dcim}"
     log "Database restored."
   fi
 else

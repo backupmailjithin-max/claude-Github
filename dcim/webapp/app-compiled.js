@@ -131,6 +131,11 @@ async function apiFetch(path, opts = {}) {
             throw new Error('Session expired');
         }
         const data = await res.json().catch(() => ({}));
+        if (res.status === 402 && data && data.code === 'LICENSE_REQUIRED') {
+            // Free trial ended / no valid license: the server locks every data call. The app shows the activation screen.
+            try { window.dispatchEvent(new CustomEvent('dcim-license-locked', { detail: data.error || 'License required' })); }
+            catch (e) { }
+        }
         if (res.status === 403 && data && data.code === 'PASSWORD_CHANGE_REQUIRED') {
             // The account still has its default password (e.g. flagged while this browser was already signed in): show the change-password screen.
             try {
@@ -359,7 +364,9 @@ const api = {
     importPdus: (payload) => apiFetch('/pdus/import', { method: 'POST', body: JSON.stringify(payload), timeoutMs: 60000 }),
     discoverPdus: () => apiFetch('/pdus/discover', { method: 'POST', timeoutMs: 90000 }),
     applyPduDiscovery: (ids) => apiFetch('/pdus/discover/apply', { method: 'POST', body: JSON.stringify({ ids }), timeoutMs: 60000 }),
-    getRedfishAssets: (site) => apiFetch('/monitoring/redfish/assets' + (site && site !== 'all' ? '?site=' + encodeURIComponent(site) : '')),
+    getRedfishAssets: (site, includeIgnored) => { const q = new URLSearchParams(); if (site && site !== 'all') q.set('site', site); if (includeIgnored) q.set('includeIgnored', '1'); const qs = q.toString(); return apiFetch('/monitoring/redfish/assets' + (qs ? '?' + qs : '')); },
+    setRedfishIgnored: (assetId, ignored) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/ignore', { method: 'PUT', body: JSON.stringify({ ignored }) }),
+    unconfigureRedfish: (assetIds) => apiFetch('/monitoring/redfish/unconfigure', { method: 'POST', body: JSON.stringify({ assetIds }) }),
     detectRedfish: (body) => apiFetch('/monitoring/redfish/detect', { method: 'POST', body: JSON.stringify(body), timeoutMs: 15000 }),
     saveRedfishCredentials: (assetId, body) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/credentials', { method: 'PUT', body: JSON.stringify(body) }),
     syncRedfishAsset: (assetId) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/sync', { method: 'POST', timeoutMs: 15000 }),
@@ -1210,6 +1217,10 @@ function fmtDateTimeVal(v) {
 }
 const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000);
 function getStatus(issue) {
+    // Cancellation is a terminal override: once an issue has been called off,
+    // that's its status regardless of how far the repair pipeline had gotten.
+    if (issue.cancelledDate)
+        return { label: "Cancelled", color: "#6B7280", cls: "neu-badge--gray" };
     if (issue.partRequired && issue.returnedToOemDate)
         return { label: "Returned to OEM", color: "#7C3AED", cls: "neu-badge--purple" };
     if (issue.partRequired && issue.movedToStoreDate)
@@ -1233,7 +1244,7 @@ function getStatus(issue) {
 // DC Capacity critical-rack markers and the Report. An issue is CLOSED once the
 // replacement/repair is completed - including the post-completion faulty-part
 // logistics stages (in store / returned to OEM).
-const CLOSED_ISSUE_LABELS = ["Completed", "Faulty part in store", "Returned to OEM"];
+const CLOSED_ISSUE_LABELS = ["Completed", "Faulty part in store", "Returned to OEM", "Cancelled"];
 const isIssueOpen = (i) => !CLOSED_ISSUE_LABELS.includes(getStatus(i).label);
 const ISSUE_GRID_COLS = "28px 30px 40px minmax(100px,0.8fr) minmax(70px,0.5fr) minmax(130px,1fr) minmax(180px,1.7fr) 128px minmax(120px,0.9fr) 150px 150px minmax(110px,0.8fr) 118px 24px";
 const ISSUE_GRID_MIN = 1560;
@@ -1485,6 +1496,18 @@ const MOVEMENT_COLUMNS = [
     { key: "movementDate", label: "Date", format: (v) => fmtDate(v) },
     { key: "hasDocument", label: "Document", format: (v, row) => (v ? (row.documentName || "Attached") : "—") },
     { key: "remarks", label: "Remarks" }, { key: "createdBy", label: "Recorded By" },
+];
+const REDFISH_COLUMNS = [
+    { key: "_asset", label: "Asset", format: (v, row) => row.deviceName || row.assetTag || row.id },
+    { key: "site", label: "Site" }, { key: "rackNo", label: "Rack" },
+    { key: "hardwareType", label: "Category", format: (v) => v || "Uncategorized" },
+    { key: "mgmtIp", label: "Mgmt IP" },
+    { key: "_vendorModel", label: "Vendor / Model", format: (v, row) => row.vendor ? `${row.vendor} ${row.model || ""}`.trim() : "—" },
+    { key: "healthStatus", label: "Health", format: (v) => v || "Unknown" },
+    { key: "powerState", label: "Power State" },
+    { key: "alertCount", label: "Alerts", format: (v) => (v == null ? "—" : String(v)) },
+    { key: "bmcFirmware", label: "BMC Firmware" },
+    { key: "lastSyncAt", label: "Last Sync", format: (v) => (v ? new Date(v).toLocaleString() : "Never") },
 ];
 function rowsFromColumns(items, columns) { return items.map((r) => { const obj = {}; columns.forEach((c) => { obj[c.label] = c.format ? c.format(r[c.key], r) : (r[c.key] != null ? r[c.key] : ""); }); return obj; }); }
 function aoaFromColumns(items, columns) { const aoa = [columns.map((c) => c.label)]; for (let i = 0; i < items.length; i++) { const r = items[i]; const line = new Array(columns.length); for (let j = 0; j < columns.length; j++) { const c = columns[j]; line[j] = c.format ? c.format(r[c.key], r) : (r[c.key] != null ? r[c.key] : ""); } aoa.push(line); } return aoa; }
@@ -2256,6 +2279,21 @@ function IssueRow({ issue, index, onUpdate, onDelete, expanded, onToggle, canEdi
     const handleSave = async (e) => { e && e.stopPropagation(); const ok = await onUpdate(draft); if (ok !== false)
     onToggle(); }; // keep the row open (and the typed edits) when the server rejected the save
     const handleCancel = (e) => { e && e.stopPropagation(); setDraft(issue); onToggle(); };
+    // ===== Cancel issue (any status, admin/operator) - requires a short reason =====
+    const [showCancelPanel, setShowCancelPanel] = useState(false);
+    const [cancelReasonDraft, setCancelReasonDraft] = useState("");
+    const handleCancelIssue = async (e) => {
+        e && e.stopPropagation();
+        const reason = cancelReasonDraft.trim();
+        if (!reason) return;
+        const updated = { ...draft, cancelledDate: nowDateTimeStr(), cancelReason: reason };
+        const ok = await onUpdate(updated);
+        if (ok !== false) {
+            setShowCancelPanel(false);
+            setCancelReasonDraft("");
+            onToggle();
+        }
+    };
     return React.createElement("div", { style: { borderBottom: "0.5px solid rgba(163,177,198,0.3)", transition: "background 0.2s" } },
         React.createElement("div", { onClick: onToggle, className: selectedIds.has(issue.id) ? "selected-row" : "", style: { display: "grid", gridTemplateColumns: ISSUE_GRID_COLS, gap: 12, alignItems: "center", justifyItems: "start", minWidth: ISSUE_GRID_MIN, padding: "14px 18px", cursor: "pointer", background: selectedIds.has(issue.id) ? undefined : (expanded ? "rgba(241,245,249,0.8)" : "transparent"), borderRadius: expanded ? 0 : 0 } },
             React.createElement("div", { onClick: (e) => e.stopPropagation() },
@@ -2334,6 +2372,17 @@ function IssueRow({ issue, index, onUpdate, onDelete, expanded, onToggle, canEdi
                             draft.movedToStoreDate && React.createElement("div", { style: { display: "grid", gridTemplateColumns: draft.returnedToOemDate ? "1fr 1fr" : "1fr", gap: 12, marginTop: 4 } },
                                 React.createElement(DateField, { label: "Moved to store on", value: draft.movedToStoreDate, onChange: (v) => setField("movedToStoreDate", v), mode: "datetime" }),
                                 draft.returnedToOemDate && React.createElement(DateField, { label: "Returned to OEM on", value: draft.returnedToOemDate, onChange: (v) => setField("returnedToOemDate", v), mode: "datetime" }))),
+                        draft.cancelledDate && React.createElement("div", { className: "neu-pressed", style: { marginTop: 16, padding: "14px 16px", borderRadius: 14 } },
+                            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#6B7280", fontWeight: 700, marginBottom: 6, display: "flex", alignItems: "center", gap: 6 } },
+                                React.createElement(X, { s: 14, c: "#6B7280" }),
+                                " Cancelled " + (fmtDateTime(draft.cancelledDate) || "")),
+                            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#475569" } }, "Reason: " + (draft.cancelReason || "—"))),
+                        showCancelPanel && !draft.cancelledDate && React.createElement("div", { className: "neu-pressed", style: { marginTop: 16, padding: "14px 16px", borderRadius: 14 } },
+                            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#DC2626", fontWeight: 600, marginBottom: 10 } }, "Cancel this issue - a reason is required"),
+                            React.createElement("textarea", { value: cancelReasonDraft, onChange: (e) => setCancelReasonDraft(e.target.value), placeholder: "Why is this issue being cancelled? (e.g. duplicate ticket, mis-reported, no longer applicable)", rows: 2, className: "neu-input", style: { fontSize: 12, padding: "10px 12px", resize: "vertical", width: "100%" }, onClick: (e) => e.stopPropagation() }),
+                            React.createElement("div", { style: { display: "flex", gap: 10, marginTop: 10 } },
+                                React.createElement("button", { onClick: handleCancelIssue, disabled: !cancelReasonDraft.trim(), className: "neu-btn-primary", style: { fontSize: 12.5, padding: "8px 16px", background: "linear-gradient(135deg,#6B7280 0,#4B5563 100%)", opacity: cancelReasonDraft.trim() ? 1 : 0.5, cursor: cancelReasonDraft.trim() ? "pointer" : "not-allowed" } }, "Confirm cancellation"),
+                                React.createElement("button", { onClick: (e) => { e.stopPropagation(); setShowCancelPanel(false); setCancelReasonDraft(""); }, className: "neu-btn-secondary", style: { fontSize: 12.5, padding: "8px 16px" } }, "Back"))),
                         React.createElement("div", { style: { display: "flex", gap: 12, marginTop: 20, flexWrap: "wrap" } },
                             React.createElement("button", { onClick: (e) => { e.stopPropagation(); handleSave(e); }, className: "neu-btn-primary", style: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, padding: "10px 18px" } },
                                 React.createElement(CheckCircle2, { s: 14 }),
@@ -2341,6 +2390,9 @@ function IssueRow({ issue, index, onUpdate, onDelete, expanded, onToggle, canEdi
                             React.createElement("button", { onClick: (e) => { e.stopPropagation(); handleCancel(e); }, className: "neu-btn-secondary", style: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, padding: "10px 18px" } },
                                 React.createElement(X, { s: 14 }),
                                 " Cancel"),
+                            !draft.cancelledDate && React.createElement("button", { onClick: (e) => { e.stopPropagation(); setShowCancelPanel(true); }, className: "neu-btn-secondary", style: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, padding: "10px 18px", color: "#6B7280" } },
+                                React.createElement(X, { s: 14 }),
+                                " Cancel issue"),
                             React.createElement("button", { onClick: (e) => { e.stopPropagation(); onDelete(issue.id); }, className: "neu-btn-secondary", style: { marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, fontSize: 13, padding: "8px 14px", color: "#DC2626" } },
                                 React.createElement(Trash2, { s: 13 }),
                                 " Remove"))),
@@ -2565,8 +2617,24 @@ function ListFilterHeader({ column, filter, onOpen, style = {} }) {
                 React.createElement(Filter, { s: 12, c: active ? "#4F46E5" : "#64748B" }))));
 }
 /* ===== DC ACTIVITY TABLE ===== */
+/* ===== EXPANDABLE LIST ROW (DC Activity / Material Movement) ===== */
+const WRAP_COLS = new Set(["description", "itemName", "remarks", "receiverName", "senderName"]);
+function wrapCellStyle(open) {
+    return open ? { whiteSpace: "pre-wrap", wordBreak: "break-word", overflowWrap: "anywhere", minWidth: 220, maxWidth: 380 }
+        : { whiteSpace: "normal", wordBreak: "break-word", overflowWrap: "anywhere", minWidth: 220, maxWidth: 380, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" };
+}
+function ExpandedDetailRow({ colSpan, title, items }) {
+    return React.createElement("tr", { className: "list-detail-row" },
+        React.createElement("td", { colSpan: colSpan, style: { padding: "12px 18px 16px 44px", background: "rgba(99,102,241,0.05)", borderBottom: "0.5px solid rgba(163,177,198,0.25)" } },
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, fontWeight: 700, color: "#6366F1", letterSpacing: 0.4, textTransform: "uppercase", marginBottom: 8 } }, title),
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: "10px 22px" } },
+                items.map((it) => React.createElement("div", { key: it.label, style: { minWidth: 0, gridColumn: it.wide ? "1 / -1" : undefined } },
+                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, fontWeight: 600, color: "#64748B", marginBottom: 2 } }, it.label),
+                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#1E293B", whiteSpace: "pre-wrap", wordBreak: "break-word", overflowWrap: "anywhere", lineHeight: 1.5 } }, it.value != null && it.value !== "" ? it.value : "\u2014"))))));
+}
 function DCActivity({ activities, allowedSites, canEdit, onEdit, onDelete, onExportExcel, onExportCSV, onImport, importError, importProgress, importErrorDetails, selectedIds, onSelectId, onSelectAll, onDeleteSelected, onClearSelection }) {
     const actListCtl = useProgressiveList();
+    const [expandedId, setExpandedId] = useState(null);
     const [siteFilter, setSiteFilter] = useState("all");
     const [typeFilter, setTypeFilter] = useState("all");
     const [search, setSearch] = useState("");
@@ -2625,20 +2693,24 @@ function DCActivity({ activities, allowedSites, canEdit, onEdit, onDelete, onExp
                 React.createElement("tbody", null,
                     filtered.length === 0 && React.createElement("tr", null,
                         React.createElement("td", { colSpan: ACTIVITY_COLUMNS.length + 1, style: { padding: "40px 0", textAlign: "center", color: "#64748B", fontFamily: "Inter", fontSize: 13 } }, "No DC activity records match these filters.")),
-                    pmapList(filtered, actListCtl, true, ACTIVITY_COLUMNS.length + 1, (a, idx) => (React.createElement("tr", { key: a.id, className: `neu-table-row${selectedIds.has(a.id) ? " selected-row asset-selected-row" : ""}`, style: { background: selectedIds.has(a.id) ? undefined : (idx % 2 === 1 ? "rgba(255,255,255,0.25)" : "transparent") } },
-                        canEdit && React.createElement("td", { style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px" } },
+                    pmapList(filtered, actListCtl, true, ACTIVITY_COLUMNS.length + 1, (a, idx) => { const open = expandedId === a.id; return React.createElement(React.Fragment, { key: a.id }, React.createElement("tr", { "data-list-row": "activity", "aria-expanded": open, title: open ? "Click to collapse" : "Click to view full details", onClick: () => setExpandedId(open ? null : a.id), className: `neu-table-row${selectedIds.has(a.id) ? " selected-row asset-selected-row" : ""}`, style: { cursor: "pointer", verticalAlign: "top", background: selectedIds.has(a.id) ? undefined : (open ? "rgba(99,102,241,0.08)" : (idx % 2 === 1 ? "rgba(255,255,255,0.25)" : "transparent")) } },
+                        canEdit && React.createElement("td", { onClick: (e) => e.stopPropagation(), style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px" } },
                             React.createElement("input", { type: "checkbox", checked: selectedIds.has(a.id), onChange: e => onSelectId(a.id, e.target.checked), style: { width: 15, height: 15, accentColor: "#6366F1", cursor: "pointer" } })),
                         ACTIVITY_COLUMNS.map((col) => {
                             const rawVal = a[col.key];
                             const displayVal = col.key === "activityType" && rawVal === "PSU Provision" ? "Port/Link Down Issue" : rawVal;
                             const val = col.format ? col.format(displayVal, a) : displayVal;
-                            return React.createElement("td", { key: col.key, style: { padding: "10px 10px", borderBottom: "0.5px solid rgba(163,177,198,0.25)", fontFamily: "Inter", fontSize: 12, color: col.key === "site" ? "#6366F1" : (col.key === "_status" ? (a.completionDate ? "#059669" : "#D97706") : "#1E293B"), fontWeight: col.key === "site" || col.key === "_status" ? 600 : 400, whiteSpace: "nowrap" } }, val != null && val !== "" ? val : "—");
+                            return React.createElement("td", { key: col.key, style: { padding: "10px 10px", borderBottom: "0.5px solid rgba(163,177,198,0.25)", fontFamily: "Inter", fontSize: 12, color: col.key === "site" ? "#6366F1" : (col.key === "_status" ? (a.completionDate ? "#059669" : "#D97706") : "#1E293B"), fontWeight: col.key === "site" || col.key === "_status" ? 600 : 400, whiteSpace: "nowrap" } }, WRAP_COLS.has(col.key) ? React.createElement("div", { style: wrapCellStyle(false) }, val != null && val !== "" ? val : "—") : (val != null && val !== "" ? val : "—"));
                         }),
-                        canEdit && React.createElement("td", { style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px", textAlign: "right", whiteSpace: "nowrap" } },
+                        canEdit && React.createElement("td", { onClick: (e) => e.stopPropagation(), style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px", textAlign: "right", whiteSpace: "nowrap" } },
                             React.createElement("button", { onClick: () => onEdit(a), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Edit activity" },
                                 React.createElement(Edit2, { s: 13, c: "#64748B" })),
                             React.createElement("button", { onClick: () => onDelete(a.id), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex" }, title: "Delete activity" },
-                                React.createElement(Trash2, { s: 13, c: "#64748B" }))))))))),
+                                React.createElement(Trash2, { s: 13, c: "#64748B" })))),
+                        open && React.createElement(ExpandedDetailRow, { colSpan: ACTIVITY_COLUMNS.length + 2, title: "DC Activity details", items: [
+                            { label: "Activity Description", value: a.description, wide: true },
+                            ...ACTIVITY_COLUMNS.filter((c) => c.key !== "description").map((c) => { const dv = c.key === "activityType" && a[c.key] === "PSU Provision" ? "Port/Link Down Issue" : a[c.key]; return { label: c.label, value: c.format ? c.format(dv, a) : dv }; }),
+                            { label: "Rack No.", value: a.rackNo }] })); })))),
         openFilter && React.createElement(ValueListFilterPopup, { column: openFilter, currentFilter: columnFilters[openFilter.key], optionRows: optionRowsForColumn(openFilter.key), onApply: (value) => setColumnFilters((prev) => ({ ...prev, [openFilter.key]: value })), onClose: () => setOpenFilter(null) }));
 }
 /* ===== RECORD MATERIAL MOVEMENT MODAL ===== */
@@ -2984,6 +3056,7 @@ function RecordMovementModal({ onClose, onSave, initial, zones, onDownload, onRe
 /* ===== MATERIAL MOVEMENTS TABLE ===== */
 function MaterialMovements({ movements, allowedSites, canEdit, onEdit, onDelete, onDownload, onExportExcel, onExportCSV, onImport, importError, importProgress, importErrorDetails, selectedIds, onSelectId, onSelectAll, onDeleteSelected, onClearSelection }) {
     const movListCtl = useProgressiveList();
+    const [expandedId, setExpandedId] = useState(null);
     const [siteFilter, setSiteFilter] = useState("all");
     const [typeFilter, setTypeFilter] = useState("all");
     const [search, setSearch] = useState("");
@@ -3074,23 +3147,28 @@ function MaterialMovements({ movements, allowedSites, canEdit, onEdit, onDelete,
                 React.createElement("tbody", null,
                     filtered.length === 0 && React.createElement("tr", null,
                         React.createElement("td", { colSpan: MOVEMENT_COLUMNS.length + 1, style: { padding: "40px 0", textAlign: "center", color: "#64748B", fontFamily: "Inter", fontSize: 13 } }, "No material movement records match these filters.")),
-                    pmapList(filtered, movListCtl, true, MOVEMENT_COLUMNS.length + 1, (m, idx) => (React.createElement("tr", { key: m.id, className: `neu-table-row${selectedIds.has(m.id) ? " selected-row" : ""}`, style: { background: selectedIds.has(m.id) ? undefined : (idx % 2 === 1 ? "rgba(255,255,255,0.25)" : "transparent") } },
-                        canEdit && React.createElement("td", { style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px" } },
+                    pmapList(filtered, movListCtl, true, MOVEMENT_COLUMNS.length + 1, (m, idx) => { const open = expandedId === m.id; return React.createElement(React.Fragment, { key: m.id }, React.createElement("tr", { "data-list-row": "movement", "aria-expanded": open, title: open ? "Click to collapse" : "Click to view full details", onClick: () => setExpandedId(open ? null : m.id), className: `neu-table-row${selectedIds.has(m.id) ? " selected-row" : ""}`, style: { cursor: "pointer", verticalAlign: "top", background: selectedIds.has(m.id) ? undefined : (open ? "rgba(99,102,241,0.08)" : (idx % 2 === 1 ? "rgba(255,255,255,0.25)" : "transparent")) } },
+                        canEdit && React.createElement("td", { onClick: (e) => e.stopPropagation(), style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px" } },
                             React.createElement("input", { type: "checkbox", checked: selectedIds.has(m.id), onChange: e => onSelectId(m.id, e.target.checked), style: { width: 15, height: 15, accentColor: "#6366F1", cursor: "pointer" } })),
                         MOVEMENT_COLUMNS.map((col) => {
                             const val = col.format ? col.format(m[col.key], m) : m[col.key];
                             const isType = col.key === "movementType";
                             return React.createElement("td", { key: col.key, style: { padding: "10px 10px", borderBottom: "0.5px solid rgba(163,177,198,0.25)", fontFamily: "Inter", fontSize: 12, whiteSpace: "nowrap",
                                     color: isType ? (m.movementType === "Inward" ? "#059669" : "#DC2626") : (col.key === "site" ? "#6366F1" : "#1E293B"),
-                                    fontWeight: isType || col.key === "site" ? 700 : 400 } }, val != null && val !== "" ? val : "—");
+                                    fontWeight: isType || col.key === "site" ? 700 : 400 } }, WRAP_COLS.has(col.key) ? React.createElement("div", { style: wrapCellStyle(false) }, val != null && val !== "" ? val : "—") : (val != null && val !== "" ? val : "—"));
                         }),
-                        React.createElement("td", { style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px", textAlign: "right", whiteSpace: "nowrap" } },
+                        React.createElement("td", { onClick: (e) => e.stopPropagation(), style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px", textAlign: "right", whiteSpace: "nowrap" } },
                             m.hasDocument && React.createElement("button", { onClick: () => onDownload(m.id, m.documentName), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Download DC/Invoice" },
                                 React.createElement(Download, { s: 13, c: "#0EA5E9" })),
                             canEdit && React.createElement("button", { onClick: () => onEdit(m), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Edit record" },
                                 React.createElement(Edit2, { s: 13, c: "#64748B" })),
                             canEdit && React.createElement("button", { onClick: () => onDelete(m.id), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex" }, title: "Delete record" },
-                                React.createElement(Trash2, { s: 13, c: "#64748B" }))))))))),
+                                React.createElement(Trash2, { s: 13, c: "#64748B" })))),
+                        open && React.createElement(ExpandedDetailRow, { colSpan: MOVEMENT_COLUMNS.length + 2, title: "Material movement details", items: [
+                            { label: "Item", value: m.itemName, wide: true },
+                            { label: "Item description", value: m.description, wide: true },
+                            ...MOVEMENT_COLUMNS.filter((c) => c.key !== "itemName" && c.key !== "remarks").map((c) => ({ label: c.label, value: c.format ? c.format(m[c.key], m) : m[c.key] })),
+                            { label: "Remarks", value: m.remarks, wide: true }] })); })))),
         openFilter && React.createElement(ValueListFilterPopup, { column: openFilter, currentFilter: columnFilters[openFilter.key], optionRows: optionRowsForColumn(openFilter.key), onApply: (value) => setColumnFilters((prev) => ({ ...prev, [openFilter.key]: value })), onClose: () => setOpenFilter(null) }));
 }
 /* ===== ASSET TABLE ===== */
@@ -7390,9 +7468,53 @@ function RedfishTab({ canEdit, allowedSites }) {
     const [modalAsset, setModalAsset] = useState(undefined); // undefined=closed, null=new/ad-hoc, object=existing asset
     const [discoverOpen, setDiscoverOpen] = useState(false);
     const [site, setSite] = useState("all");
-    const load = () => { api.getRedfishAssets(site).then((r) => { setAssets(r); setErr(""); }).catch((e) => setErr(e.message || "Could not load devices")); };
-    useEffect(() => { load(); }, [site]);
+    const [categoryFilter, setCategoryFilter] = useState("all");
+    const [showIgnored, setShowIgnored] = useState(false);
+    const [columnFilters, setColumnFilters] = useState(() => makeEmptyListColumnFilters(REDFISH_COLUMNS));
+    const [openFilter, setOpenFilter] = useState(null);
+    const [selectedIds, setSelectedIds] = useState(() => new Set());
+    const [busyAction, setBusyAction] = useState(false);
+    const load = () => { api.getRedfishAssets(site, showIgnored).then((r) => { setAssets(r); setErr(""); setSelectedIds(new Set()); }).catch((e) => setErr(e.message || "Could not load devices")); };
+    useEffect(() => { load(); }, [site, showIgnored]);
     const sel = { padding: "6px 10px", borderRadius: 8, border: "1px solid #CBD5E1", background: "#fff", fontFamily: "Inter", fontSize: 12, color: "#0F172A" };
+    // Category options reflect whatever is actually in Inventory for devices with a
+    // management IP (servers, storage, network switches, firewalls, ...), not a fixed list.
+    const categories = useMemo(() => { const set = new Set(); (assets || []).forEach((a) => set.add(a.hardwareType || "Uncategorized")); return Array.from(set).sort((x, y) => x.localeCompare(y)); }, [assets]);
+    const categoryRows = (assets || []).filter((a) => categoryFilter === "all" || (a.hardwareType || "Uncategorized") === categoryFilter);
+    const filtered = categoryRows.filter((row) => REDFISH_COLUMNS.every((col) => listColumnFilterMatches(columnFilters[col.key], col, row)));
+    const optionRowsForColumn = (key) => categoryRows.filter((row) => REDFISH_COLUMNS.every((col) => col.key === key || listColumnFilterMatches(columnFilters[col.key], col, row)));
+    const activeColumnFilterCount = countListColumnFilters(columnFilters);
+    const thBase = { textAlign: "left", padding: "8px 9px", borderBottom: "1px solid #E2E8F0", color: "#64748B", fontWeight: 700, fontSize: 10.5, textTransform: "uppercase", whiteSpace: "nowrap" };
+    const toggleIgnore = async (a) => { try { await api.setRedfishIgnored(a.id, !a.monitorIgnored); load(); } catch (e) { alert(e.message || "Could not update monitoring status"); } };
+    const deleteSelected = async () => {
+        const ids = Array.from(selectedIds); if (!ids.length) return;
+        if (!confirm(`Remove Redfish configuration from ${ids.length} selected device(s)? Saved BMC credentials and polled status will be cleared. The asset itself is NOT deleted from Inventory.`)) return;
+        setBusyAction(true);
+        try { await api.unconfigureRedfish(ids); await load(); }
+        catch (e) { alert(e.message || "Could not remove the selected devices' Redfish configuration"); }
+        finally { setBusyAction(false); }
+    };
+    const ignoreSelected = async (ignored) => {
+        const ids = Array.from(selectedIds); if (!ids.length) return;
+        setBusyAction(true);
+        try { await Promise.all(ids.map((id) => api.setRedfishIgnored(id, ignored))); await load(); }
+        catch (e) { alert(e.message || "Could not update the selected devices"); }
+        finally { setBusyAction(false); }
+    };
+    const renderCell = (col, a) => {
+        switch (col.key) {
+            case "_asset": return React.createElement("span", { style: { fontWeight: 600 } }, a.deviceName || a.assetTag || a.id);
+            case "mgmtIp": return a.mgmtIp ? React.createElement("a", { href: `https://${a.mgmtIp}`, target: "_blank", rel: "noopener", style: { color: "#2563EB", textDecoration: "underline", fontFamily: "'JetBrains Mono'" } }, a.mgmtIp) : "—";
+            case "healthStatus": return React.createElement(RedfishHealthPill, { status: a.healthStatus });
+            case "alertCount": return a.alertCount == null ? React.createElement("span", { style: { color: "#94A3B8" } }, "—") : a.alertCount === 0 ? React.createElement("span", { style: { color: "#059669", fontWeight: 700 } }, "0") : React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 5, color: "#DC2626", fontWeight: 700 } }, React.createElement("span", { style: { width: 6, height: 6, borderRadius: "50%", background: "#DC2626" } }), a.alertCount);
+            case "bmcFirmware": return React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontSize: 11.5 } }, a.bmcFirmware || "—");
+            case "lastSyncAt": return React.createElement("span", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748B" } }, a.lastSyncAt ? new Date(a.lastSyncAt).toLocaleString() : "Never");
+            case "rackNo": return a.rackNo || "—";
+            case "hardwareType": return a.hardwareType || "Uncategorized";
+            case "powerState": return a.powerState || "—";
+            default: { const v = col.format ? col.format(a[col.key], a) : a[col.key]; return v != null && v !== "" ? v : "—"; }
+        }
+    };
     return React.createElement("div", { className: "neu-card anim-in d1", style: { padding: 20 } },
         React.createElement("div", { style: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 16 } },
             React.createElement("div", null,
@@ -7401,29 +7523,46 @@ function RedfishTab({ canEdit, allowedSites }) {
             canEdit && React.createElement("div", { style: { display: "flex", gap: 8 } },
                 React.createElement("button", { onClick: () => setDiscoverOpen(true), className: "neu-btn-secondary" }, "Discover"),
                 React.createElement("button", { onClick: () => setModalAsset(null), className: "neu-btn-primary" }, "+ Test & Detect"))),
-        React.createElement("div", { style: { marginBottom: 14 } },
+        React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 14 } },
             React.createElement("select", { value: site, onChange: (e) => setSite(e.target.value), style: sel },
                 React.createElement("option", { value: "all" }, "All locations"),
-                (allowedSites || []).map((s) => React.createElement("option", { key: s, value: s }, s)))),
+                (allowedSites || []).map((s) => React.createElement("option", { key: s, value: s }, s))),
+            React.createElement("select", { value: categoryFilter, onChange: (e) => setCategoryFilter(e.target.value), style: sel, title: "Filter by device category, as captured in Asset Inventory" },
+                React.createElement("option", { value: "all" }, "All categories"),
+                categories.map((c) => React.createElement("option", { key: c, value: c }, c))),
+            React.createElement("label", { style: { display: "inline-flex", alignItems: "center", gap: 6, fontFamily: "Inter", fontSize: 12, color: "#475569", cursor: "pointer" } },
+                React.createElement("input", { type: "checkbox", checked: showIgnored, onChange: (e) => setShowIgnored(e.target.checked), style: { width: 14, height: 14, accentColor: "#6366F1", cursor: "pointer" } }),
+                "Show ignored"),
+            activeColumnFilterCount > 0 && React.createElement("button", { onClick: () => setColumnFilters(makeEmptyListColumnFilters(REDFISH_COLUMNS)), className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "8px 11px" } }, `Clear column filters (${activeColumnFilterCount})`)),
+        canEdit && selectedIds.size > 0 && React.createElement("div", { className: "neu-card", style: { display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", marginBottom: 10, flexWrap: "wrap" } },
+            React.createElement("strong", { style: { fontFamily: "Inter", fontSize: 12, color: "#4F46E5" } }, `${selectedIds.size} selected`),
+            React.createElement("button", { disabled: busyAction, onClick: deleteSelected, className: "neu-btn-secondary", style: { fontSize: 11.5, color: "#DC2626" } }, "Delete Selected (Remove Redfish Config)"),
+            React.createElement("button", { disabled: busyAction, onClick: () => ignoreSelected(true), className: "neu-btn-secondary", style: { fontSize: 11.5 } }, "Ignore Selected"),
+            React.createElement("button", { disabled: busyAction, onClick: () => ignoreSelected(false), className: "neu-btn-secondary", style: { fontSize: 11.5 } }, "Un-ignore Selected"),
+            React.createElement("button", { onClick: () => setSelectedIds(new Set()), className: "neu-btn-secondary", style: { fontSize: 11.5 } }, "Clear")),
         err && React.createElement("div", { style: { padding: "9px 12px", borderRadius: 9, background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.25)", color: "#B91C1C", fontFamily: "Inter", fontSize: 12, marginBottom: 14 } }, err),
         !assets && !err && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 13, color: "#64748B", padding: 20 } }, "Loading…"),
         assets && !assets.length && React.createElement("div", { style: { padding: "40px 20px", textAlign: "center", fontFamily: "Inter", fontSize: 13, color: "#64748B" } }, "No assets with a management IP yet. Add one from Asset Inventory, or click \"Discover\" to scan assets that already have one."),
-        assets && assets.length > 0 && React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12.5 } },
-            React.createElement("thead", null, React.createElement("tr", null, ["Asset", "Site", "Rack", "Mgmt IP", "Vendor / Model", "Health", "Power State", "Alerts", "BMC Firmware", "Last Sync", ""].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "8px 9px", borderBottom: "1px solid #E2E8F0", color: "#64748B", fontWeight: 700, fontSize: 10.5, textTransform: "uppercase" } }, h)))),
-            React.createElement("tbody", null, assets.map((a) => React.createElement("tr", { key: a.id, style: { borderBottom: "1px solid #F1F5F9" } },
-                React.createElement("td", { style: { padding: "8px 9px", fontWeight: 600 } }, a.deviceName || a.assetTag || a.id),
-                React.createElement("td", { style: { padding: "8px 9px" } }, a.site),
-                React.createElement("td", { style: { padding: "8px 9px" } }, a.rackNo || "—"),
-                React.createElement("td", { style: { padding: "8px 9px", fontFamily: "'JetBrains Mono'" } }, a.mgmtIp ? React.createElement("a", { href: `https://${a.mgmtIp}`, target: "_blank", rel: "noopener", style: { color: "#2563EB", textDecoration: "underline" } }, a.mgmtIp) : "—"),
-                React.createElement("td", { style: { padding: "8px 9px" } }, a.vendor ? `${a.vendor} ${a.model || ""}` : "—"),
-                React.createElement("td", { style: { padding: "8px 9px" } }, React.createElement(RedfishHealthPill, { status: a.healthStatus })),
-                React.createElement("td", { style: { padding: "8px 9px" } }, a.powerState || "—"),
-                React.createElement("td", { style: { padding: "8px 9px" } }, a.alertCount == null ? React.createElement("span", { style: { color: "#94A3B8" } }, "—") : a.alertCount === 0 ? React.createElement("span", { style: { color: "#059669", fontWeight: 700 } }, "0") : React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 5, color: "#DC2626", fontWeight: 700 } }, React.createElement("span", { style: { width: 6, height: 6, borderRadius: "50%", background: "#DC2626" } }), a.alertCount)),
-                React.createElement("td", { style: { padding: "8px 9px", fontFamily: "'JetBrains Mono'", fontSize: 11.5 } }, a.bmcFirmware || "—"),
-                React.createElement("td", { style: { padding: "8px 9px", fontFamily: "Inter", fontSize: 11, color: "#64748B" } }, a.lastSyncAt ? new Date(a.lastSyncAt).toLocaleString() : "Never"),
-                React.createElement("td", { style: { padding: "8px 9px", textAlign: "right" } }, React.createElement("button", { onClick: () => setModalAsset(a), className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px" } }, a.redfishConfigured ? "View / Sync" : "Configure")))))),
+        assets && assets.length > 0 && React.createElement("div", { style: { overflowX: "auto" } }, React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12.5 } },
+            React.createElement("thead", null, React.createElement("tr", null,
+                canEdit && React.createElement("th", { style: { ...thBase, width: 34 } },
+                    React.createElement("input", { type: "checkbox", checked: filtered.length > 0 && filtered.every((a) => selectedIds.has(a.id)), ref: (el) => { if (el)
+                            el.indeterminate = filtered.some((a) => selectedIds.has(a.id)) && !filtered.every((a) => selectedIds.has(a.id)); }, onChange: (e) => { const checked = e.target.checked; setSelectedIds((prev) => { const n = new Set(prev); filtered.forEach((a) => checked ? n.add(a.id) : n.delete(a.id)); return n; }); }, style: { width: 15, height: 15, accentColor: "#6366F1", cursor: "pointer" } })),
+                REDFISH_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, style: thBase })),
+                React.createElement("th", { style: { ...thBase, textAlign: "right" } }))),
+            React.createElement("tbody", null,
+                filtered.length === 0 && React.createElement("tr", null,
+                    React.createElement("td", { colSpan: REDFISH_COLUMNS.length + (canEdit ? 2 : 1), style: { padding: "40px 0", textAlign: "center", color: "#64748B", fontFamily: "Inter", fontSize: 13 } }, "No devices match these filters.")),
+                filtered.map((a, idx) => React.createElement("tr", { key: a.id, style: { borderBottom: "1px solid #F1F5F9", opacity: a.monitorIgnored ? 0.55 : 1, background: selectedIds.has(a.id) ? "rgba(99,102,241,0.08)" : (idx % 2 === 1 ? "rgba(255,255,255,0.25)" : "transparent") } },
+                    canEdit && React.createElement("td", { style: { padding: "8px 9px" } },
+                        React.createElement("input", { type: "checkbox", checked: selectedIds.has(a.id), onChange: (e) => setSelectedIds((prev) => { const n = new Set(prev); e.target.checked ? n.add(a.id) : n.delete(a.id); return n; }), style: { width: 15, height: 15, accentColor: "#6366F1", cursor: "pointer" } })),
+                    REDFISH_COLUMNS.map((col) => React.createElement("td", { key: col.key, style: { padding: "8px 9px", whiteSpace: "nowrap" } }, renderCell(col, a), col.key === "hardwareType" && a.monitorIgnored && React.createElement("span", { style: { marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#92400E", background: "#FEF3C7", borderRadius: 5, padding: "1px 6px" } }, "IGNORED"))),
+                    React.createElement("td", { style: { padding: "8px 9px", textAlign: "right", whiteSpace: "nowrap" } },
+                        canEdit && React.createElement("button", { onClick: () => toggleIgnore(a), className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px", marginRight: 6 }, title: a.monitorIgnored ? "Include this device in Redfish monitoring again" : "Exclude this device from Redfish monitoring (e.g. storage/network/firewall gear that doesn't need it)" }, a.monitorIgnored ? "Un-ignore" : "Ignore from Monitor"),
+                        React.createElement("button", { onClick: () => setModalAsset(a), className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px" } }, a.redfishConfigured ? "View / Sync" : "Configure"))))))),
         modalAsset !== undefined && React.createElement(RedfishDetectModal, { asset: modalAsset, onClose: () => setModalAsset(undefined), onSaved: load }),
-        discoverOpen && React.createElement(RedfishDiscoverModal, { onClose: () => setDiscoverOpen(false), onApplied: load }));
+        discoverOpen && React.createElement(RedfishDiscoverModal, { onClose: () => setDiscoverOpen(false), onApplied: load }),
+        openFilter && React.createElement(ValueListFilterPopup, { column: openFilter, currentFilter: columnFilters[openFilter.key], optionRows: optionRowsForColumn(openFilter.key), onApply: (value) => setColumnFilters((prev) => ({ ...prev, [openFilter.key]: value })), onClose: () => setOpenFilter(null) }));
 }
 function FirmwareJobsTab({ canEdit }) {
     const [scan, setScan] = useState(null);
@@ -8393,7 +8532,15 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
         setGLoad(null);
         runGlobalSearch(gq.trim());
     };
-    const openZoneFromSearch = (site, zone) => { setGq(""); setTab("status"); loadZone(site, zone); };
+    const openZoneFromSearch = async (result) => {
+        setGq("");
+        setTab("status");
+        await loadZone(result.site, result.zone);
+        const key = result.id != null ? String(result.id) : (result.uri || null);
+        if (!key) return; // older cached search result with no id/uri - nothing to select
+        if (result.vendor === "Dell OME") setSelOme(new Set([key]));
+        else if (result.vendor === "HPE OneView") setSelOv(new Set([key]));
+    };
     const loadZoneSeqRef = useRef(0);
     const loadZone = async (site, zone, forceRefresh = false) => {
         const mySeq = ++loadZoneSeqRef.current; // a slower answer for a previously clicked zone must never overwrite the zone now selected
@@ -8563,7 +8710,7 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
                         React.createElement("div", { style: { overflowX: "auto", border: "1px solid rgba(163,177,198,0.25)", borderRadius: 10 } },
                             React.createElement("table", { style: { borderCollapse: "collapse", width: "100%", minWidth: 900 } },
                                 React.createElement("thead", null, React.createElement("tr", null, ["Zone", "Vendor", "Name", "Model", "Serial", "Health", "Power", "IP", "System BIOS", "Last synced"].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "7px 9px", background: "#F8FAFC", fontFamily: "Inter", fontSize: 10.5, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: .4, whiteSpace: "nowrap" } }, h)))),
-                                React.createElement("tbody", null, gRes.results.map((r, i) => React.createElement("tr", { key: i, "data-mon-result": r.serialNumber || r.name, onClick: () => openZoneFromSearch(r.site, r.zone), title: "Open " + r.site + " \u00B7 " + r.zone, style: { cursor: "pointer", borderTop: i ? "0.5px solid rgba(163,177,198,0.2)" : "none" } },
+                                React.createElement("tbody", null, gRes.results.map((r, i) => React.createElement("tr", { key: i, "data-mon-result": r.serialNumber || r.name, onClick: () => openZoneFromSearch(r), title: "Open " + r.site + " \u00B7 " + r.zone + " and select this server", style: { cursor: "pointer", borderTop: i ? "0.5px solid rgba(163,177,198,0.2)" : "none" } },
                                     React.createElement("td", { style: { padding: "7px 9px", fontFamily: "Inter", fontSize: 12, fontWeight: 700, color: "#4338CA", whiteSpace: "nowrap" } }, r.site, " \u00B7 ", r.zone),
                                     React.createElement("td", { style: { padding: "7px 9px", fontFamily: "Inter", fontSize: 11.5, color: "#475569", whiteSpace: "nowrap" } }, r.vendor),
                                     React.createElement("td", { style: { padding: "7px 9px", fontFamily: "Inter", fontSize: 12, fontWeight: 600, color: "#0F172A", whiteSpace: "nowrap" } }, r.name || "\u2014"),
@@ -9665,6 +9812,25 @@ function AddLocationModal({ onClose, onCreate, onArchive, onRestore, onDelete, l
                             React.createElement(Trash2, { s: 12, c: "#DC2626" }))) : React.createElement("button", { onClick: () => onArchive(l), title: "Archive this location", className: "neu-icon-btn", style: { width: 28, height: 28, borderRadius: 8 } },
                         React.createElement("span", { style: { fontSize: 11, fontWeight: 900, color: "#B45309" } }, "\u21A5"))))))));
 }
+/* ===== LICENSE: FREE-TRIAL BANNER + AUTO-LOCK SCREEN ===== */
+function LicenseTrialBanner({ status, canActivate, onOpenSettings }) {
+    if (!status || status.mode !== "trial" || !status.trial) return null;
+    const d = status.trial.daysLeft;
+    const urgent = d <= 3;
+    return React.createElement("div", { "data-license": "trial-banner", role: "status", style: { display: "flex", alignItems: "center", justifyContent: "center", gap: 12, flexWrap: "wrap", padding: "8px 14px", marginBottom: 14, borderRadius: 12, fontFamily: "Inter", fontSize: 12.5, fontWeight: 600, background: urgent ? "rgba(220,38,38,0.10)" : "rgba(99,102,241,0.10)", color: urgent ? "#B91C1C" : "#4338CA", border: "1px solid " + (urgent ? "rgba(220,38,38,0.25)" : "rgba(99,102,241,0.25)") } },
+        React.createElement("span", null, `Free trial: ${d} day${d === 1 ? "" : "s"} left (ends ${new Date(status.trial.endsAt).toLocaleDateString()}). The application locks automatically when the trial ends.`),
+        canActivate && React.createElement("button", { onClick: onOpenSettings, className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "5px 11px" } }, "Activate license"));
+}
+function LicenseLockScreen({ reason, isGlobalAdmin, user, onLogout }) {
+    return React.createElement("div", { "data-license": "lock-screen", style: { position: "fixed", inset: 0, zIndex: 9999, overflowY: "auto", background: "linear-gradient(160deg,#EEF2FF,#F8FAFC)", padding: "40px 16px", display: "flex", justifyContent: "center", alignItems: "flex-start" } },
+        React.createElement("div", { style: { width: "100%", maxWidth: 760 } },
+            React.createElement("div", { className: "neu-card", style: { padding: 26, marginBottom: 16 } },
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 22, fontWeight: 800, color: "#0F172A", marginBottom: 6 } }, "Application locked"),
+                React.createElement("p", { "data-license": "lock-reason", style: { fontFamily: "Inter", fontSize: 13.5, color: "#475569", lineHeight: 1.55, margin: "0 0 10px" } }, reason || "A valid license is required."),
+                React.createElement("p", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#64748B", margin: "0 0 14px" } }, isGlobalAdmin ? "Activate a license below to unlock immediately. Your data is untouched." : `Signed in as ${user && user.name}. Ask a global administrator to activate a license; your data is untouched.`),
+                React.createElement("button", { onClick: onLogout, className: "neu-btn-secondary", style: { fontSize: 12 } }, "Sign out")),
+            isGlobalAdmin && React.createElement(LicensePanel, { onActivated: () => setTimeout(() => window.location.reload(), 600) })));
+}
 function ForcedPasswordChange({ user, onLogout }) {
     const [current, setCurrent] = useState("");
     const [newPass, setNewPass] = useState("");
@@ -9997,7 +10163,7 @@ function BackupRestorePanel() {
     const sub = { fontFamily: "Inter", fontSize: 12, color: "#64748B", margin: "0 0 14px", lineHeight: 1.5 };
     const btn = (bg, fg, dis) => ({ padding: "8px 16px", borderRadius: 10, border: "none", cursor: dis ? "not-allowed" : "pointer", fontFamily: "Inter", fontSize: 12.5, fontWeight: 700, background: dis ? "#E2E8F0" : bg, color: dis ? "#94A3B8" : fg, display: "inline-flex", alignItems: "center", gap: 6 });
     const kindBadge = (k) => { const c = { auto: ["#DBEAFE", "#1D4ED8", "Automatic"], manual: ["#DCFCE7", "#166534", "Manual"], prerestore: ["#FEF3C7", "#92400E", "Before restore"] }[k] || ["#E2E8F0", "#475569", k]; return React.createElement("span", { style: { background: c[0], color: c[1], fontSize: 10.5, fontWeight: 800, padding: "2px 8px", borderRadius: 20 } }, c[2]); };
-    const TABLE_LABELS = { users: "Users", locations: "Locations", zones: "Zones", racks: "Racks", floor_plans: "Floor plans", assets: "Assets", issues: "Issues", dc_activities: "DC activities", material_movements: "Material movements", hardware_types: "Hardware types", rack_types: "Rack types" };
+    const TABLE_LABELS = { users: "Users", locations: "Locations", zones: "Zones", racks: "Racks", floor_plans: "Floor plans", assets: "Assets", issues: "Issues", dc_activities: "DC activities", material_movements: "Material movements", hardware_types: "Hardware types", rack_types: "Rack types", pdus: "PDUs" };
     if (loadErr)
         return React.createElement("div", { className: "neu-card", style: card },
             React.createElement("div", { style: { color: "#B91C1C", fontWeight: 700 } }, loadErr),
@@ -10194,7 +10360,7 @@ function ScopedBackupPanel({ currentUser }) {
         note && React.createElement("div", { "data-bk": "note", role: note.ok ? "status" : "alert", style: { marginTop: 12, padding: "8px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, background: note.ok ? "#ECFDF5" : "#FEF2F2", color: note.ok ? "#047857" : "#B91C1C", border: "1px solid " + (note.ok ? "#A7F3D0" : "#FECACA") } }, note.text),
         React.createElement("p", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#475569", margin: "12px 0 0", lineHeight: 1.5 } }, "This copy contains only your location's assets, issues, activities, material movements, racks and floor plans - no user accounts or passwords. Restoring data is done by the Administrator from a full backup."));
 }
-function LicensePanel() {
+function LicensePanel({ onActivated }) {
     const [status, setStatus] = useState(null);
     const [loadErr, setLoadErr] = useState("");
     const [code, setCode] = useState("");
@@ -10223,6 +10389,7 @@ function LicensePanel() {
         setNote({ ok: true, text: `Activated - licensed to ${r.status.license.customer}.` });
         setCode("");
         await load();
+        if (typeof onActivated === "function") onActivated(r.status);
     };
     const activateCode = async () => {
         if (!code.trim())
@@ -10275,7 +10442,8 @@ function LicensePanel() {
         React.createElement("div", { className: "neu-card", style: card },
             React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontWeight: 700, fontSize: 15, marginBottom: 12, display: "flex", alignItems: "center", gap: 8 } },
                 status.valid ? React.createElement(CheckCircle2, { s: 17, c: "#16A34A" }) : React.createElement(AlertTriangle, { s: 17, c: "#DC2626" }),
-                status.valid ? "License active" : "License required"),
+                status.mode === "trial" && status.trial ? `Free trial - ${status.trial.daysLeft} day${status.trial.daysLeft === 1 ? "" : "s"} remaining` : (status.valid ? "License active" : "License required")),
+            status.mode === "trial" && status.trial && React.createElement("div", { "data-license": "trial-panel", style: { fontSize: 12.5, color: status.trial.daysLeft <= 3 ? "#DC2626" : "#334155", marginBottom: 14 } }, `Full access until ${new Date(status.trial.endsAt).toLocaleDateString()}. The application locks automatically after that unless a license is activated below.`),
             !status.valid && React.createElement("div", { style: { fontSize: 12.5, color: "#DC2626", marginBottom: 14 } }, status.reason),
             status.valid && status.license && React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 12.5, color: "#334155", marginBottom: 14 } },
                 React.createElement("div", null, React.createElement("b", null, "Licensed to: "), status.license.customer),
@@ -10287,7 +10455,7 @@ function LicensePanel() {
                 React.createElement("code", { className: "neu-pressed", style: { padding: "6px 10px", borderRadius: 8, fontSize: 12.5, letterSpacing: 0.5 } }, status.fingerprint),
                 React.createElement("button", { className: "neu-btn", onClick: copyFingerprint, style: { fontSize: 11.5, padding: "6px 10px" } }, copied ? "Copied!" : "Copy"))),
         React.createElement("div", { className: "neu-card", style: card },
-            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontWeight: 700, fontSize: 14, marginBottom: 10 } }, status.valid ? "Replace license" : "Activate a license"),
+            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontWeight: 700, fontSize: 14, marginBottom: 10 } }, status.valid && status.mode !== "trial" ? "Replace license" : "Activate a license"),
             React.createElement("div", { style: { fontSize: 11.5, color: "#64748B", marginBottom: 8 } }, "Paste the activation code your vendor sent you:"),
             React.createElement("textarea", { className: "neu-input", rows: 3, value: code, onChange: (e) => setCode(e.target.value), placeholder: "DCIM-LIC-...", style: { width: "100%", fontFamily: "monospace", fontSize: 11.5, marginBottom: 10, resize: "vertical" } }),
             React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" } },
@@ -12072,7 +12240,11 @@ function ReportModal({ assets, issues = [], activities, movements = [], onClose 
     const byHw = groupByHardwareType(assets);
     const total = assets.length;
     const openIssues = issues.filter(isIssueOpen);
-    const completedIssues = issues.length - openIssues.length;
+    // Narrow to the literal "Completed" status only - cancelled issues (and the
+    // faulty-part-logistics closed states) are closed too but must never be
+    // counted as "Completed" in the report.
+    const completedIssues = issues.filter(i => getStatus(i).label === "Completed").length;
+    const cancelledIssues = issues.filter(i => getStatus(i).label === "Cancelled").length;
     const criticalOpen = openIssues.filter(i => i.severity === "critical").length;
     const warningOpen = openIssues.filter(i => i.severity === "warning").length;
     const infoOpen = openIssues.filter(i => i.severity === "info").length;
@@ -12246,7 +12418,7 @@ td{padding:8px 10px;border-bottom:1px solid #1E293B;color:#E2E8F0}
 <div class="two-col">
   <div class="card"><div class="chart-title">Open Issues by Severity</div>
     ${issueSeverityEntries.map(([k, v], i) => `<div class="bar-wrap"><div class="bar-label">${k}</div><div class="bar-track"><div class="bar-fill" style="width:${Math.round(v / maxIssueSeverity * 100)}%;background:${["#EF4444", "#F59E0B", "#06B6D4"][i]}">${v}</div></div></div>`).join("")}
-    <div style="margin-top:12px;color:#94A3B8;font-size:11px">Total issues: ${issues.length} · Completed: ${completedIssues}</div>
+    <div style="margin-top:12px;color:#94A3B8;font-size:11px">Total issues: ${issues.length} · Completed: ${completedIssues} · Cancelled: ${cancelledIssues}</div>
   </div>
   <div class="card"><div class="chart-title">Activity Trend by Month</div>
     ${activityMonthEntries.length ? activityMonthEntries.map(([k, v], i) => `<div class="bar-wrap"><div class="bar-label">${esc(k)}</div><div class="bar-track"><div class="bar-fill" style="width:${Math.round(v / maxActivityMonth * 100)}%;background:${colors[i % colors.length]}">${v}</div></div></div>`).join("") : `<div style="color:#64748B;font-size:12px">No dated activity records available.</div>`}
@@ -12400,7 +12572,9 @@ td{padding:8px 10px;border-bottom:1px solid #1E293B;color:#E2E8F0}
                         "Total issues: ",
                         issues.length,
                         " \u00B7 Completed: ",
-                        completedIssues)),
+                        completedIssues,
+                        " \u00B7 Cancelled: ",
+                        cancelledIssues)),
                 React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 18, border: "1px solid #334155" } },
                     React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 14, fontWeight: 700, marginBottom: 14, color: "#fff" } }, "Activity Trend by Month"),
                     activityMonthEntries.length ? bar(activityMonthEntries, maxActivityMonth, 6, 100) : React.createElement("div", { style: { fontSize: 11, color: "#64748B" } }, "No dated activity records available."))),
@@ -14899,14 +15073,32 @@ function DataCenterDashboard() {
     // Clamp: after deleting / filtering / a refresh the stored page can be past the last page ("2 / 1" and an empty table).
     const assetPageClamped = Math.min(Math.max(1, assetPage), assetTotalPages);
     const paginatedAssets = filteredAssets.slice((assetPageClamped - 1) * assetPageSize, assetPageClamped * assetPageSize);
-    const statusOptions = ["all", "Active", "Open", "In progress", "Awaiting part", "Part received", "Scheduled", "Overdue", "Completed", "Faulty part in store", "Returned to OEM", "Closed"];
+    const [licenseStatus, setLicenseStatus] = useState(null);
+    const [licenseLockReason, setLicenseLockReason] = useState(null);
+    useEffect(() => {
+        const onLock = (e) => setLicenseLockReason((e && e.detail) || "License required");
+        window.addEventListener("dcim-license-locked", onLock);
+        return () => window.removeEventListener("dcim-license-locked", onLock);
+    }, []);
+    useEffect(() => {
+        if (!currentUser || currentUser.mustChangePassword) return undefined;
+        let dead = false;
+        const poll = async () => { try { const st = await apiFetch("/license/status"); if (dead) return; setLicenseStatus(st); if (st && st.enforced && !st.valid) setLicenseLockReason(st.reason || "License required"); else setLicenseLockReason(null); } catch (e) { } };
+        poll();
+        const iv = setInterval(poll, 5 * 60 * 1000);
+        return () => { dead = true; clearInterval(iv); };
+    }, [currentUser && currentUser.id, currentUser && currentUser.mustChangePassword]);
+    const statusOptions = ["all", "Active", "Open", "In progress", "Awaiting part", "Part received", "Scheduled", "Overdue", "Completed", "Faulty part in store", "Returned to OEM", "Cancelled", "Closed"];
     const isGlobalAdmin = !!isAdmin && !!currentUser && (currentUser.location_access === "All" || currentUser.location_access === "Both");
     if (!currentUser)
         return React.createElement(LoginScreen, { onLogin: handleLogin, error: loginError, loading: loginLoading, orgBrand });
     if (currentUser.mustChangePassword)
         return React.createElement(ForcedPasswordChange, { user: currentUser, onLogout: handleLogout });
+    if (licenseLockReason)
+        return React.createElement(LicenseLockScreen, { reason: licenseLockReason, isGlobalAdmin, user: currentUser, onLogout: handleLogout });
     return React.createElement("div", { className: "dcim-app-shell", style: { background: "transparent", minHeight: "100vh", padding: "28px 32px 54px", fontFamily: "Inter" } },
         orgBrand.footerText && React.createElement("div", { className: "dcim-official-use-footer", style: { position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 500, textAlign: "center", fontFamily: "Inter", fontSize: 11, color: "#475569", letterSpacing: 0.2, background: "rgba(248,250,252,0.92)", backdropFilter: "blur(4px)", padding: "4px 12px", borderTop: "1px solid rgba(148,163,184,0.25)", pointerEvents: "none" } }, orgBrand.footerText),
+        React.createElement(LicenseTrialBanner, { status: licenseStatus, canActivate: isGlobalAdmin, onOpenSettings: () => setTab("settings") }),
         React.createElement(FirmwareJobAlerts, { currentUser, onRunning: setFwRunning, onOpen: () => { window.__dcimOpenFwJobs = true; setTab("monitoring"); setTimeout(() => window.dispatchEvent(new Event("dcim-open-fwjobs")), 50); } }),
         React.createElement("div", { className: "dcim-app-header", style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 32, flexWrap: "wrap", gap: 16 } },
             React.createElement("div", { className: "dcim-brand-area" },
@@ -14994,9 +15186,9 @@ function DataCenterDashboard() {
                 React.createElement("div", { className: "neu-card anim-in d5 issue-kpi-card", style: { padding: "14px 15px", background: "linear-gradient(135deg, #FFFFFF 0%, #D1FAE5 100%)", cursor: "pointer" }, onClick: () => { setSearch(""); setStatusFilter("Closed"); setSeverityFilter("all"); setSiteFilter("all"); } },
                     React.createElement("div", { className: "floating-icon compact-module-icon green", style: { width: 32, height: 32, borderRadius: 10, marginBottom: 12, background: "#E4F9F0", boxShadow: "inset 2px 2px 4px rgba(255,255,255,.7), 0 6px 13px rgba(5,150,105,.20)" } },
                         React.createElement(CheckCircle2, { s: 16, c: "#059669" })),
-                    React.createElement("div", { style: { fontSize: 12, color: "#065F46", fontWeight: 600, marginBottom: 6 } }, "Total Completed"),
+                    React.createElement("div", { style: { fontSize: 12, color: "#065F46", fontWeight: 600, marginBottom: 6 } }, "Total Closed"),
                     React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 30, fontWeight: 800, color: "#047857" } }, overallStats.completed30),
-                    React.createElement("div", { style: { fontFamily: "'JetBrains Mono'", fontSize: 11, color: "#64748B", marginTop: 6 } }, "closed out")),
+                    React.createElement("div", { style: { fontFamily: "'JetBrains Mono'", fontSize: 11, color: "#64748B", marginTop: 6 } }, "completed, in-store, returned or cancelled")),
                 React.createElement("div", { className: "neu-card anim-in d6 issue-kpi-card", style: { padding: "14px 15px", background: "linear-gradient(135deg, #FFFFFF 0%, #E0F2FE 100%)", cursor: "pointer" }, onClick: () => { setSearch(""); setStatusFilter("Active"); setSeverityFilter("all"); setSiteFilter("all"); }, title: "Distinct assets (by serial number) with at least one open issue" },
                     React.createElement("div", { className: "floating-icon compact-module-icon", style: { width: 32, height: 32, borderRadius: 10, marginBottom: 12, background: "#E0F2FE", boxShadow: "inset 2px 2px 4px rgba(255,255,255,.7), 0 6px 13px rgba(2,132,199,.20)" } },
                         React.createElement(Server, { s: 16, c: "#0284C7" })),

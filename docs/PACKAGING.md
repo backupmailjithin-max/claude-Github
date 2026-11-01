@@ -750,3 +750,11 @@ separate appliance variant.
   container, on any distro) — `test-ubuntu-systemd-lifecycle` is the real
   systemd evidence, and it exercises the identical install.sh/systemd-unit
   logic those two distros would run.
+
+
+## Production defaults (added in this release)
+
+- `CSP_MODE` now defaults to `enforce` (the Content-Security-Policy is applied, not just reported). The setup wizard and deployment dashboard have their own script hashes, so they keep working. Use `report-only` or `off` only to diagnose.
+- `SEED_SAMPLE_DATA=0` skips the demo sites, assets and operator accounts on a new database; only the `admin` account is created. Leave it unset for evaluation installs.
+- At start-up the server logs warnings for `CORS_ORIGIN` unset or `*`, `CSP_MODE` other than enforce, and a `.env` file readable by other users.
+- `npm test` runs the unit tests (trial/licence logic, ZIP writer, OCR document parser).

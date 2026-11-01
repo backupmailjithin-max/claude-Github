@@ -141,6 +141,8 @@ CREATE TABLE IF NOT EXISTS issues (
   moved_to_store_date DATETIME,
   returned_to_oem_date DATETIME,
   notes TEXT,
+  cancelled_date DATETIME,
+  cancel_reason TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_issues_site (site),
   INDEX idx_issues_asset (asset_id),

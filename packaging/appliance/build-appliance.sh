@@ -39,7 +39,23 @@ fi
 
 cp -a "$REPO_ROOT/dcim/webapp" "$PAYLOAD/webapp"
 rm -rf "$PAYLOAD/webapp/.env" "$PAYLOAD/webapp/uploads" "$PAYLOAD/webapp/backups" "$PAYLOAD/webapp/logs"
+# Vendor-only licence tooling (keypair generator, issuer, wizard, template) must never ship to customers,
+# and no developer licence/trial state may leak into the package.
+rm -f "$PAYLOAD"/webapp/tools/license-*.js "$PAYLOAD/webapp/tools/Run-License-Generator.bat" "$PAYLOAD/webapp/tools/LICENSE-ISSUE-TEMPLATE.txt" \
+      "$PAYLOAD/webapp/tools/Build-License-Generator-Exe.bat" "$PAYLOAD/webapp/tools/sea-config.json" "$PAYLOAD/webapp/tools/sea-prep.blob" \
+      "$PAYLOAD"/webapp/tools/dcim-license-generator-v2*.exe \
+      "$PAYLOAD/webapp/license.lic" "$PAYLOAD/webapp/.trial-state" "$PAYLOAD/webapp/.license-clock"
+if find "$PAYLOAD/webapp" \( -name 'license-keygen*' -o -name 'license-issue*' -o -name 'license-generator*' -o -name 'license-fingerprint*' -o -name 'Run-License-Generator*' -o -name 'LICENSE-ISSUE-TEMPLATE*' -o -name 'Build-License-Generator-Exe*' -o -name 'sea-config.json' -o -name 'sea-prep.blob' -o -name 'dcim-license-generator-v2*' \) | grep -q .; then
+  echo "ERROR: vendor licence tooling is still present in the appliance payload." >&2; exit 1
+fi
 mkdir -p "$PAYLOAD/webapp/uploads" "$PAYLOAD/webapp/backups" "$PAYLOAD/webapp/logs"
+
+# Signed integrity manifest + build gate: FAILS the build on licence tools / signing material / private keys.
+# Bytenode is on by default here: the appliance always bundles its own exact Node runtime (checked above),
+# so bytecode compiled against it is guaranteed to match what ships. Override with DCIM_BYTENODE=0 to disable.
+export DCIM_BYTENODE="${DCIM_BYTENODE:-1}"
+. "$REPO_ROOT/packaging/tools/package-gate.sh"
+package_gate "$PAYLOAD/webapp" "$PAYLOAD" "$VERSION" "$PAYLOAD/runtime/node/bin/node" || exit 1
 
 TARBALL="$STAGE/payload.tar.gz"
 tar -czf "$TARBALL" -C "$STAGE" "$(basename "$PAYLOAD")"
