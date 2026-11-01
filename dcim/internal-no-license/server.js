@@ -4050,12 +4050,18 @@ async function refreshTrackedFirmwareJobs(vendor, site, zone, deviceIds) {
 // A background pass reads each configured appliance's own task/job list, records any running firmware update it does not already
 // know (source = 'appliance'), and keeps the status of every running row fresh. These rows lock the server and show to all users.
 const FW_SCAN_INTERVAL_MS = Math.max(10000, Number(process.env.MONITOR_FW_SCAN_MS) || 30000);
+let fwNoiseCleaned = false;
 let fwJobsTickBusy = false;
 let fwJobsLastTick = 0;
 function fwSubmissionInFlight(vendor, site, zone) { const p = `${vendor}|${site}|${zone}|`; return Object.keys(deviceFirmwareJobs).some((k) => k.startsWith(p) && !deviceFirmwareJobs[k].jobRef); }
 async function scanOneviewExternalFirmware(site, zone) {
   const diag = { site, zone, vendor: 'oneview' };
   if (fwSubmissionInFlight('oneview', site, zone)) { diag.skipped = 'a DCIM submission is being recorded'; return { added: 0, diag }; }
+  if (!fwNoiseCleaned) {
+    fwNoiseCleaned = true;
+    // One-time clean-up: appliance-detected rows that were really housekeeping tasks (e.g. iLO "data collection") and never firmware.
+    try { await pool.query("DELETE FROM firmware_jobs WHERE source='appliance' AND vendor='oneview' AND CONCAT_WS(' ', job_name, baseline_label, step) REGEXP 'data collection|received and processed|inventory|telemetry|refresh' AND CONCAT_WS(' ', job_name, baseline_label, step) NOT REGEXP 'firmware|baseline|smart update|service pack|SPP'"); } catch (e) { /* best effort */ }
+  }
   const session = await getOneviewSession(site, zone);
   if (!session) { diag.skipped = 'not configured'; return { added: 0, diag }; }
   const hdrs = { Auth: session.sessionId, 'X-API-Version': String(session.apiVersion) };
@@ -4081,7 +4087,11 @@ async function scanOneviewExternalFirmware(site, zone) {
     return `${t.name || ''} ${t.taskStatus || ''} ${t.taskType || ''} ${(pu && (pu.statusUpdate || pu.message)) || ''}`;
   };
   const resUri = (t) => { const ar = t.associatedResource || {}; return typeof ar.resourceUri === 'string' ? ar.resourceUri : ''; };
-  const isFw = (t) => RUNNING.includes(t.taskState) && /^\/rest\/server-hardware\/[A-Za-z0-9_-]+$/.test(resUri(t)) && /firmware|baseline|smart update|service pack|\bSPP\b|\bupdat/i.test(textOf(t)) && !/power|refresh|collect|identify|\bled\b|reset|remote console/i.test(String(t.name || ''));
+  // Housekeeping tasks OneView runs on a server (iLO data collection, inventory refresh, telemetry ...) can contain the word
+  // "update" in their name or status text but are not firmware updates - they are ignored unless the text also names firmware.
+  const FW_STRONG = /firmware|baseline|smart update|service pack|\bSPP\b/i;
+  const FW_NOISE = /data collection|collect|received and processed|refresh|inventory|telemetry|utilization|health|alert/i;
+  const isFw = (t) => RUNNING.includes(t.taskState) && /^\/rest\/server-hardware\/[A-Za-z0-9_-]+$/.test(resUri(t)) && /firmware|baseline|smart update|service pack|\bSPP\b|\bupdat/i.test(textOf(t)) && !/power|refresh|collect|identify|\bled\b|reset|remote console/i.test(String(t.name || '')) && !(FW_NOISE.test(textOf(t)) && !FW_STRONG.test(textOf(t)));
   diag.running = tasks.filter((t) => t && RUNNING.includes(t.taskState)).length;
   diag.runningSample = tasks.filter((t) => t && RUNNING.includes(t.taskState)).slice(0, 10).map((t) => ({ name: t.name, taskState: t.taskState, taskStatus: t.taskStatus, taskType: t.taskType, owner: t.owner && (t.owner.name || t.owner), resource: t.associatedResource && { uri: t.associatedResource.resourceUri, name: t.associatedResource.resourceName, category: t.associatedResource.resourceCategory }, matched: isFw(t) }));
   let added = 0;
