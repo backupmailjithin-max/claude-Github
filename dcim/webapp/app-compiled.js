@@ -213,6 +213,13 @@ const api = {
     ocrConfirm: (b) => apiFetch('/ocr/confirm', { method: 'POST', body: JSON.stringify(b) }),
     updateMaterialMovement: (id, m) => apiFetch('/material-movements/' + id, { method: 'PATCH', body: JSON.stringify(m) }),
     deleteMaterialMovement: (id) => apiFetch('/material-movements/' + id, { method: 'DELETE' }),
+    approveMaterialMovement: (id, approverName) => apiFetch('/material-movements/' + id + '/approve', { method: 'POST', body: JSON.stringify({ approverName }) }),
+    generateMaterialMovementTicket: (id) => apiFetch('/material-movements/' + id + '/generate-ticket', { method: 'POST' }),
+    rejectMaterialMovement: (id, approverName, reason) => apiFetch('/material-movements/' + id + '/reject', { method: 'POST', body: JSON.stringify({ approverName, reason }) }),
+    receiveMaterialMovement: (id, remarks, receiverName) => apiFetch('/material-movements/' + id + '/receive', { method: 'POST', body: JSON.stringify({ remarks: remarks || '', receiverName: receiverName || '' }) }),
+    notReceivedMaterialMovement: (id, remarks) => apiFetch('/material-movements/' + id + '/not-received', { method: 'POST', body: JSON.stringify({ remarks: remarks || '' }) }),
+    outwardCompleteMaterialMovement: (id, remarks) => apiFetch('/material-movements/' + id + '/outward-complete', { method: 'POST', body: JSON.stringify({ remarks: remarks || '' }) }),
+    cancelMaterialMovement: (id, remarks) => apiFetch('/material-movements/' + id + '/cancel', { method: 'POST', body: JSON.stringify({ remarks: remarks || '' }) }),
     uploadMovementDocument: async (id, file) => {
         const fd = new FormData();
         fd.append('file', file);
@@ -229,6 +236,41 @@ const api = {
         return data;
     },
     deleteMovementDocument: (id) => apiFetch('/material-movements/' + id + '/document', { method: 'DELETE' }),
+    // ---- Visitor Access ----
+    getVisitorRequests: (site, status) => apiFetch('/visitor-requests?' + [site && site !== 'all' ? 'site=' + encodeURIComponent(site) : '', status && status !== 'all' ? 'status=' + encodeURIComponent(status) : ''].filter(Boolean).join('&')),
+    createVisitorRequest: (v) => apiFetch('/visitor-requests', { method: 'POST', body: JSON.stringify(v) }),
+    updateVisitorRequest: (id, v) => apiFetch('/visitor-requests/' + id, { method: 'PATCH', body: JSON.stringify(v) }),
+    deleteVisitorRequest: (id) => apiFetch('/visitor-requests/' + id, { method: 'DELETE' }),
+    approveVisitorRequest: (id, approverName) => apiFetch('/visitor-requests/' + id + '/approve', { method: 'POST', body: JSON.stringify({ approverName }) }),
+    rejectVisitorRequest: (id, approverName, reason) => apiFetch('/visitor-requests/' + id + '/reject', { method: 'POST', body: JSON.stringify({ approverName, reason }) }),
+    generateVisitorTicket: (id) => apiFetch('/visitor-requests/' + id + '/generate-ticket', { method: 'POST' }),
+    checkinVisitor: (id, remarks) => apiFetch('/visitor-requests/' + id + '/checkin', { method: 'POST', body: JSON.stringify({ remarks: remarks || '' }) }),
+    holdVisitor: (id, remarks) => apiFetch('/visitor-requests/' + id + '/hold', { method: 'POST', body: JSON.stringify({ remarks: remarks || '' }) }),
+    checkoutVisitor: (id, remarks) => apiFetch('/visitor-requests/' + id + '/checkout', { method: 'POST', body: JSON.stringify({ remarks: remarks || '' }) }),
+    uploadVisitorDocument: async (id, file) => {
+        const fd = new FormData();
+        fd.append('files', file);
+        const token = getToken();
+        const res = await fetch(API_BASE + '/visitor-requests/' + id + '/document', { method: 'POST', headers: token ? { Authorization: 'Bearer ' + token } : {}, body: fd });
+        if (res.status === 401) { clearAuth(); window.location.reload(); throw new Error('Session expired'); }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Upload failed');
+        return data;
+    },
+    deleteVisitorDocument: (id, docId) => apiFetch('/visitor-requests/' + id + '/documents/' + docId, { method: 'DELETE' }),
+    downloadVisitorDocument: async (id, docId, suggestedName) => {
+        const token = getToken();
+        const res = await fetch(API_BASE + '/visitor-requests/' + id + '/documents/' + docId, { headers: token ? { Authorization: 'Bearer ' + token } : {} });
+        if (res.status === 401) { clearAuth(); window.location.reload(); throw new Error('Session expired'); }
+        if (!res.ok) throw new Error('Download failed');
+        const blob = await res.blob();
+        downloadBlob(blob, suggestedName || 'document');
+    },
+    // ---- Settings: SMTP / notification recipients / report email ----
+    getIntegrationSettings: () => apiFetch('/settings/integrations'),
+    saveIntegrationSettings: (body) => apiFetch('/settings/integrations', { method: 'PUT', body: JSON.stringify(body) }),
+    testIntegration: (body) => apiFetch('/settings/integrations/test', { method: 'POST', body: JSON.stringify(body) }),
+    emailReport: (to, subject, html) => apiFetch('/reports/email', { method: 'POST', body: JSON.stringify({ to, subject, html }) }),
     // Download requires the Bearer token, so a plain <a href> won't carry auth —
     // fetch as a blob and trigger the save manually instead.
     downloadMovementDocument: async (id, suggestedName) => {
@@ -320,6 +362,7 @@ const api = {
         window.URL.revokeObjectURL(url);
     },
     searchMonitoring: (q) => apiFetch('/monitoring/search?q=' + encodeURIComponent(q)),
+    getSyncProgress: (site, zone) => apiFetch('/monitoring/sync-progress?site=' + encodeURIComponent(site) + '&zone=' + encodeURIComponent(zone)),
     getMonitoringDevices: (site, zone, forceRefresh) => apiFetch('/monitoring/devices?site=' + encodeURIComponent(site) + '&zone=' + encodeURIComponent(zone) + (forceRefresh ? '&refresh=true' : '')),
     getFirmwareBaselines: (site, zone, vendor, deviceUri) => apiFetch('/monitoring/firmware/baselines?site=' + encodeURIComponent(site) + '&zone=' + encodeURIComponent(zone) + '&vendor=' + encodeURIComponent(vendor) + (deviceUri ? '&deviceUri=' + encodeURIComponent(deviceUri) : '')),
     applyFirmware: (payload) => apiFetch('/monitoring/firmware/apply', { method: 'POST', body: JSON.stringify(payload) }),
@@ -339,7 +382,9 @@ const api = {
     refreshAlerts: (payload) => apiFetch('/monitoring/refresh-alerts', { method: 'POST', body: JSON.stringify(payload) }),
     getAutosyncStatus: () => apiFetch('/monitoring/autosync-status'),
     getPowerSummary: () => apiFetch('/monitoring/power-summary'),
+    getServerPowerConsumption: () => apiFetch('/monitoring/server-power-consumption'),
     getFirmwareCompliance: () => apiFetch('/monitoring/firmware-compliance'),
+    syncFirmwareCompliance: () => apiFetch('/monitoring/firmware-compliance/sync', { method: 'POST' }),
     getAssetConnectivity: (id) => apiFetch('/assets/' + encodeURIComponent(id) + '/connectivity'),
     deleteAssetConnectivity: (id) => apiFetch('/assets/' + encodeURIComponent(id) + '/connectivity', { method: 'DELETE' }),
     importConnectivity: (payload) => apiFetch('/connectivity/import', { method: 'POST', body: JSON.stringify(payload), timeoutMs: 120000 }),
@@ -367,13 +412,40 @@ const api = {
     getRedfishAssets: (site, includeIgnored) => { const q = new URLSearchParams(); if (site && site !== 'all') q.set('site', site); if (includeIgnored) q.set('includeIgnored', '1'); const qs = q.toString(); return apiFetch('/monitoring/redfish/assets' + (qs ? '?' + qs : '')); },
     setRedfishIgnored: (assetId, ignored) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/ignore', { method: 'PUT', body: JSON.stringify({ ignored }) }),
     unconfigureRedfish: (assetIds) => apiFetch('/monitoring/redfish/unconfigure', { method: 'POST', body: JSON.stringify({ assetIds }) }),
-    detectRedfish: (body) => apiFetch('/monitoring/redfish/detect', { method: 'POST', body: JSON.stringify(body), timeoutMs: 15000 }),
+    // BUG FIX: these two make a single, synchronous call all the way to the BMC and back (unlike
+    // Discover/Apply below, which only start/poll a background job) - the backend's own network
+    // timeout for that call is 30s (MONITOR_FETCH_TIMEOUT_MS in server.js), so a client-side
+    // timeout of 15s was aborting the request HALF A TIMEOUT-CYCLE before the backend itself
+    // would have given up and answered, producing exactly "Server request timed out after 15
+    // seconds" for a device that was simply slow to respond/reject rather than for any backend or
+    // database problem. Raised to comfortably clear the backend's own ceiling.
+    detectRedfish: (body) => apiFetch('/monitoring/redfish/detect', { method: 'POST', body: JSON.stringify(body), timeoutMs: 35000 }),
     saveRedfishCredentials: (assetId, body) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/credentials', { method: 'PUT', body: JSON.stringify(body) }),
-    syncRedfishAsset: (assetId) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/sync', { method: 'POST', timeoutMs: 15000 }),
-    discoverRedfish: () => apiFetch('/monitoring/redfish/discover', { method: 'POST', timeoutMs: 120000 }),
-    applyRedfishDiscovery: (assetIds) => apiFetch('/monitoring/redfish/discover/apply', { method: 'POST', body: JSON.stringify({ assetIds }), timeoutMs: 120000 }),
+    startRedfishSync: (assetIds, site) => apiFetch('/monitoring/redfish/sync', { method: 'POST', body: JSON.stringify({ assetIds, site }) }),
+    getRedfishSyncJob: (jobId) => apiFetch('/monitoring/redfish/sync/' + encodeURIComponent(jobId)),
+    syncRedfishAsset: (assetId) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/sync', { method: 'POST', timeoutMs: 35000 }),
+    // Discover and Apply no longer run as one long held-open request - a scan across a large
+    // site (1000s of assets) can legitimately take minutes, and a request held open that long
+    // tends to get cut off by whatever reverse proxy/gateway sits in front of this server (most
+    // default to timing out an idle/long connection well under that), which showed up as a bare
+    // "Request failed" with no useful detail. Each call below now just starts a background job
+    // (fast, always returns right away) and the caller polls the small status endpoint until
+    // it's done - no single request is ever open for more than a moment.
+    discoverRedfishStart: () => apiFetch('/monitoring/redfish/discover', { method: 'POST', timeoutMs: 15000 }),
+    discoverRedfishStatus: (jobId) => apiFetch('/monitoring/redfish/discover/' + encodeURIComponent(jobId), { timeoutMs: 15000 }),
+    // credentialIdsByAsset ({assetId: credentialId}) lets Apply re-confirm with the EXACT
+    // credential Discover already found for that asset instead of re-trying every candidate
+    // password again - see the matching backend comment. Uses the candidate's stable id (its
+    // position in REDFISH_CREDENTIALS), not its username, because several candidates can share a
+    // username (e.g. Dell's three "root" passwords) - a username-only match would silently reuse
+    // the wrong one. credentialsByAsset (username only) is still sent for older-server fallback.
+    // Optional: omit both (or pass {}) to fall back to the old full-candidate-list behavior.
+    applyRedfishDiscoveryStart: (assetIds, credentialsByAsset, credentialIdsByAsset) => apiFetch('/monitoring/redfish/discover/apply', { method: 'POST', body: JSON.stringify({ assetIds, credentialsByAsset, credentialIdsByAsset }), timeoutMs: 15000 }),
+    applyRedfishDiscoveryStatus: (jobId) => apiFetch('/monitoring/redfish/discover/apply/' + encodeURIComponent(jobId), { timeoutMs: 15000 }),
     getRedfishFirmwareInventory: (assetId) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/firmware-inventory', { timeoutMs: 20000 }),
     updateRedfishFirmware: (assetId, imageUri) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/firmware/update', { method: 'POST', body: JSON.stringify({ imageUri }) }),
+    getAuditLogs: (params = {}) => { const q = new URLSearchParams(); if (params.action) q.set('action', params.action); if (params.username) q.set('username', params.username); if (params.entity) q.set('entity', params.entity); if (params.status) q.set('status', params.status); if (params.from) q.set('from', params.from); if (params.to) q.set('to', params.to); if (params.limit) q.set('limit', params.limit); if (params.offset) q.set('offset', params.offset); const qs = q.toString(); return apiFetch('/audit-logs' + (qs ? '?' + qs : '')); },
+    restoreAuditLog: (id) => apiFetch('/audit-logs/' + encodeURIComponent(id) + '/restore', { method: 'POST' }),
 };
 const { useState, useMemo, useRef, useEffect } = React;
 /* PERF (Phase-2): long lists draw the first LIST_PAGE rows and add more as the user scrolls (or presses "Show all").
@@ -1360,6 +1432,9 @@ const FileText = (p) => React.createElement(Ico, { ...p },
     React.createElement("polyline", { points: "15 3 15 7 19 7" }),
     React.createElement("line", { x1: "8", y1: "12", x2: "16", y2: "12" }),
     React.createElement("line", { x1: "8", y1: "16", x2: "16", y2: "16" }));
+const Mail = (p) => React.createElement(Ico, { ...p },
+    React.createElement("rect", { x: "3", y: "5", width: "18", height: "14", rx: "2" }),
+    React.createElement("polyline", { points: "3 7 12 13 21 7" }));
 const X = (p) => React.createElement(Ico, { ...p },
     React.createElement("line", { x1: "5", y1: "5", x2: "19", y2: "19" }),
     React.createElement("line", { x1: "19", y1: "5", x2: "5", y2: "19" }));
@@ -1489,6 +1564,8 @@ const ACTIVITY_COLUMNS = [
     { key: "createdBy", label: "Recorded By" },
 ];
 const MOVEMENT_COLUMNS = [
+    { key: "ticketNo", label: "Ticket No", format: (v) => v || "—" },
+    { key: "status", label: "Status" },
     { key: "movementType", label: "Type" }, { key: "site", label: "Location" },
     { key: "itemName", label: "Item" }, { key: "quantity", label: "Qty" }, { key: "unit", label: "Unit" },
     { key: "receiverName", label: "Receiver Name" }, { key: "senderName", label: "Sender / Vendor" },
@@ -1498,15 +1575,23 @@ const MOVEMENT_COLUMNS = [
     { key: "remarks", label: "Remarks" }, { key: "createdBy", label: "Recorded By" },
 ];
 const REDFISH_COLUMNS = [
-    { key: "_asset", label: "Asset", format: (v, row) => row.deviceName || row.assetTag || row.id },
+    // Prefer the serial the BMC itself just reported over Redfish (redfishSerialNumber) over
+    // Asset Inventory's own Serial Number field (serialNumber) - many sites, this one included,
+    // put their own internal asset-tag-style value into Asset Inventory's Serial Number at
+    // creation time rather than the vendor's real hardware serial, so showing that field here
+    // looked wrong/stale even on a device that had synced successfully. Falls back through
+    // Asset Inventory's serial, then device name/asset tag/id, only for a device Redfish has
+    // never successfully reached yet.
+    { key: "_asset", label: "Serial No", format: (v, row) => row.redfishSerialNumber || row.serialNumber || row.deviceName || row.assetTag || row.id },
     { key: "site", label: "Site" }, { key: "rackNo", label: "Rack" },
     { key: "hardwareType", label: "Category", format: (v) => v || "Uncategorized" },
     { key: "mgmtIp", label: "Mgmt IP" },
     { key: "_vendorModel", label: "Vendor / Model", format: (v, row) => row.vendor ? `${row.vendor} ${row.model || ""}`.trim() : "—" },
     { key: "healthStatus", label: "Health", format: (v) => v || "Unknown" },
     { key: "powerState", label: "Power State" },
+    { key: "powerWatts", label: "Power (W)", format: (v) => (v == null ? "—" : `${v} W`) },
     { key: "alertCount", label: "Alerts", format: (v) => (v == null ? "—" : String(v)) },
-    { key: "bmcFirmware", label: "BMC Firmware" },
+    { key: "biosVersion", label: "BIOS Version" },
     { key: "lastSyncAt", label: "Last Sync", format: (v) => (v ? new Date(v).toLocaleString() : "Never") },
 ];
 function rowsFromColumns(items, columns) { return items.map((r) => { const obj = {}; columns.forEach((c) => { obj[c.label] = c.format ? c.format(r[c.key], r) : (r[c.key] != null ? r[c.key] : ""); }); return obj; }); }
@@ -3054,9 +3139,41 @@ function RecordMovementModal({ onClose, onSave, initial, zones, onDownload, onRe
                 React.createElement("button", { disabled: !form.itemName.trim() || !form.site, onClick: () => onSave(form, files, ocrMeta), className: "neu-btn-primary", style: { flex: 1, padding: "12px 0", fontSize: 14, opacity: (form.itemName.trim() && form.site) ? 1 : 0.5, cursor: (form.itemName.trim() && form.site) ? "pointer" : "not-allowed" } }, initial ? "Save changes" : "Record movement"))));
 }
 /* ===== MATERIAL MOVEMENTS TABLE ===== */
-function MaterialMovements({ movements, allowedSites, canEdit, onEdit, onDelete, onDownload, onExportExcel, onExportCSV, onImport, importError, importProgress, importErrorDetails, selectedIds, onSelectId, onSelectAll, onDeleteSelected, onClearSelection }) {
+const MOVEMENT_STATUS_COLORS = {
+    "Pending Approval": { c: "#D97706", bg: "#FFFBEB" },
+    "Approved": { c: "#2563EB", bg: "#EFF6FF" },
+    "Rejected": { c: "#DC2626", bg: "#FEF2F2" },
+    "Ticket Issued": { c: "#7C3AED", bg: "#F5F3FF" },
+    "Received at Site": { c: "#059669", bg: "#ECFDF5" },
+    "Not Received": { c: "#DC2626", bg: "#FEF2F2" },
+    "Outward Complete": { c: "#059669", bg: "#ECFDF5" },
+    "Cancelled": { c: "#64748B", bg: "#F1F5F9" },
+};
+const MOVEMENT_ACTION_LABELS = { receive: "Material Received at Site", notReceived: "Material Not Received", outwardComplete: "Material Outward Complete", cancel: "Cancelled — Close Ticket" };
+const MOVEMENT_ACTION_VERBING = { receive: "Marking Received", notReceived: "Marking Not Received", outwardComplete: "Completing", cancel: "Cancelling" };
+function MovementCloseActionModal({ action, onClose, onConfirm }) {
+    const [remarks, setRemarks] = useState("");
+    const [receiverName, setReceiverName] = useState(action.defaultReceiverName || "");
+    const [saving, setSaving] = useState(false);
+    const label = MOVEMENT_ACTION_LABELS[action.type] || action.type;
+    const isReceive = action.type === "receive";
+    const confirm = async () => { setSaving(true); try { await onConfirm(action.id, action.type, remarks.trim(), isReceive ? receiverName.trim() : undefined); onClose(); } finally { setSaving(false); } };
+    return ReactDOM.createPortal(React.createElement("div", { style: { position: "fixed", inset: 0, zIndex: 50, background: "rgba(14,18,28,0.35)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center" }, onClick: onClose },
+        React.createElement("div", { onClick: (e) => e.stopPropagation(), className: "neu-card anim-in d1", style: { width: 420, maxWidth: "94vw", padding: 24 } },
+            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 16, fontWeight: 800, color: "#020617", marginBottom: 4 } }, `${label} — ${action.itemName || "movement"}`),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 14 } }, "Remarks are optional and are added to this record's existing remarks - nothing already there is overwritten."),
+            isReceive && React.createElement(Field, { label: "Receiver name", style: { marginBottom: 12 } },
+                React.createElement("input", { value: receiverName, onChange: (e) => setReceiverName(e.target.value), className: "neu-input", placeholder: "Who received the material", autoFocus: true })),
+            React.createElement(Field, { label: "Remarks (optional)" },
+                React.createElement("textarea", { rows: 3, value: remarks, onChange: (e) => setRemarks(e.target.value), className: "neu-input", style: { resize: "vertical" }, placeholder: `Anything to note…`, autoFocus: !isReceive })),
+            React.createElement("div", { style: { display: "flex", gap: 10, marginTop: 16 } },
+                React.createElement("button", { onClick: onClose, className: "neu-btn-secondary", style: { flex: 1, padding: "11px 0", fontSize: 13.5 } }, "Cancel"),
+                React.createElement("button", { onClick: confirm, disabled: saving, className: "neu-btn-primary", style: { flex: 1, padding: "11px 0", fontSize: 13.5, opacity: saving ? 0.6 : 1 } }, saving ? `${MOVEMENT_ACTION_VERBING[action.type] || label}…` : label)))), document.body);
+}
+function MaterialMovements({ movements, allowedSites, canEdit, isAdmin, canApprove, onEdit, onDelete, onApprove, onReject, onGenerateTicket, onReceive, onNotReceived, onOutwardComplete, onCancel, onDownload, onExportExcel, onExportCSV, onImport, importError, importProgress, importErrorDetails, selectedIds, onSelectId, onSelectAll, onDeleteSelected, onClearSelection }) {
     const movListCtl = useProgressiveList();
     const [expandedId, setExpandedId] = useState(null);
+    const [closeAction, setCloseAction] = useState(null); // { id, type: "receive" | "notReceived" | "outwardComplete" | "cancel", itemName, defaultReceiverName }
     const [siteFilter, setSiteFilter] = useState("all");
     const [typeFilter, setTypeFilter] = useState("all");
     const [search, setSearch] = useState("");
@@ -3153,14 +3270,33 @@ function MaterialMovements({ movements, allowedSites, canEdit, onEdit, onDelete,
                         MOVEMENT_COLUMNS.map((col) => {
                             const val = col.format ? col.format(m[col.key], m) : m[col.key];
                             const isType = col.key === "movementType";
+                            if (col.key === "status") {
+                                const sc = MOVEMENT_STATUS_COLORS[m.status] || { c: "#D97706", bg: "#FFFBEB" };
+                                return React.createElement("td", { key: col.key, style: { padding: "10px 10px", borderBottom: "0.5px solid rgba(163,177,198,0.25)", whiteSpace: "nowrap" } },
+                                    React.createElement("span", { style: { fontFamily: "Inter", fontSize: 11, fontWeight: 700, color: sc.c, background: sc.bg, padding: "3px 9px", borderRadius: 999 } }, m.status || "—"));
+                            }
                             return React.createElement("td", { key: col.key, style: { padding: "10px 10px", borderBottom: "0.5px solid rgba(163,177,198,0.25)", fontFamily: "Inter", fontSize: 12, whiteSpace: "nowrap",
-                                    color: isType ? (m.movementType === "Inward" ? "#059669" : "#DC2626") : (col.key === "site" ? "#6366F1" : "#1E293B"),
-                                    fontWeight: isType || col.key === "site" ? 700 : 400 } }, WRAP_COLS.has(col.key) ? React.createElement("div", { style: wrapCellStyle(false) }, val != null && val !== "" ? val : "—") : (val != null && val !== "" ? val : "—"));
+                                    color: isType ? (m.movementType === "Inward" ? "#059669" : "#DC2626") : (col.key === "site" ? "#6366F1" : (col.key === "ticketNo" ? "#4F46E5" : "#1E293B")),
+                                    fontWeight: isType || col.key === "site" || col.key === "ticketNo" ? 700 : 400 } }, WRAP_COLS.has(col.key) ? React.createElement("div", { style: wrapCellStyle(false) }, val != null && val !== "" ? val : "—") : (val != null && val !== "" ? val : "—"));
                         }),
                         React.createElement("td", { onClick: (e) => e.stopPropagation(), style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px", textAlign: "right", whiteSpace: "nowrap" } },
+                            canApprove && m.status === "Pending Approval" && React.createElement("button", { onClick: () => onApprove(m.id), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Approve" },
+                                React.createElement(CheckCircle2, { s: 13, c: "#059669" })),
+                            canApprove && m.status === "Pending Approval" && React.createElement("button", { onClick: () => onReject(m.id), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Reject request" },
+                                React.createElement(X, { s: 13, c: "#DC2626" })),
+                            canEdit && m.status === "Approved" && React.createElement("button", { onClick: () => onGenerateTicket(m.id), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Generate ticket" },
+                                React.createElement(FileText, { s: 13, c: "#7C3AED" })),
+                            canEdit && m.status === "Ticket Issued" && m.movementType === "Inward" && React.createElement("button", { onClick: () => setCloseAction({ id: m.id, type: "receive", itemName: m.itemName, defaultReceiverName: m.receiverName }), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Material Received at Site" },
+                                React.createElement(CheckCircle2, { s: 13, c: "#059669" })),
+                            canEdit && m.status === "Ticket Issued" && m.movementType === "Inward" && React.createElement("button", { onClick: () => setCloseAction({ id: m.id, type: "notReceived", itemName: m.itemName }), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Material Not Received" },
+                                React.createElement(X, { s: 13, c: "#DC2626" })),
+                            canEdit && m.status === "Ticket Issued" && m.movementType === "Outward" && React.createElement("button", { onClick: () => setCloseAction({ id: m.id, type: "outwardComplete", itemName: m.itemName }), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Material Outward Complete" },
+                                React.createElement(CheckCircle2, { s: 13, c: "#059669" })),
+                            canEdit && (m.status === "Approved" || m.status === "Ticket Issued") && m.movementType === "Outward" && React.createElement("button", { onClick: () => setCloseAction({ id: m.id, type: "cancel", itemName: m.itemName }), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Cancelled — Close Ticket" },
+                                React.createElement(X, { s: 13, c: "#DC2626" })),
                             m.hasDocument && React.createElement("button", { onClick: () => onDownload(m.id, m.documentName), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Download DC/Invoice" },
                                 React.createElement(Download, { s: 13, c: "#0EA5E9" })),
-                            canEdit && React.createElement("button", { onClick: () => onEdit(m), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Edit record" },
+                            canEdit && m.status === "Pending Approval" && React.createElement("button", { onClick: () => onEdit(m), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Edit record" },
                                 React.createElement(Edit2, { s: 13, c: "#64748B" })),
                             canEdit && React.createElement("button", { onClick: () => onDelete(m.id), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex" }, title: "Delete record" },
                                 React.createElement(Trash2, { s: 13, c: "#64748B" })))),
@@ -3169,7 +3305,623 @@ function MaterialMovements({ movements, allowedSites, canEdit, onEdit, onDelete,
                             { label: "Item description", value: m.description, wide: true },
                             ...MOVEMENT_COLUMNS.filter((c) => c.key !== "itemName" && c.key !== "remarks").map((c) => ({ label: c.label, value: c.format ? c.format(m[c.key], m) : m[c.key] })),
                             { label: "Remarks", value: m.remarks, wide: true }] })); })))),
-        openFilter && React.createElement(ValueListFilterPopup, { column: openFilter, currentFilter: columnFilters[openFilter.key], optionRows: optionRowsForColumn(openFilter.key), onApply: (value) => setColumnFilters((prev) => ({ ...prev, [openFilter.key]: value })), onClose: () => setOpenFilter(null) }));
+        openFilter && React.createElement(ValueListFilterPopup, { column: openFilter, currentFilter: columnFilters[openFilter.key], optionRows: optionRowsForColumn(openFilter.key), onApply: (value) => setColumnFilters((prev) => ({ ...prev, [openFilter.key]: value })), onClose: () => setOpenFilter(null) }),
+        closeAction && React.createElement(MovementCloseActionModal, { action: closeAction, onClose: () => setCloseAction(null), onConfirm: (id, type, remarks, receiverName) => {
+                if (type === "receive") return onReceive(id, remarks, receiverName);
+                if (type === "notReceived") return onNotReceived(id, remarks);
+                if (type === "outwardComplete") return onOutwardComplete(id, remarks);
+                return onCancel(id, remarks);
+            } }));
+}
+/* ===== VISITOR ACCESS ===== */
+const VISITOR_ID_PROOF_TYPES = ["Aadhaar", "PAN", "Passport", "Driving License", "Voter ID", "Company ID", "Other"];
+const VISITOR_STATUS_COLORS = {
+    "Pending Approval": { c: "#D97706", bg: "#FFFBEB" },
+    "Approved": { c: "#2563EB", bg: "#EFF6FF" },
+    "Rejected": { c: "#DC2626", bg: "#FEF2F2" },
+    "Ticket Issued": { c: "#7C3AED", bg: "#F5F3FF" },
+    "In Progress": { c: "#0891B2", bg: "#ECFEFF" },
+    "On Hold": { c: "#D97706", bg: "#FEF3C7" },
+    "Closed": { c: "#059669", bg: "#ECFDF5" },
+};
+function VisitorStatusBadge({ status }) {
+    const sc = VISITOR_STATUS_COLORS[status] || { c: "#64748B", bg: "#F1F5F9" };
+    return React.createElement("span", { style: { fontFamily: "Inter", fontSize: 11, fontWeight: 700, color: sc.c, background: sc.bg, padding: "3px 9px", borderRadius: 999, whiteSpace: "nowrap" } }, status || "—");
+}
+function VisitorRequestModal({ onClose, onSave, initial }) {
+    const [form, setForm] = useState(initial ? {
+        visitorName: initial.visitorName || "", company: initial.company || "", phone: initial.phone || "",
+        purpose: initial.purpose || "", hostEmployee: initial.hostEmployee || "",
+        site: initial.site || defaultSiteForUser(), zone: initial.zone || "AZ-1",
+        visitDate: initial.visitDate || nowDateTimeStr().slice(0, 10), visitDateTo: initial.visitDateTo || "",
+        expectedCheckin: initial.expectedCheckin ? String(initial.expectedCheckin).slice(0, 16) : "",
+        expectedCheckout: initial.expectedCheckout ? String(initial.expectedCheckout).slice(0, 16) : "",
+        idProofType: initial.idProofType || VISITOR_ID_PROOF_TYPES[0], idProofNumber: initial.idProofNumber || "",
+        remarks: initial.remarks || "",
+    } : {
+        visitorName: "", company: "", phone: "", purpose: "", hostEmployee: "",
+        site: defaultSiteForUser(), zone: "AZ-1", visitDate: nowDateTimeStr().slice(0, 10), visitDateTo: "",
+        expectedCheckin: "", expectedCheckout: "", idProofType: VISITOR_ID_PROOF_TYPES[0], idProofNumber: "", remarks: "",
+    });
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState("");
+    const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+    const save = async () => {
+        setError("");
+        if (!form.visitorName.trim()) { setError("Visitor name is required"); return; }
+        if (!form.visitDate) { setError("Visit Date - From is required"); return; }
+        if (form.visitDateTo && form.visitDateTo < form.visitDate) { setError("Visit Date - To cannot be earlier than Visit Date - From"); return; }
+        setSaving(true);
+        try {
+            await onSave({ ...form, visitorName: form.visitorName.trim() });
+        }
+        catch (e) {
+            setError(e.message || "Could not save this visitor request");
+        }
+        finally {
+            setSaving(false);
+        }
+    };
+    return React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(14,18,28,0.35)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }, onClick: onClose },
+        React.createElement("div", { onClick: (e) => e.stopPropagation(), className: "neu-card anim-in d1", style: { width: 560, maxWidth: "94vw", maxHeight: "90vh", overflowY: "auto", padding: 32, position: "relative" } },
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 } },
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 20, fontWeight: 700, color: "#020617" } }, initial ? "Edit visitor access request" : "New visitor access request"),
+                React.createElement("button", { onClick: onClose, className: "neu-icon-btn", style: { width: 36, height: 36, borderRadius: 10 } },
+                    React.createElement(X, { s: 16, c: "#64748B" }))),
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 } },
+                React.createElement(Field, { label: "Visitor name" },
+                    React.createElement("input", { value: form.visitorName, onChange: (e) => set("visitorName", e.target.value), className: "neu-input", placeholder: "Full name" })),
+                React.createElement(Field, { label: "Company" },
+                    React.createElement("input", { value: form.company, onChange: (e) => set("company", e.target.value), className: "neu-input", placeholder: "Vendor / organization" }))),
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 } },
+                React.createElement(Field, { label: "Phone" },
+                    React.createElement("input", { value: form.phone, onChange: (e) => set("phone", e.target.value), className: "neu-input", placeholder: "Contact number" })),
+                React.createElement(Field, { label: "Host employee" },
+                    React.createElement("input", { value: form.hostEmployee, onChange: (e) => set("hostEmployee", e.target.value), className: "neu-input", placeholder: "Who they're visiting" }))),
+            React.createElement(Field, { label: "Purpose of visit", style: { marginBottom: 14 } },
+                React.createElement("textarea", { rows: 2, value: form.purpose, onChange: (e) => set("purpose", e.target.value), className: "neu-input", style: { resize: "vertical" }, placeholder: "Reason for the visit…" })),
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 14 } },
+                React.createElement(Field, { label: "Site" },
+                    React.createElement(ThemedSelect, { value: form.site, onChange: (e) => set("site", e.target.value), className: "neu-input" }, getAllowedSites(getUser()).map((s) => React.createElement("option", { key: s, value: s }, s)))),
+                React.createElement(Field, { label: "Visit Date — From" },
+                    React.createElement("input", { type: "date", value: form.visitDate, onChange: (e) => set("visitDate", e.target.value), className: "neu-input" })),
+                React.createElement(Field, { label: "Visit Date — To (optional)" },
+                    React.createElement("input", { type: "date", value: form.visitDateTo, min: form.visitDate || undefined, onChange: (e) => set("visitDateTo", e.target.value), className: "neu-input" }))),
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 } },
+                React.createElement(Field, { label: "Expected check-in" },
+                    React.createElement("input", { type: "datetime-local", value: form.expectedCheckin, onChange: (e) => set("expectedCheckin", e.target.value), className: "neu-input" })),
+                React.createElement(Field, { label: "Expected check-out" },
+                    React.createElement("input", { type: "datetime-local", value: form.expectedCheckout, onChange: (e) => set("expectedCheckout", e.target.value), className: "neu-input" }))),
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 } },
+                React.createElement(Field, { label: "ID proof type" },
+                    React.createElement(ThemedSelect, { value: form.idProofType, onChange: (e) => set("idProofType", e.target.value), className: "neu-input" }, VISITOR_ID_PROOF_TYPES.map((t) => React.createElement("option", { key: t, value: t }, t)))),
+                React.createElement(Field, { label: "ID proof number" },
+                    React.createElement("input", { value: form.idProofNumber, onChange: (e) => set("idProofNumber", e.target.value), className: "neu-input" }))),
+            React.createElement(Field, { label: "Remarks", style: { marginBottom: 20 } },
+                React.createElement("textarea", { rows: 2, value: form.remarks, onChange: (e) => set("remarks", e.target.value), className: "neu-input", style: { resize: "vertical" } })),
+            error && React.createElement("div", { style: { color: "#DC2626", fontFamily: "Inter", fontSize: 12.5, marginBottom: 14 } }, error),
+            React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", gap: 10 } },
+                React.createElement("button", { onClick: onClose, className: "neu-btn-secondary", style: { fontSize: 13 } }, "Cancel"),
+                React.createElement("button", { onClick: save, disabled: saving, className: "neu-btn-primary", style: { fontSize: 13 } }, saving ? "Saving…" : (initial ? "Save changes" : "Submit for approval")))));
+}
+// ---- Multi-Visitor Entry: paste-a-guest-list helpers ----
+// Reads whatever got pasted - a real table straight off the clipboard, or
+// typed/plain text in any of a few common shapes - and turns it into
+// {columns, rows}. Ported and kept logically identical to the version
+// validated against real pasted data (tab/comma/pipe tables, "Name : X"
+// key-value blocks, and fully-stacked label-then-values lists).
+function mvTitleCase(s) { return s.replace(/\w\S*/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()); }
+const MV_STACK_HEADER_WORDS = ['slno', 'sno', 'serialno', 'serialnumber', 'serial', 'name', 'fullname', 'visitorname', 'guestname', 'mobile', 'mobilenumber', 'phone', 'phonenumber', 'contact', 'contactnumber', 'company', 'companyname', 'organisation', 'organization', 'purpose', 'remarks', 'gender', 'idproof', 'idnumber', 'aadhaar', 'aadhar', 'pan', 'voterid', 'make', 'model', 'laptopmake', 'laptopserialnumber', 'handcarry', 'asset', 'item', 'quantity', 'date', 'email', 'designation', 'department', 'host', 'visiting', 'type', 'location', 'site', 'zone'];
+function mvLooksLikeStackHeader(line) {
+    const norm = line.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!norm) return false;
+    return MV_STACK_HEADER_WORDS.some((w) => norm === w || norm.indexOf(w) !== -1 || w.indexOf(norm) !== -1);
+}
+function mvDetectStackedTable(lines) {
+    let n = 0;
+    while (n < lines.length && mvLooksLikeStackHeader(lines[n])) n++;
+    if (n < 2 || n >= lines.length) return null;
+    return n;
+}
+function mvParseStackedTable(lines, n) {
+    const columns = lines.slice(0, n).map(mvTitleCase);
+    const dataLines = lines.slice(n);
+    const rows = [];
+    for (let i = 0; i < dataLines.length; i += n) rows.push(dataLines.slice(i, i + n));
+    return { columns, rows };
+}
+const MV_HEADER_WORDS = /^(name|full name|visitor name|guest name|phone|mobile|contact|contact number|mobile number|id proof|id proof number|id number|aadhaar|aadhar|pan|voter id|company|company name|organisation|organization|purpose|remarks|gender)$/i;
+const MV_KV_LINE_RE = /^[A-Za-z][A-Za-z\s]{0,30}:\s*\S/;
+function mvLooksLikeKeyValue(lines) {
+    const matches = lines.filter((l) => MV_KV_LINE_RE.test(l)).length;
+    return lines.length > 0 && (matches / lines.length) >= 0.6;
+}
+function mvParseKeyValueBlocks(rawLines) {
+    const blocks = []; let current = [];
+    rawLines.forEach((line) => {
+        const trimmed = line.trim();
+        if (!trimmed) { if (current.length) { blocks.push(current); current = []; } return; }
+        const m = trimmed.match(/^([^:]+):\s*(.*)$/);
+        if (m) {
+            const key = mvTitleCase(m[1].trim());
+            if (/^(name|full name|visitor name|guest name)$/i.test(key) && current.some((c) => /^(name|full name|visitor name|guest name)$/i.test(c.key))) {
+                blocks.push(current); current = [];
+            }
+            current.push({ key, value: m[2].trim() });
+        } else {
+            current.push({ key: 'Details', value: trimmed });
+        }
+    });
+    if (current.length) blocks.push(current);
+    const columns = [];
+    blocks.forEach((b) => b.forEach((f) => { if (columns.indexOf(f.key) === -1) columns.push(f.key); }));
+    const rows = blocks.map((b) => {
+        const row = {};
+        b.forEach((f) => { row[f.key] = f.value; });
+        return columns.map((c) => row[c] || '');
+    });
+    return { columns, rows };
+}
+const MV_SPACE_RUN_RE = /\s{2,}/;
+function mvDetectDelimiter(lines) {
+    const counts = { '\t': 0, '|': 0, ',': 0, space: 0 };
+    lines.forEach((l) => {
+        if (l.indexOf('\t') !== -1) counts['\t']++;
+        if (l.indexOf('|') !== -1) counts['|']++;
+        if (l.split(',').length - 1 >= 1) counts[',']++;
+        if (MV_SPACE_RUN_RE.test(l.trim())) counts.space++;
+    });
+    const n = lines.length;
+    if (counts['\t'] >= Math.ceil(n / 2)) return '\t';
+    if (counts['|'] >= Math.ceil(n / 2)) return '|';
+    if (counts[','] >= Math.ceil(n / 2)) return ',';
+    if (counts.space >= Math.ceil(n / 2)) return MV_SPACE_RUN_RE;
+    return null;
+}
+function mvParseDelimited(lines, delim) {
+    let rows = lines.map((l) => l.trim().split(delim).map((c) => c.trim()));
+    const width = rows.reduce((m, r) => Math.max(m, r.length), 1);
+    let columns;
+    if (rows.length && rows[0].every((c) => !c || MV_HEADER_WORDS.test(c)) && rows[0].some(Boolean)) {
+        columns = rows[0].map((c, i) => (c ? mvTitleCase(c) : 'Column ' + (i + 1)));
+        rows = rows.slice(1);
+    } else {
+        columns = [];
+        for (let i = 0; i < width; i++) columns.push('Column ' + (i + 1));
+    }
+    return { columns, rows };
+}
+function mvParsePlainLines(lines) { return { columns: ['Details'], rows: lines.map((l) => [l]) }; }
+function mvParseBulk(text) {
+    const rawLines = text.split(/\r?\n/);
+    const lines = rawLines.map((l) => l.trim()).filter(Boolean);
+    if (!lines.length) return { columns: [], rows: [] };
+    const stackedN = mvDetectStackedTable(lines);
+    if (stackedN) return mvParseStackedTable(lines, stackedN);
+    if (mvLooksLikeKeyValue(lines)) return mvParseKeyValueBlocks(rawLines);
+    const delim = mvDetectDelimiter(lines);
+    return delim ? mvParseDelimited(lines, delim) : mvParsePlainLines(lines);
+}
+// Reads the real <table> markup the clipboard carries alongside the plain
+// text when copying from Excel/Sheets/a webpage, and rebuilds a clean
+// table from it (own elements, text content only) - the real rows and
+// columns, not a guess from spacing or punctuation.
+function mvBuildCleanTableElement(html) {
+    try {
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const src = doc.querySelector('table');
+        if (!src) return null;
+        const trs = src.querySelectorAll('tr');
+        if (!trs.length) return null;
+        let grid = [];
+        trs.forEach((tr) => {
+            const cells = tr.querySelectorAll('td,th');
+            if (!cells.length) return;
+            grid.push(Array.prototype.map.call(cells, (c) => c.textContent.replace(/\s+/g, ' ').trim()));
+        });
+        if (!grid.length) return null;
+        const width = grid.reduce((m, r) => Math.max(m, r.length), 1);
+        grid = grid.map((r) => { while (r.length < width) r.push(''); return r; });
+        const headerLike = grid[0].filter((c) => c && mvLooksLikeStackHeader(c)).length;
+        const hasHeader = headerLike >= Math.ceil(width / 2);
+        const table = document.createElement('table');
+        let dataRows = grid;
+        if (hasHeader) {
+            const thead = document.createElement('thead');
+            const htr = document.createElement('tr');
+            grid[0].forEach((cell) => { const th = document.createElement('th'); th.textContent = cell ? mvTitleCase(cell) : ''; htr.appendChild(th); });
+            thead.appendChild(htr);
+            table.appendChild(thead);
+            dataRows = grid.slice(1);
+        }
+        const tbody = document.createElement('tbody');
+        dataRows.forEach((row) => {
+            const tr = document.createElement('tr');
+            row.forEach((cell) => { const td = document.createElement('td'); td.textContent = cell; tr.appendChild(td); });
+            tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        return table;
+    } catch (e) { return null; }
+}
+// Converts the paste box's actual DOM content back into plain lines, the
+// same way it was written in (one <br> or block element per line break) -
+// used instead of .innerText, which depends on CSS layout/visibility.
+function mvNodeToLines(root) {
+    const parts = [];
+    function isBlock(tag) { return tag === 'DIV' || tag === 'P'; }
+    function walk(n) {
+        if (n.nodeType === 3) { parts.push(n.nodeValue); return; }
+        if (n.nodeType !== 1) return;
+        if (n.tagName === 'BR') { parts.push('\n'); return; }
+        const block = isBlock(n.tagName);
+        if (block && parts.length && parts[parts.length - 1] !== '\n') parts.push('\n');
+        for (let i = 0; i < n.childNodes.length; i++) walk(n.childNodes[i]);
+        if (block && parts.length && parts[parts.length - 1] !== '\n') parts.push('\n');
+    }
+    walk(root);
+    return parts.join('');
+}
+function mvExtractData(box) {
+    const table = box.querySelector('table');
+    if (table) {
+        const headCells = table.querySelectorAll('thead th');
+        const bodyTrs = table.querySelectorAll('tbody tr');
+        const columns = headCells.length
+            ? Array.prototype.map.call(headCells, (c) => c.textContent.trim())
+            : (() => { const n = bodyTrs.length ? bodyTrs[0].children.length : 0; const cols = []; for (let i = 0; i < n; i++) cols.push('Column ' + (i + 1)); return cols; })();
+        const rows = Array.prototype.map.call(bodyTrs, (tr) => Array.prototype.map.call(tr.children, (c) => c.textContent.trim()));
+        return { columns, rows };
+    }
+    return mvParseBulk(mvNodeToLines(box));
+}
+// Maps whatever columns the paste happened to produce onto the fields a
+// visitor access request actually needs. Mobile/phone is the only
+// required field; anything else recognized goes to its own field, and
+// anything unrecognized is kept (never silently dropped) by folding it
+// into Remarks as "Label: value".
+const MV_FIELD_MATCHERS = [
+    { field: 'phone', test: /^(mobile|mobilenumber|phone|phonenumber|contact|contactnumber)$/ },
+    { field: 'name', test: /^(name|fullname|visitorname|guestname)$/ },
+    { field: 'company', test: /^(company|companyname|organisation|organization)$/ },
+    { field: 'idProofNumber', test: /^(idproof|idproofnumber|idnumber|aadhaar|aadhar|pan|voterid)$/ },
+    { field: 'remarks', test: /^(remarks|remark|notes|note|details)$/ },
+];
+function mvNormKey(s) { return String(s || '').trim().toLowerCase().replace(/[^a-z0-9]/g, ''); }
+function mvMatchField(colName) {
+    const n = mvNormKey(colName);
+    for (const m of MV_FIELD_MATCHERS) if (m.test.test(n)) return m.field;
+    return null;
+}
+const MV_PHONE_IN_TEXT_RE = /\b\d[\d\s-]{6,14}\d\b/;
+function mvMapRowsToVisitors(parsed) {
+    const columns = parsed.columns || [];
+    const fieldByCol = columns.map(mvMatchField);
+    const visitors = [];
+    const problems = [];
+    (parsed.rows || []).forEach((row, i) => {
+        const v = { name: '', phone: '', company: '', idProofNumber: '', remarksExtra: [] };
+        row.forEach((cell, ci) => {
+            const val = (cell == null ? '' : String(cell)).trim();
+            if (!val) return;
+            const field = fieldByCol[ci];
+            if (field === 'phone') v.phone = v.phone || val;
+            else if (field === 'name') v.name = v.name || val;
+            else if (field === 'company') v.company = v.company || val;
+            else if (field === 'idProofNumber') v.idProofNumber = v.idProofNumber || val;
+            else if (field === 'remarks') v.remarksExtra.push(val);
+            else v.remarksExtra.push(`${columns[ci] || 'Column ' + (ci + 1)}: ${val}`);
+        });
+        if (!v.phone) {
+            const found = row.map((c) => (c == null ? '' : String(c))).find((c) => MV_PHONE_IN_TEXT_RE.test(c));
+            if (found) v.phone = found.match(MV_PHONE_IN_TEXT_RE)[0].replace(/[\s-]/g, '');
+        }
+        if (!v.phone) { problems.push(`Row ${i + 1}: no mobile/phone number found`); return; }
+        visitors.push({
+            visitorName: v.name || `Visitor (${v.phone})`,
+            phone: v.phone.replace(/[\s-]/g, ''),
+            company: v.company,
+            idProofNumber: v.idProofNumber,
+            remarks: v.remarksExtra.join(' · '),
+        });
+    });
+    return { visitors, problems };
+}
+function MultiVisitorEntryModal({ onClose, onSubmit }) {
+    const [shared, setShared] = useState({
+        company: '', site: defaultSiteForUser(), purpose: '',
+        visitDateFrom: nowDateTimeStr().slice(0, 10), visitDateTo: nowDateTimeStr().slice(0, 10),
+    });
+    const [rowCount, setRowCount] = useState(0);
+    const [problems, setProblems] = useState([]);
+    const [submitting, setSubmitting] = useState(false);
+    const [error, setError] = useState('');
+    const [resultErrors, setResultErrors] = useState(null);
+    const pasteRef = useRef(null);
+    const setSharedField = (k, v) => setShared((s) => ({ ...s, [k]: v }));
+
+    const refresh = () => {
+        const box = pasteRef.current;
+        if (!box) return;
+        const parsed = mvExtractData(box);
+        const mapped = mvMapRowsToVisitors(parsed);
+        setRowCount(mapped.visitors.length);
+        setProblems(mapped.problems);
+    };
+
+    useEffect(() => {
+        const box = pasteRef.current;
+        if (!box) return;
+        function insertPlainText(el, text) {
+            const lines = text.split(/\r?\n/);
+            lines.forEach((line, i) => {
+                if (i > 0) el.appendChild(document.createElement('br'));
+                el.appendChild(document.createTextNode(line));
+            });
+        }
+        function onPaste(e) {
+            e.preventDefault();
+            const cd = e.clipboardData || window.clipboardData;
+            const html = cd && cd.getData && cd.getData('text/html');
+            const text = (cd && cd.getData && cd.getData('text/plain')) || '';
+            const table = html ? mvBuildCleanTableElement(html) : null;
+            box.innerHTML = '';
+            if (table) box.appendChild(table); else insertPlainText(box, text);
+            refresh();
+        }
+        function onInput() {
+            if (!box.textContent.trim() && !box.querySelector('table')) box.innerHTML = '';
+            refresh();
+        }
+        function onKeydown(e) {
+            if (e.key !== 'Tab') return;
+            e.preventDefault();
+            document.execCommand('insertText', false, '\t');
+        }
+        box.addEventListener('paste', onPaste);
+        box.addEventListener('input', onInput);
+        box.addEventListener('keydown', onKeydown);
+        return () => {
+            box.removeEventListener('paste', onPaste);
+            box.removeEventListener('input', onInput);
+            box.removeEventListener('keydown', onKeydown);
+        };
+        // eslint-disable-next-line
+    }, []);
+
+    const submit = async () => {
+        setError('');
+        setResultErrors(null);
+        if (!shared.site) { setError('Site is required'); return; }
+        if (!shared.visitDateFrom) { setError('Visit from date is required'); return; }
+        const box = pasteRef.current;
+        const parsed = box ? mvExtractData(box) : { columns: [], rows: [] };
+        const mapped = mvMapRowsToVisitors(parsed);
+        if (!mapped.visitors.length) {
+            setError(mapped.problems.length ? "None of the pasted rows have a mobile/phone number yet." : "Paste at least one visitor's details first.");
+            return;
+        }
+        setSubmitting(true);
+        try {
+            // Visit Date To now has its own column (visitDateTo), passed straight through
+            // by createVisitorRequestsBulk below - no need to fold it into Remarks any more.
+            const result = await onSubmit(shared, mapped.visitors);
+            if (result && result.errors && result.errors.length) setResultErrors(result.errors);
+            else onClose();
+        } catch (e) {
+            setError(e.message || 'Could not submit these visitor requests');
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    return React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(14,18,28,0.35)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }, onClick: onClose },
+        React.createElement("div", { onClick: (e) => e.stopPropagation(), className: "neu-card anim-in d1", style: { width: 640, maxWidth: "94vw", maxHeight: "90vh", overflowY: "auto", padding: 32, position: "relative" } },
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 } },
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 20, fontWeight: 700, color: "#020617" } }, "Multi-Visitor Entry"),
+                React.createElement("button", { onClick: onClose, className: "neu-icon-btn", style: { width: 36, height: 36, borderRadius: 10 } },
+                    React.createElement(X, { s: 16, c: "#64748B" }))),
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 } },
+                React.createElement(Field, { label: "Company" },
+                    React.createElement("input", { value: shared.company, onChange: (e) => setSharedField('company', e.target.value), className: "neu-input", placeholder: "Vendor / organization" })),
+                React.createElement(Field, { label: "Site" },
+                    React.createElement(ThemedSelect, { value: shared.site, onChange: (e) => setSharedField('site', e.target.value), className: "neu-input" }, getAllowedSites(getUser()).map((s) => React.createElement("option", { key: s, value: s }, s))))),
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 } },
+                React.createElement(Field, { label: "Visit from" },
+                    React.createElement("input", { type: "date", value: shared.visitDateFrom, onChange: (e) => setSharedField('visitDateFrom', e.target.value), className: "neu-input" })),
+                React.createElement(Field, { label: "Visit to" },
+                    React.createElement("input", { type: "date", value: shared.visitDateTo, onChange: (e) => setSharedField('visitDateTo', e.target.value), className: "neu-input" }))),
+            React.createElement(Field, { label: "Purpose of visit", style: { marginBottom: 16 } },
+                React.createElement("input", { value: shared.purpose, onChange: (e) => setSharedField('purpose', e.target.value), className: "neu-input", placeholder: "Reason for the visit…" })),
+            React.createElement(Field, { label: "Paste visitor details", style: { marginBottom: 6 } },
+                React.createElement("div", { ref: pasteRef, contentEditable: true, "data-placeholder": "Paste visitor details here…", className: "neu-input mv-paste-box" })),
+            React.createElement("div", { style: { fontSize: 11.5, color: "#94A3B8", marginBottom: 10, lineHeight: 1.5 } }, "Paste straight from Excel/Sheets and the real table comes with it. A typed or plain-text list works too — only a mobile/phone number is required per visitor; name, company and ID proof are picked up automatically when recognized, and anything else is kept in Remarks."),
+            problems.length > 0 && React.createElement("div", { style: { fontSize: 11.5, color: "#D97706", background: "#FFF7E6", border: "1px solid #D97706", borderRadius: 10, padding: "8px 12px", marginBottom: 12, lineHeight: 1.5 } },
+                React.createElement("b", null, `${problems.length} row${problems.length === 1 ? "" : "s"} skipped (no phone number found): `), problems.join('; ')),
+            resultErrors && resultErrors.length > 0 && React.createElement("div", { style: { fontSize: 11.5, color: "#DC2626", background: "#FEF1F1", border: "1px solid #DC2626", borderRadius: 10, padding: "8px 12px", marginBottom: 12, lineHeight: 1.5 } },
+                React.createElement("div", { style: { marginBottom: 4 } }, React.createElement("b", null, `${resultErrors.length} row${resultErrors.length === 1 ? "" : "s"} could not be submitted:`)),
+                resultErrors.map((er, i) => React.createElement("div", { key: i }, `${er.identifier}: ${er.error}`))),
+            error && React.createElement("div", { style: { color: "#DC2626", fontFamily: "Inter", fontSize: 12.5, marginBottom: 14 } }, error),
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" } },
+                React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontSize: 12, color: "#64748B" } }, `${rowCount} visitor${rowCount === 1 ? "" : "s"} ready`),
+                React.createElement("div", { style: { display: "flex", gap: 10 } },
+                    React.createElement("button", { onClick: onClose, className: "neu-btn-secondary", style: { fontSize: 13 } }, "Cancel"),
+                    React.createElement("button", { onClick: submit, disabled: submitting || rowCount === 0, className: "neu-btn-primary", style: { fontSize: 13 } }, submitting ? "Submitting…" : `Submit ${rowCount || ""} for approval`)))));
+}
+// Visit Date rendered as a single value when there's no range, or "from - to" once a Visit Date To has been set.
+function fmtVisitDateRange(r) {
+    const from = fmtDate(r.visitDate);
+    const to = r.visitDateTo ? fmtDate(r.visitDateTo) : "";
+    return to ? `${from} - ${to}` : from;
+}
+const VISITOR_LIST_COLUMNS = [
+    { key: "ticketNo", label: "Ticket No", format: (v) => v || "—" },
+    { key: "visitorName", label: "Visitor" },
+    { key: "company", label: "Company", format: (v) => v || "—" },
+    { key: "site", label: "Site" },
+    { key: "hostEmployee", label: "Host", format: (v) => v || "—" },
+    { key: "visitDate", label: "Visit Date", format: (v, row) => fmtVisitDateRange(row) },
+    { key: "status", label: "Status" },
+];
+// Optional-Remarks confirmation step shown before Start / Hold / Resume /
+// Close Ticket actually fires - the remarks typed here are appended (never
+// overwrite) to the request's existing Remarks, timestamped, by the backend.
+// This is deliberately a ticket-lifecycle action, not a per-day attendance
+// log - Start marks the ticket active, Hold/Resume track the visitor
+// temporarily leaving and coming back under the SAME ticket, and Close
+// Ticket is the terminal step once Ops is told the visitor is fully done.
+const VISITOR_ACTION_LABELS = { start: "Start", hold: "Hold", resume: "Resume", close: "Close Ticket" };
+const VISITOR_ACTION_VERBING = { start: "Starting", hold: "Putting on hold", resume: "Resuming", close: "Closing" };
+function VisitorCheckActionModal({ action, onClose, onConfirm }) {
+    const [remarks, setRemarks] = useState("");
+    const [saving, setSaving] = useState(false);
+    const label = VISITOR_ACTION_LABELS[action.type] || action.type;
+    const confirm = async () => { setSaving(true); try { await onConfirm(action.id, action.type, remarks.trim()); onClose(); } finally { setSaving(false); } };
+    return ReactDOM.createPortal(React.createElement("div", { style: { position: "fixed", inset: 0, zIndex: 50, background: "rgba(14,18,28,0.35)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center" }, onClick: onClose },
+        React.createElement("div", { onClick: (e) => e.stopPropagation(), className: "neu-card anim-in d1", style: { width: 420, maxWidth: "94vw", padding: 24 } },
+            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 16, fontWeight: 800, color: "#020617", marginBottom: 4 } }, `${label} — ${action.visitorName || "visitor"}`),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 14 } }, "Remarks are optional and are added to this request's existing remarks - nothing already there is overwritten."),
+            React.createElement(Field, { label: "Remarks (optional)" },
+                React.createElement("textarea", { rows: 3, value: remarks, onChange: (e) => setRemarks(e.target.value), className: "neu-input", style: { resize: "vertical" }, placeholder: `Anything to note…`, autoFocus: true })),
+            React.createElement("div", { style: { display: "flex", gap: 10, marginTop: 16 } },
+                React.createElement("button", { onClick: onClose, className: "neu-btn-secondary", style: { flex: 1, padding: "11px 0", fontSize: 13.5 } }, "Cancel"),
+                React.createElement("button", { onClick: confirm, disabled: saving, className: "neu-btn-primary", style: { flex: 1, padding: "11px 0", fontSize: 13.5, opacity: saving ? 0.6 : 1 } }, saving ? `${VISITOR_ACTION_VERBING[action.type] || label}…` : label)))), document.body);
+}
+function VisitorAccess({ requests, allowedSites, canEdit, isAdmin, canApprove, onEdit, onDelete, onApprove, onReject, onGenerateTicket, onCheckin, onHold, onCheckout, onUpload, onDownloadDoc, onRemoveDoc, selectedIds, onSelectId, onSelectAll, onDeleteSelected, onClearSelection }) {
+    const [siteFilter, setSiteFilter] = useState("all");
+    const [statusFilter, setStatusFilter] = useState("all");
+    const [search, setSearch] = useState("");
+    const [expandedId, setExpandedId] = useState(null);
+    const [columnFilters, setColumnFilters] = useState(() => makeEmptyListColumnFilters(VISITOR_LIST_COLUMNS));
+    const [openFilter, setOpenFilter] = useState(null);
+    const [sortKey, setSortKey] = useState(null);
+    const [sortDir, setSortDir] = useState(null);
+    const [checkAction, setCheckAction] = useState(null); // { id, type: "start" | "hold" | "resume" | "close", visitorName }
+    const VISITOR_STATUSES = ["Pending Approval", "Approved", "Rejected", "Ticket Issued", "In Progress", "On Hold", "Closed"];
+    const handleSort = (key) => {
+        if (sortKey !== key) { setSortKey(key); setSortDir("asc"); }
+        else if (sortDir === "asc") setSortDir("desc");
+        else { setSortKey(null); setSortDir(null); }
+    };
+    const baseRows = (requests || []).filter((r) => {
+        if (siteFilter !== "all" && r.site !== siteFilter) return false;
+        if (statusFilter !== "all" && r.status !== statusFilter) return false;
+        if (search.trim()) {
+            const q = search.trim().toLowerCase();
+            if (![r.visitorName, r.company, r.hostEmployee, r.ticketNo].some((v) => String(v || "").toLowerCase().includes(q))) return false;
+        }
+        return true;
+    });
+    const columnFiltered = baseRows.filter((row) => VISITOR_LIST_COLUMNS.every((col) => listColumnFilterMatches(columnFilters[col.key], col, row)));
+    const sortColumn = sortKey ? VISITOR_LIST_COLUMNS.find((c) => c.key === sortKey) : null;
+    const filtered = sortColumn ? sortListRows(columnFiltered, sortColumn, sortDir) : [...columnFiltered].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    const optionRowsForColumn = (key) => baseRows.filter((row) => VISITOR_LIST_COLUMNS.every((col) => col.key === key || listColumnFilterMatches(columnFilters[col.key], col, row)));
+    const activeColumnFilterCount = countListColumnFilters(columnFilters);
+    const pendingCount = (requests || []).filter((r) => r.status === "Pending Approval").length;
+    const onsiteCount = (requests || []).filter((r) => r.status === "In Progress").length;
+    const thBase = { textAlign: "left", padding: "12px 10px", borderBottom: "0.5px solid rgba(163,177,198,0.3)", fontFamily: "Inter", fontSize: 11, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap" };
+    const tdBase = { padding: "10px 10px", borderBottom: "0.5px solid rgba(163,177,198,0.25)", fontFamily: "Inter", fontSize: 12, color: "#1E293B", whiteSpace: "nowrap" };
+    return React.createElement(React.Fragment, null,
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12, marginBottom: 16 } },
+            React.createElement("div", { className: "neu-card anim-in d1", style: { padding: "14px 15px", background: "linear-gradient(145deg, #FFFFFF 0%, #FFFBEB 100%)" } },
+                React.createElement("div", { style: { fontSize: 11.5, color: "#64748B", marginBottom: 4 } }, "Awaiting approval"),
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 26, fontWeight: 800, color: "#D97706" } }, pendingCount)),
+            React.createElement("div", { className: "neu-card anim-in d2", style: { padding: "14px 15px", background: "linear-gradient(145deg, #FFFFFF 0%, #ECFEFF 100%)" } },
+                React.createElement("div", { style: { fontSize: 11.5, color: "#64748B", marginBottom: 4 } }, "Currently on-site"),
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 26, fontWeight: 800, color: "#0891B2" } }, onsiteCount)),
+            React.createElement("div", { className: "neu-card anim-in d3", style: { padding: "14px 15px", background: "linear-gradient(145deg, #FFFFFF 0%, #EEF2FF 100%)" } },
+                React.createElement("div", { style: { fontSize: 11.5, color: "#64748B", marginBottom: 4 } }, "Total requests"),
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 26, fontWeight: 800, color: "#020617" } }, (requests || []).length))),
+        React.createElement("div", { className: "neu-card anim-in d1", style: { display: "flex", gap: 10, alignItems: "center", marginBottom: 18, flexWrap: "wrap", padding: "14px 16px" } },
+            React.createElement("div", { className: "neu-pressed", style: { display: "flex", alignItems: "center", gap: 10, borderRadius: 14, padding: "10px 14px", flex: "1 1 220px", minWidth: 200 } },
+                React.createElement(Search, { s: 15, c: "#64748B" }),
+                React.createElement("input", { value: search, onChange: (e) => setSearch(e.target.value), placeholder: "Search visitor, company, host, ticket no…", style: { background: "transparent", border: "none", outline: "none", color: "#1E293B", fontFamily: "Inter", fontSize: 13, width: "100%" } })),
+            React.createElement(ThemedSelect, { value: siteFilter, onChange: (e) => setSiteFilter(e.target.value), className: "neu-input", style: { width: "auto", fontSize: 13, padding: "10px 14px" } },
+                allowedSites.length > 1 && React.createElement("option", { value: "all" }, "All sites"),
+                allowedSites.map((s) => React.createElement("option", { key: s, value: s }, s))),
+            React.createElement(ThemedSelect, { value: statusFilter, onChange: (e) => setStatusFilter(e.target.value), className: "neu-input", style: { width: "auto", fontSize: 13, padding: "10px 14px" } },
+                React.createElement("option", { value: "all" }, "All statuses"),
+                VISITOR_STATUSES.map((s) => React.createElement("option", { key: s, value: s }, s))),
+            activeColumnFilterCount > 0 && React.createElement("button", { onClick: () => setColumnFilters(makeEmptyListColumnFilters(VISITOR_LIST_COLUMNS)), className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "8px 11px" } },
+                "Clear column filters (",
+                activeColumnFilterCount,
+                ")")),
+        selectedIds && selectedIds.size > 0 && React.createElement("div", { className: "neu-card", style: { display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", marginBottom: 10 } },
+            React.createElement("strong", { style: { fontFamily: "Inter", fontSize: 12, color: "#4F46E5" } },
+                selectedIds.size,
+                " selected"),
+            React.createElement("button", { onClick: () => onDeleteSelected(), className: "neu-btn-secondary", style: { fontSize: 11.5, color: "#DC2626", display: "inline-flex", alignItems: "center", gap: 5 } },
+                React.createElement(Trash2, { s: 13, c: "#DC2626" }),
+                " Delete Selected"),
+            React.createElement("button", { onClick: () => onClearSelection(), className: "neu-btn-secondary", style: { fontSize: 11.5 } }, "Clear")),
+        React.createElement("div", { className: "neu-card anim-in d2", style: { overflowX: "auto", padding: "6px 4px" } },
+            React.createElement("table", { style: { borderCollapse: "collapse", width: "100%" } },
+                React.createElement("thead", null,
+                    React.createElement("tr", null,
+                        isAdmin && React.createElement("th", { style: { ...thBase, width: 34 } },
+                            React.createElement("input", { type: "checkbox", checked: filtered.length > 0 && filtered.every(r => selectedIds.has(r.id)), ref: el => { if (el)
+                                    el.indeterminate = filtered.some(r => selectedIds.has(r.id)) && !filtered.every(r => selectedIds.has(r.id)); }, onChange: e => onSelectAll(e.target.checked, filtered.map(r => r.id)), style: { width: 15, height: 15, accentColor: "#6366F1", cursor: "pointer" } })),
+                        VISITOR_LIST_COLUMNS.map((col) => React.createElement(SortableListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpenFilter: setOpenFilter, sortKey: sortKey, sortDir: sortDir, onSort: handleSort, style: thBase })),
+                        React.createElement("th", { style: { ...thBase, textAlign: "right" } }))),
+                React.createElement("tbody", null,
+                    filtered.length === 0 && React.createElement("tr", null,
+                        React.createElement("td", { colSpan: VISITOR_LIST_COLUMNS.length + 2, style: { padding: "40px 0", textAlign: "center", color: "#64748B", fontFamily: "Inter", fontSize: 13 } }, "No visitor access requests match these filters.")),
+                    filtered.map((r, idx) => {
+                        const open = expandedId === r.id;
+                        return React.createElement(React.Fragment, { key: r.id },
+                            React.createElement("tr", { onClick: () => setExpandedId(open ? null : r.id), style: { cursor: "pointer", background: selectedIds.has(r.id) ? undefined : (open ? "rgba(99,102,241,0.08)" : (idx % 2 === 1 ? "rgba(255,255,255,0.25)" : "transparent")) }, className: selectedIds.has(r.id) ? "selected-row asset-selected-row" : undefined },
+                                isAdmin && React.createElement("td", { onClick: (e) => e.stopPropagation(), style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px" } },
+                                    React.createElement("input", { type: "checkbox", checked: selectedIds.has(r.id), onChange: e => onSelectId(r.id, e.target.checked), style: { width: 15, height: 15, accentColor: "#6366F1", cursor: "pointer" } })),
+                                React.createElement("td", { style: { ...tdBase, color: "#4F46E5", fontWeight: 700 } }, r.ticketNo || "—"),
+                                React.createElement("td", { style: { ...tdBase, fontWeight: 600 } }, r.visitorName),
+                                React.createElement("td", tdBase, r.company || "—"),
+                                React.createElement("td", { style: { ...tdBase, color: "#6366F1", fontWeight: 700 } }, r.site),
+                                React.createElement("td", tdBase, r.hostEmployee || "—"),
+                                React.createElement("td", tdBase, fmtVisitDateRange(r)),
+                                React.createElement("td", { style: { padding: "10px 10px", borderBottom: "0.5px solid rgba(163,177,198,0.25)" } }, React.createElement(VisitorStatusBadge, { status: r.status })),
+                                React.createElement("td", { onClick: (e) => e.stopPropagation(), style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px", textAlign: "right", whiteSpace: "nowrap" } },
+                                    canApprove && r.status === "Pending Approval" && React.createElement("button", { onClick: () => onApprove(r.id), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Approve" },
+                                        React.createElement(CheckCircle2, { s: 13, c: "#059669" })),
+                                    canApprove && r.status === "Pending Approval" && React.createElement("button", { onClick: () => onReject(r.id), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Reject" },
+                                        React.createElement(X, { s: 13, c: "#DC2626" })),
+                                    canEdit && r.status === "Approved" && React.createElement("button", { onClick: () => onGenerateTicket(r.id), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Generate ticket" },
+                                        React.createElement(FileText, { s: 13, c: "#7C3AED" })),
+                                    canEdit && r.status === "Ticket Issued" && React.createElement("button", { onClick: () => setCheckAction({ id: r.id, type: "start", visitorName: r.visitorName }), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Start" },
+                                        React.createElement(User, { s: 13, c: "#0891B2" })),
+                                    canEdit && r.status === "In Progress" && React.createElement("button", { onClick: () => setCheckAction({ id: r.id, type: "hold", visitorName: r.visitorName }), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Hold" },
+                                        React.createElement(AlertCircle, { s: 13, c: "#D97706" })),
+                                    canEdit && r.status === "On Hold" && React.createElement("button", { onClick: () => setCheckAction({ id: r.id, type: "resume", visitorName: r.visitorName }), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Resume" },
+                                        React.createElement(RefreshCw, { s: 13, c: "#0891B2" })),
+                                    canEdit && ["In Progress", "On Hold"].includes(r.status) && React.createElement("button", { onClick: () => setCheckAction({ id: r.id, type: "close", visitorName: r.visitorName }), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Close Ticket" },
+                                        React.createElement(LogOut, { s: 13, c: "#059669" })),
+                                    canEdit && r.status === "Pending Approval" && React.createElement("button", { onClick: () => onEdit(r), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Edit request" },
+                                        React.createElement(Edit2, { s: 13, c: "#64748B" })),
+                                    isAdmin && ["Pending Approval", "Rejected"].includes(r.status) && React.createElement("button", { onClick: () => onDelete(r.id), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex" }, title: "Delete request" },
+                                        React.createElement(Trash2, { s: 13, c: "#64748B" })))),
+                            open && React.createElement(ExpandedDetailRow, { colSpan: VISITOR_LIST_COLUMNS.length + 2, title: "Visitor access details", items: [
+                                { label: "Purpose", value: r.purpose, wide: true },
+                                { label: "Phone", value: r.phone }, { label: "Zone", value: r.zone },
+                                { label: "ID Proof", value: r.idProofType ? `${r.idProofType}${r.idProofNumber ? " · " + r.idProofNumber : ""}` : "—" },
+                                { label: "Expected Check-in", value: r.expectedCheckin ? new Date(r.expectedCheckin).toLocaleString() : "—" },
+                                { label: "Expected Check-out", value: r.expectedCheckout ? new Date(r.expectedCheckout).toLocaleString() : "—" },
+                                { label: "Actual Check-in", value: r.actualCheckin ? new Date(r.actualCheckin).toLocaleString() : "—" },
+                                { label: "Actual Check-out", value: r.actualCheckout ? new Date(r.actualCheckout).toLocaleString() : "—" },
+                                { label: "Approver", value: r.approverName || "—" },
+                                { label: "Rejection Reason", value: r.rejectReason || "—", wide: true },
+                                { label: "Remarks", value: r.remarks || "—", wide: true },
+                                { label: "Recorded By", value: r.createdBy },
+                            ] }),
+                            open && React.createElement("tr", null, React.createElement("td", { colSpan: VISITOR_LIST_COLUMNS.length + 2, style: { padding: "0 16px 16px", borderBottom: "0.5px solid rgba(163,177,198,0.25)" } },
+                                React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" } },
+                                    React.createElement("span", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", fontWeight: 700 } }, "ID proof / supporting documents:"),
+                                    (r.documents || []).map((d) => React.createElement("span", { key: d.id, className: "neu-pressed", style: { display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", borderRadius: 999, fontSize: 11.5 } },
+                                        React.createElement("button", { onClick: () => onDownloadDoc(r.id, d.id, d.name), style: { border: "none", background: "none", cursor: "pointer", color: "#0EA5E9", fontFamily: "Inter", fontSize: 11.5 } }, d.name),
+                                        canEdit && React.createElement("button", { onClick: () => onRemoveDoc(r.id, d.id), style: { border: "none", background: "none", cursor: "pointer", color: "#DC2626", fontSize: 13, lineHeight: 1 } }, "×"))),
+                                    canEdit && React.createElement("label", { className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "6px 10px", cursor: "pointer" } }, "+ Upload",
+                                        React.createElement("input", { type: "file", multiple: true, style: { display: "none" }, onChange: (e) => { if (e.target.files.length) onUpload(r.id, e.target.files); e.target.value = ""; } }))))));
+                    })))),
+        openFilter && React.createElement(ValueListFilterPopup, { column: openFilter, currentFilter: columnFilters[openFilter.key], optionRows: optionRowsForColumn(openFilter.key), onApply: (value) => setColumnFilters((prev) => ({ ...prev, [openFilter.key]: value })), onClose: () => setOpenFilter(null) }),
+        checkAction && React.createElement(VisitorCheckActionModal, { action: checkAction, onClose: () => setCheckAction(null), onConfirm: (id, type, remarks) => type === "hold" ? onHold(id, remarks) : type === "close" ? onCheckout(id, remarks) : onCheckin(id, remarks) }));
 }
 /* ===== ASSET TABLE ===== */
 const ASSET_FILTER_VALUE_KEYS = new Set(ASSET_COLUMNS.map((c) => c.key));
@@ -3253,6 +4005,42 @@ function makeEmptyListColumnFilters(columns) {
     return out;
 }
 function countListColumnFilters(filters) { return Object.values(filters || {}).reduce((n, v) => n + (listColumnFilterActive(v) ? 1 : 0), 0); }
+// Click-to-sort-by-column, used only by Visitor Access and Activity Logs (kept
+// separate from ListFilterHeader so DC Activity / Material Movements / Asset
+// Inventory, which were not asked to change, are untouched). The column label
+// itself is the sort click target; the filter icon stays a separate target
+// right next to it, reusing the same Excel-style value filter popup.
+function compareListSortValues(a, b) {
+    const av = a == null ? "" : a, bv = b == null ? "" : b;
+    const aNum = typeof av === "number" ? av : (av !== "" && !isNaN(Date.parse(av)) ? Date.parse(av) : (av !== "" && !isNaN(Number(av)) ? Number(av) : null));
+    const bNum = typeof bv === "number" ? bv : (bv !== "" && !isNaN(Date.parse(bv)) ? Date.parse(bv) : (bv !== "" && !isNaN(Number(bv)) ? Number(bv) : null));
+    if (aNum != null && bNum != null)
+        return aNum - bNum;
+    return String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: "base" });
+}
+function sortListRows(rows, column, dir) {
+    if (!column || !dir)
+        return rows;
+    const sorted = [...rows].sort((a, b) => {
+        const av = column.format ? column.format(a[column.key], a) : a[column.key];
+        const bv = column.format ? column.format(b[column.key], b) : b[column.key];
+        return compareListSortValues(av, bv);
+    });
+    if (dir === "desc")
+        sorted.reverse();
+    return sorted;
+}
+function SortableListFilterHeader({ column, filter, onOpenFilter, sortKey, sortDir, onSort, style = {} }) {
+    const active = listColumnFilterActive(filter);
+    const isSorted = sortKey === column.key;
+    return React.createElement("th", { key: column.key, style: { ...style, position: "relative" } },
+        React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 5 } },
+            React.createElement("button", { onClick: () => onSort(column.key), title: `Sort by ${column.label}`, style: { display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", padding: 0, margin: 0, cursor: "pointer", font: "inherit", color: isSorted ? "#4F46E5" : "inherit", overflow: "hidden", minWidth: 0 } },
+                React.createElement("span", { style: { overflow: "hidden", textOverflow: "ellipsis" } }, column.label),
+                React.createElement("span", { style: { fontSize: 9, flexShrink: 0, opacity: isSorted ? 1 : 0.35 } }, isSorted ? (sortDir === "asc" ? "▲" : "▼") : "▼")),
+            React.createElement("button", { onClick: () => onOpenFilter(column), title: `Filter ${column.label}`, className: "neu-icon-btn", style: { width: 25, height: 25, borderRadius: 7, padding: 0, display: "inline-flex", flexShrink: 0, background: active ? "#EEF2FF" : "#F8FAFC", border: active ? "1px solid #C7D2FE" : "1px solid #E2E8F0" } },
+                React.createElement(Filter, { s: 12, c: active ? "#4F46E5" : "#64748B" }))));
+}
 function ValueListFilterPopup({ column, currentFilter, optionRows, onApply, onClose }) {
     const [draftValues, setDraftValues] = React.useState(normalizeListColumnFilter(currentFilter));
     const [valueSearch, setValueSearch] = React.useState("");
@@ -3610,7 +4398,7 @@ function AssetDetailPanel({ asset, canEdit }) {
         React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } }, tabBtn("conn", "Connectivity details"), tabBtn("hw", "Hardware details")),
         body);
 }
-function AssetTable({ assets, allFilteredAssets, filterOptionAssets, startIndex, onDelete, onEdit, canEdit, colFilters, onColFilterChange, selectedIds, onSelectId, onSelectAll }) {
+function AssetTable({ assets, allFilteredAssets, filterOptionAssets, startIndex, onDelete, onEdit, canEdit, colFilters, onColFilterChange, selectedIds, onSelectId, onSelectAll, onOpenRack }) {
     const filterSource = allFilteredAssets || assets;
     const allIds = filterSource.map(a => a.id);
     const filterRowsForColumn = typeof filterOptionAssets === "function" ? filterOptionAssets : (() => filterOptionAssets || filterSource);
@@ -3642,7 +4430,7 @@ function AssetTable({ assets, allFilteredAssets, filterOptionAssets, startIndex,
                         React.createElement("td", { onClick: (e) => e.stopPropagation(), style: { padding: "10px 8px", borderBottom: ".5px solid rgba(163,177,198,.25)", textAlign: "center" } },
                             React.createElement("input", { type: "checkbox", checked: selectedIds.has(a.id), onChange: e => onSelectId(a.id, e.target.checked), style: { width: 16, height: 16, accentColor: "#6366F1", cursor: "pointer" } })),
                         React.createElement("td", { style: { padding: "10px 10px", borderBottom: ".5px solid rgba(163,177,198,.25)", fontFamily: "'JetBrains Mono'", fontSize: 11.5, color: "#475569", fontWeight: 700 } }, React.createElement("span", { style: { display: "inline-block", width: 12, color: "#94A3B8", transition: "transform .15s", transform: expandedId === a.id ? "rotate(90deg)" : "none" } }, "\u25B8"), (startIndex || 0) + idx + 1),
-                        ASSET_COLUMNS.map(col => { const rawVal = a[col.key]; const displayVal = rawVal; const val = col.format ? col.format(displayVal, a) : displayVal; const isApiFirmware = col.key === "firmware" && a.firmwareSource === "api" && val; return React.createElement("td", { key: col.key, style: { padding: "10px 10px", borderBottom: ".5px solid rgba(163,177,198,.25)", fontFamily: ["serialNumber", "assetTag", "mgmtIp", "firmware"].includes(col.key) ? "'JetBrains Mono'" : "Inter", fontSize: 12, color: isApiFirmware ? "#10B981" : (col.key === "site" ? "#6366F1" : "#1E293B"), fontWeight: col.key === "site" || col.key === "deviceName" || isApiFirmware ? 600 : 400, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, title: isApiFirmware ? "Auto-synced from Dell OME / HPE OneView" : undefined }, val || "—"); }),
+                        ASSET_COLUMNS.map(col => { const rawVal = a[col.key]; const displayVal = rawVal; const val = col.format ? col.format(displayVal, a) : displayVal; const isApiFirmware = col.key === "firmware" && a.firmwareSource === "api" && val; return React.createElement("td", { key: col.key, style: { padding: "10px 10px", borderBottom: ".5px solid rgba(163,177,198,.25)", fontFamily: ["serialNumber", "assetTag", "mgmtIp", "firmware"].includes(col.key) ? "'JetBrains Mono'" : "Inter", fontSize: 12, color: isApiFirmware ? "#10B981" : (col.key === "site" ? "#6366F1" : "#1E293B"), fontWeight: col.key === "site" || col.key === "deviceName" || isApiFirmware ? 600 : 400, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, title: isApiFirmware ? "Auto-synced from Dell OME / HPE OneView" : undefined }, (col.key === "rackNo" && val && onOpenRack) ? React.createElement("a", { href: "#rack-elevation", role: "link", "data-rack-link": "1", onClick: (e) => { e.preventDefault(); e.stopPropagation(); onOpenRack({ site: a.site, zone: a.zone, rackNo: a.rackNo, rackType: a.rackType }); }, style: { color: "#2563EB", textDecoration: "underline", fontWeight: 600, cursor: "pointer" }, title: `Open rack elevation for ${a.rackNo} (${a.site}${a.zone ? " · " + a.zone : ""})` }, val) : (val || "—")); }),
                         React.createElement("td", { onClick: (e) => e.stopPropagation(), style: { borderBottom: ".5px solid rgba(163,177,198,.25)", padding: "10px 8px", textAlign: "right", whiteSpace: "nowrap" } },
                             canEdit && React.createElement("button", { onClick: () => onEdit(a), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Edit asset" },
                                 React.createElement(Edit2, { s: 13, c: "#64748B" })),
@@ -7328,6 +8116,85 @@ function RedfishHealthPill({ status }) {
     return React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "Inter", fontSize: 11, fontWeight: 700, color } },
         React.createElement("span", { style: { width: 7, height: 7, borderRadius: "50%", background: color } }), status || "Unknown");
 }
+// A thin scrollbar pinned to the bottom of the viewport, for a wide table (e.g.
+// 1000s of Redfish rows) whose own horizontal scrollbar sits at the bottom of a
+// long page - so it has to be scrolled all the way down to be found. Shown only
+// while the table extends below the viewport (i.e. its real scrollbar is off
+// screen) and mirrors scrollLeft both ways with the table's own scroll container.
+const FLOATING_HSCROLL_ARROW_BTN_STYLE = { flexShrink: 0, width: 24, height: 24, borderRadius: 6, border: "1px solid #CBD5E1", background: "#fff", color: "#334155", fontSize: 15, lineHeight: "22px", cursor: "pointer", padding: 0, fontFamily: "Inter" };
+
+// Deliberately does NOT rely on the browser's own horizontal scrollbar being visible or
+// grabbable - on many real setups (macOS's "only show scrollbars while scrolling" default,
+// most trackpad-driven browsers, some zoom levels) that native scrollbar either never renders
+// or renders too thin to find/drag, which is why people could see the table needed to scroll
+// but had no usable way to actually do it. This draws its own always-visible track + thumb
+// (plain colored divs, not a native scrollbar) plus explicit left/right buttons, so scrolling
+// the table never depends on the OS's or browser's scrollbar visibility settings at all.
+function FloatingHScroll({ wrapRef }) {
+    const [state, setState] = useState({ visible: false, left: 0, width: 0, scrollLeft: 0, scrollWidth: 0, clientWidth: 0 });
+    useEffect(() => {
+        const recompute = () => {
+            const wrap = wrapRef.current;
+            if (!wrap) { setState((s) => s.visible ? { ...s, visible: false } : s); return; }
+            const rect = wrap.getBoundingClientRect();
+            const needsScroll = wrap.scrollWidth > wrap.clientWidth + 2;
+            // Just "the table needs horizontal scrolling and some part of it is on screen" -
+            // deliberately NOT tied to whether the table's bottom edge has scrolled past the
+            // bottom of the window. That extra condition only held for a page where the whole
+            // document itself scrolls; it stayed permanently false - so the bar never appeared -
+            // on a layout where the scrolling happens inside a fixed-height panel instead (a
+            // header/sidebar shell, or simply a table short enough to fit on screen without the
+            // page growing taller). This way the bar shows whenever it's actually useful,
+            // regardless of how the surrounding page scrolls.
+            const visible = needsScroll && rect.bottom > 0 && rect.top < window.innerHeight;
+            setState({ visible, left: rect.left, width: rect.width, scrollLeft: wrap.scrollLeft, scrollWidth: wrap.scrollWidth, clientWidth: wrap.clientWidth });
+        };
+        recompute();
+        window.addEventListener("scroll", recompute, { passive: true, capture: true }); // capture: true also catches scroll events from an inner scrollable panel, which don't bubble to window
+        window.addEventListener("resize", recompute);
+        const wrap0 = wrapRef.current;
+        if (wrap0) wrap0.addEventListener("scroll", recompute, { passive: true }); // keeps the custom thumb in sync if the table is scrolled some other way (shift+wheel, touch swipe, arrow keys)
+        const t = setInterval(recompute, 500);
+        return () => {
+            window.removeEventListener("scroll", recompute, { capture: true });
+            window.removeEventListener("resize", recompute);
+            if (wrap0) wrap0.removeEventListener("scroll", recompute);
+            clearInterval(t);
+        };
+    }, [wrapRef]);
+    const scrollByAmount = (amt) => { const wrap = wrapRef.current; if (wrap) wrap.scrollBy({ left: amt, behavior: "smooth" }); };
+    const maxScroll = Math.max(state.scrollWidth - state.clientWidth, 1);
+    const trackWidth = Math.max(state.width - 64, 40); // leaves room for the two arrow buttons on either side
+    const thumbWidth = state.scrollWidth > 0 ? Math.max((state.clientWidth / state.scrollWidth) * trackWidth, 24) : trackWidth;
+    const thumbLeft = Math.min(Math.max((state.scrollLeft / maxScroll) * (trackWidth - thumbWidth), 0), trackWidth - thumbWidth);
+    const onTrackPointerDown = (e) => {
+        const wrap = wrapRef.current;
+        if (!wrap) return;
+        const trackEl = e.currentTarget;
+        const trackRect = trackEl.getBoundingClientRect();
+        if (e.target === trackEl) { // clicking the bare track (not the thumb) jumps scroll straight to that position
+            const ratio = (e.clientX - trackRect.left) / trackRect.width;
+            wrap.scrollLeft = ratio * maxScroll;
+        }
+        const startX = e.clientX, startScrollLeft = wrap.scrollLeft;
+        const onMove = (ev) => {
+            const dx = ev.clientX - startX;
+            const scrollDx = (dx / Math.max(trackRect.width - thumbWidth, 1)) * maxScroll;
+            wrap.scrollLeft = Math.max(0, Math.min(maxScroll, startScrollLeft + scrollDx));
+        };
+        const onUp = () => { window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerup", onUp); };
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+    };
+    if (!state.visible)
+        return null;
+    return ReactDOM.createPortal(React.createElement("div", { style: { position: "fixed", left: state.left, width: state.width, bottom: 0, zIndex: 60, background: "rgba(255,255,255,0.97)", borderTop: "1px solid #E2E8F0", boxShadow: "0 -4px 10px rgba(15,23,42,0.1)", display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", boxSizing: "border-box" } },
+        React.createElement("button", { onClick: () => scrollByAmount(-240), style: FLOATING_HSCROLL_ARROW_BTN_STYLE, title: "Scroll left", "aria-label": "Scroll table left" }, "‹"),
+        React.createElement("div", { onPointerDown: onTrackPointerDown, style: { position: "relative", flex: 1, height: 10, borderRadius: 6, background: "#E2E8F0", cursor: "pointer" } },
+            React.createElement("div", { style: { position: "absolute", top: 0, left: thumbLeft, width: thumbWidth, height: 10, borderRadius: 6, background: "#64748B" } })),
+        React.createElement("button", { onClick: () => scrollByAmount(240), style: FLOATING_HSCROLL_ARROW_BTN_STYLE, title: "Scroll right", "aria-label": "Scroll table right" }, "›")
+    ), document.body);
+}
 function RedfishDetectModal({ asset, onClose, onSaved }) {
     const [ip, setIp] = useState((asset && asset.mgmtIp) || "");
     const [port, setPort] = useState(443);
@@ -7340,7 +8207,19 @@ function RedfishDetectModal({ asset, onClose, onSaved }) {
     const [fwBusy, setFwBusy] = useState(false);
     const [imageUri, setImageUri] = useState("");
     const [updateMsg, setUpdateMsg] = useState(null);
+    const [syncBusy, setSyncBusy] = useState(false);
 
+    // Re-polls with the credentials already saved on this asset - no need to retype them just to
+    // refresh health/power/alerts. If the background auto-sync job is mid-poll on this same
+    // device, the server replies 409 rather than hitting the BMC twice at once; that message is
+    // shown as-is (it already says to try again in a few seconds).
+    const syncNow = async () => {
+        if (!asset) return;
+        setSyncBusy(true); setErr(""); setResult(null);
+        try { const r = await api.syncRedfishAsset(asset.id); setResult(r); if (!r.reachable) setErr(r.error || "Could not reach the device."); onSaved && onSaved(); }
+        catch (e) { setErr(e.message); }
+        setSyncBusy(false);
+    };
     const runDetect = async () => {
         if (!ip) { setErr("Enter the BMC/management IP address."); return; }
         setBusy(true); setErr(""); setResult(null);
@@ -7382,8 +8261,10 @@ function RedfishDetectModal({ asset, onClose, onSaved }) {
                 React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 18 } }, "Works against any Redfish-capable BMC (Dell iDRAC, HPE iLO, Lenovo XCC, Cisco standalone IMC, NVIDIA DGX, etc.) — reads identity, health, power and thermal directly from the device's management port."),
                 React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 12 } }, field("BMC / Management IP", ip, setIp), field("Port", port, (v) => setPort(Number(v) || 443), "number")),
                 React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 14 } }, field("Username", username, setUsername), field("Password", password, setPassword, "password")),
-                React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 16 } },
+                React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" } },
                     React.createElement("button", { type: "button", onClick: runDetect, disabled: busy, className: "neu-btn-secondary" }, busy ? "Testing…" : "Test & Detect"),
+                    asset && asset.redfishConfigured && React.createElement("button", { type: "button", onClick: syncNow, disabled: syncBusy, className: "neu-btn-primary", title: "Re-check this device now, using the credentials already saved for it" }, syncBusy ? "Syncing…" : "Sync Now"),
+                    asset && asset.redfishConfigured && React.createElement("span", { style: { fontFamily: "Inter", fontSize: 11, color: "#94A3B8" } }, "Uses the credentials already saved for this device"),
                     asset && result && result.reachable && React.createElement("button", { type: "button", onClick: saveAndApply, disabled: busy, className: "neu-btn-primary" }, "Save & Apply to This Asset")),
                 err && React.createElement("div", { style: { padding: "9px 12px", borderRadius: 9, background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.25)", color: "#B91C1C", fontFamily: "Inter", fontSize: 12, marginBottom: 14 } }, err),
                 result && result.reachable && React.createElement("div", { style: { padding: 14, borderRadius: 11, background: "#F8FAFC", border: "1px solid #E2E8F0", marginBottom: 16 } },
@@ -7395,8 +8276,7 @@ function RedfishDetectModal({ asset, onClose, onSaved }) {
                         React.createElement("div", null, React.createElement("span", { style: { color: "#64748B" } }, "Model: "), React.createElement("b", null, result.model || "—")),
                         React.createElement("div", null, React.createElement("span", { style: { color: "#64748B" } }, "Power draw: "), React.createElement("b", null, result.powerWatts != null ? result.powerWatts + " W" : "—")),
                         React.createElement("div", null, React.createElement("span", { style: { color: "#64748B" } }, "Serial: "), React.createElement("b", { style: { fontFamily: "'JetBrains Mono'" } }, result.serialNumber || "—")),
-                        React.createElement("div", null, React.createElement("span", { style: { color: "#64748B" } }, "BMC firmware: "), React.createElement("b", null, result.bmcFirmware || "—")),
-                        React.createElement("div", null, React.createElement("span", { style: { color: "#64748B" } }, "BIOS / host firmware: "), React.createElement("b", null, result.biosVersion || "—"))),
+                        React.createElement("div", null, React.createElement("span", { style: { color: "#64748B" } }, "BIOS version: "), React.createElement("b", { style: { fontFamily: "'JetBrains Mono'" } }, result.biosVersion || "—"))),
                     (result.temperatures || []).length > 0 && React.createElement("div", { style: { marginTop: 12 } },
                         React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, fontWeight: 700, color: "#475569", marginBottom: 5 } }, "Temperatures"),
                         React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, result.temperatures.map((t, i) => React.createElement("span", { key: i, style: { fontFamily: "Inter", fontSize: 11, padding: "3px 9px", borderRadius: 7, background: "#fff", border: "1px solid #E2E8F0" } }, `${t.name}: ${t.readingCelsius != null ? t.readingCelsius + "°C" : "—"}`)))),
@@ -7417,23 +8297,77 @@ function RedfishDetectModal({ asset, onClose, onSaved }) {
                     React.createElement("button", { type: "button", onClick: onClose, className: "neu-btn-secondary" }, "Close"))))
         , document.body);
 }
+// Starts a background Redfish job (discover or apply) and polls its status endpoint until it's
+// done or errors - see the comment on api.discoverRedfishStart for why this isn't just one
+// held-open request. onProgress fires on every poll tick (including the first) so the caller
+// can show a live "N / total" count instead of a blank "Scanning..." for minutes.
+function pollRedfishJob(statusFn, jobId, onProgress, intervalMs) {
+    return new Promise((resolve, reject) => {
+        const tick = async () => {
+            try {
+                const r = await statusFn(jobId);
+                if (onProgress)
+                    onProgress(r);
+                if (r.status === "done")
+                    resolve(r);
+                else if (r.status === "error")
+                    reject(new Error(r.error || "The job failed"));
+                else
+                    setTimeout(tick, intervalMs || 1500);
+            }
+            catch (e) { reject(e); }
+        };
+        tick();
+    });
+}
 function RedfishDiscoverModal({ onClose, onApplied }) {
     const [busy, setBusy] = useState(false);
     const [scan, setScan] = useState(null);
+    const [scanProgress, setScanProgress] = useState(null);
     const [err, setErr] = useState("");
     const [selected, setSelected] = useState(() => new Set());
     const [applyMsg, setApplyMsg] = useState(null);
+    const [applyProgress, setApplyProgress] = useState(null);
     const runScan = async () => {
-        setBusy(true); setErr(""); setScan(null);
-        try { const r = await api.discoverRedfish(); setScan(r); setSelected(new Set(r.results.filter((x) => x.reachable).map((x) => x.assetId))); }
+        setBusy(true); setErr(""); setScan(null); setScanProgress(null);
+        try {
+            const start = await api.discoverRedfishStart();
+            const r = await pollRedfishJob(api.discoverRedfishStatus, start.jobId, setScanProgress);
+            setScan(r);
+            setSelected(new Set(r.results.filter((x) => x.reachable).map((x) => x.assetId)));
+        }
         catch (e) { setErr(e.message); }
         setBusy(false);
     };
     useEffect(() => { runScan(); }, []);
     const toggle = (id) => setSelected((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
     const apply = async () => {
-        setBusy(true); setApplyMsg(null);
-        try { const r = await api.applyRedfishDiscovery(Array.from(selected)); setApplyMsg({ type: "success", text: `Applied to ${r.applied} device(s).` }); onApplied && onApplied(); }
+        setBusy(true); setApplyMsg(null); setApplyProgress(null);
+        try {
+            // Reuse the exact credential Discover already proved for each selected asset, instead
+            // of making Apply blind-guess through every candidate password again - see the
+            // backend comment on credentialIdsByAsset for why that second blind pass was the main
+            // reason real BMCs were failing login here (account lockouts stacking across the two
+            // passes). Sent by stable credential id, not username alone - several candidates can
+            // share a username (e.g. Dell's three "root" passwords), and a username-only match
+            // could silently reuse the WRONG one of those, which is exactly what let a device
+            // whose correct password was the 2nd or 3rd Dell candidate get rejected again here
+            // even right after Discover had just confirmed it. Falls back to the old
+            // full-candidate-list behavior for any asset where, for whatever reason, there's no
+            // matched credential on hand.
+            const credentialsByAsset = {};
+            const credentialIdsByAsset = {};
+            (scan.results || []).forEach((r) => {
+                if (!selected.has(r.assetId)) return;
+                if (r.matchedUsername) credentialsByAsset[r.assetId] = r.matchedUsername;
+                if (r.matchedCredentialId != null) credentialIdsByAsset[r.assetId] = r.matchedCredentialId;
+            });
+            const start = await api.applyRedfishDiscoveryStart(Array.from(selected), credentialsByAsset, credentialIdsByAsset);
+            const r = await pollRedfishJob(api.applyRedfishDiscoveryStatus, start.jobId, setApplyProgress);
+            const extra = (r.skippedNoMatch ? ` ${r.skippedNoMatch} did not authenticate with any saved credential.` : "") + (r.skippedNotFound ? ` ${r.skippedNotFound} could not be found or are outside your sites.` : "");
+            setApplyMsg({ type: "success", text: `Applied to ${r.applied} of ${r.requested || r.applied} selected device(s).${extra}` });
+            onApplied && onApplied();
+        }
         catch (e) { setApplyMsg({ type: "error", text: e.message }); }
         setBusy(false);
     };
@@ -7441,13 +8375,13 @@ function RedfishDiscoverModal({ onClose, onApplied }) {
         React.createElement("div", { className: "pdu-modal-backdrop", style: { position: "fixed", inset: 0, background: "rgba(15,23,42,.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }, onClick: onClose },
             React.createElement("div", { className: "pdu-modal-pop neu-card", style: { width: 760, maxWidth: "94vw", maxHeight: "88vh", overflowY: "auto", padding: 28 }, onClick: (e) => e.stopPropagation() },
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617", marginBottom: 4 } }, "Discover Server Hardware (Redfish)"),
-                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 16 } }, "Tries the shared default BMC credential (REDFISH_DEFAULT_USERNAME / REDFISH_DEFAULT_PASSWORD in .env) against every asset that has a management IP but no Redfish credentials saved yet. Nothing is changed until you select devices and apply."),
-                busy && !scan && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 13, color: "#64748B" } }, "Scanning…"),
+                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 16 } }, "Tries every candidate BMC credential pair configured in REDFISH_CREDENTIALS (.env) in turn — e.g. Dell's root/calvin, root/calvin@123, root/Calvin@123 and HPE's hpadmin/hpinvent — against every asset that has a management IP but no Redfish credentials saved yet, and keeps whichever one answers for that device. Nothing is changed until you select devices and apply."),
+                busy && !scan && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 13, color: "#64748B" } }, scanProgress && scanProgress.total ? `Scanning… ${scanProgress.scanned} / ${scanProgress.total}` : "Scanning…"),
                 err && React.createElement("div", { style: { padding: "9px 12px", borderRadius: 9, background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.25)", color: "#B91C1C", fontFamily: "Inter", fontSize: 12, marginBottom: 14 } }, err),
                 scan && React.createElement("div", null,
-                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#475569", marginBottom: 10 } }, `Scanned ${scan.scanned} asset(s), ${scan.reachable} responded to Redfish.`),
+                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#475569", marginBottom: 10 } }, `Scanned ${scan.scanned} asset(s) against ${scan.credentialsTried || 1} candidate credential(s), ${scan.reachable} responded to Redfish.` + (scan.autoIgnored ? ` ${scan.autoIgnored} device(s) didn't match any saved credential and were auto-marked "Ignore from Monitor" so they won't be re-scanned every time — un-ignore them from the main list to retry.` : "")),
                     React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12 } },
-                        React.createElement("thead", null, React.createElement("tr", null, ["", "Asset", "Site", "Rack", "Mgmt IP", "Vendor / Model", "Result"].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "6px 8px", borderBottom: "1px solid #E2E8F0", color: "#64748B", fontWeight: 700, fontSize: 10.5, textTransform: "uppercase" } }, h)))),
+                        React.createElement("thead", null, React.createElement("tr", null, ["", "Asset", "Site", "Rack", "Mgmt IP", "Vendor / Model", "Matched Login", "Result"].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "6px 8px", borderBottom: "1px solid #E2E8F0", color: "#64748B", fontWeight: 700, fontSize: 10.5, textTransform: "uppercase" } }, h)))),
                         React.createElement("tbody", null, scan.results.map((r) => React.createElement("tr", { key: r.assetId, style: { borderBottom: "1px solid #F1F5F9" } },
                             React.createElement("td", { style: { padding: "6px 8px" } }, r.reachable && React.createElement("input", { type: "checkbox", checked: selected.has(r.assetId), onChange: () => toggle(r.assetId) })),
                             React.createElement("td", { style: { padding: "6px 8px" } }, r.assetId),
@@ -7455,11 +8389,12 @@ function RedfishDiscoverModal({ onClose, onApplied }) {
                             React.createElement("td", { style: { padding: "6px 8px" } }, r.rackNo),
                             React.createElement("td", { style: { padding: "6px 8px", fontFamily: "'JetBrains Mono'" } }, r.mgmtIp),
                             React.createElement("td", { style: { padding: "6px 8px" } }, r.reachable ? `${r.vendor || "—"} ${r.model || ""}` : "—"),
-                            React.createElement("td", { style: { padding: "6px 8px", color: r.reachable ? "#059669" : "#94A3B8" } }, r.reachable ? "Reachable" : (r.error || "Not reachable")))))),
+                            React.createElement("td", { style: { padding: "6px 8px", fontFamily: "'JetBrains Mono'" } }, r.matchedUsername || "—"),
+                            React.createElement("td", { style: { padding: "6px 8px", color: r.reachable ? "#059669" : (r.lockoutSuspected ? "#B45309" : "#94A3B8") }, title: r.autoIgnored ? "Auto-ignored - won't be re-scanned until un-ignored" : undefined }, r.reachable ? "Reachable" : (r.error || "Not reachable") + (r.autoIgnored ? " (ignored)" : "")))))),
                     applyMsg && React.createElement("div", { style: { marginTop: 10, fontFamily: "Inter", fontSize: 12, color: applyMsg.type === "error" ? "#B91C1C" : "#059669" } }, applyMsg.text)),
                 React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 } },
                     React.createElement("button", { type: "button", onClick: onClose, className: "neu-btn-secondary" }, "Close"),
-                    scan && React.createElement("button", { type: "button", onClick: apply, disabled: busy || !selected.size, className: "neu-btn-primary" }, busy ? "Applying…" : `Apply to ${selected.size} Selected`))))
+                    scan && React.createElement("button", { type: "button", onClick: apply, disabled: busy || !selected.size, className: "neu-btn-primary" }, busy ? (applyProgress && applyProgress.total ? `Applying… ${applyProgress.processed} / ${applyProgress.total}` : "Applying…") : `Apply to ${selected.size} Selected`))))
         , document.body);
 }
 function RedfishTab({ canEdit, allowedSites }) {
@@ -7474,6 +8409,8 @@ function RedfishTab({ canEdit, allowedSites }) {
     const [openFilter, setOpenFilter] = useState(null);
     const [selectedIds, setSelectedIds] = useState(() => new Set());
     const [busyAction, setBusyAction] = useState(false);
+    const [syncState, setSyncState] = useState(null); // { running, processed, total, msg }
+    const tableWrapRef = useRef(null);
     const load = () => { api.getRedfishAssets(site, showIgnored).then((r) => { setAssets(r); setErr(""); setSelectedIds(new Set()); }).catch((e) => setErr(e.message || "Could not load devices")); };
     useEffect(() => { load(); }, [site, showIgnored]);
     const sel = { padding: "6px 10px", borderRadius: 8, border: "1px solid #CBD5E1", background: "#fff", fontFamily: "Inter", fontSize: 12, color: "#0F172A" };
@@ -7494,6 +8431,27 @@ function RedfishTab({ canEdit, allowedSites }) {
         catch (e) { alert(e.message || "Could not remove the selected devices' Redfish configuration"); }
         finally { setBusyAction(false); }
     };
+    // Sync = re-poll the saved-credential devices right now. Selected rows if any are ticked,
+    // otherwise every device currently shown (after the location / category / column filters).
+    const runSync = async (onlySelected) => {
+        if (syncState && syncState.running) return;
+        const base = onlySelected ? filtered.filter((a) => selectedIds.has(a.id)) : filtered;
+        const ids = base.filter((a) => a.redfishConfigured && !a.monitorIgnored).map((a) => a.id);
+        if (!ids.length) { setSyncState({ running: false, msg: "No configured devices to sync in this view - use Configure or Discover first." }); return; }
+        setSyncState({ running: true, processed: 0, total: ids.length, msg: "" });
+        try {
+            const st = await api.startRedfishSync(ids, "all");
+            let job = null;
+            for (let i = 0; i < 900; i++) {
+                await new Promise((r) => setTimeout(r, 1200));
+                job = await api.getRedfishSyncJob(st.jobId);
+                setSyncState({ running: job.status !== "done", processed: job.processed, total: job.total, msg: "" });
+                if (job.status === "done") break;
+            }
+            await load();
+            setSyncState({ running: false, msg: job ? `Synced ${job.reachable} of ${job.total} device(s)` + (job.unreachable ? ` · ${job.unreachable} unreachable` : "") + (job.skipped ? ` · ${job.skipped} skipped (already syncing)` : "") + " · " + new Date().toLocaleTimeString() : "" });
+        } catch (e) { setSyncState({ running: false, msg: e.message || "Sync failed", error: true }); }
+    };
     const ignoreSelected = async (ignored) => {
         const ids = Array.from(selectedIds); if (!ids.length) return;
         setBusyAction(true);
@@ -7503,11 +8461,15 @@ function RedfishTab({ canEdit, allowedSites }) {
     };
     const renderCell = (col, a) => {
         switch (col.key) {
-            case "_asset": return React.createElement("span", { style: { fontWeight: 600 } }, a.deviceName || a.assetTag || a.id);
+            // BUG FIX: this case used to hardcode deviceName/assetTag/id directly, completely
+            // bypassing REDFISH_COLUMNS' own `format` function for "_asset" - so renaming that
+            // column to Serial No and preferring redfishSerialNumber/serialNumber there never
+            // actually took effect; this switch always won. Now matches the column's own format.
+            case "_asset": return React.createElement("span", { style: { fontWeight: 600 } }, a.redfishSerialNumber || a.serialNumber || a.deviceName || a.assetTag || a.id);
             case "mgmtIp": return a.mgmtIp ? React.createElement("a", { href: `https://${a.mgmtIp}`, target: "_blank", rel: "noopener", style: { color: "#2563EB", textDecoration: "underline", fontFamily: "'JetBrains Mono'" } }, a.mgmtIp) : "—";
             case "healthStatus": return React.createElement(RedfishHealthPill, { status: a.healthStatus });
             case "alertCount": return a.alertCount == null ? React.createElement("span", { style: { color: "#94A3B8" } }, "—") : a.alertCount === 0 ? React.createElement("span", { style: { color: "#059669", fontWeight: 700 } }, "0") : React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 5, color: "#DC2626", fontWeight: 700 } }, React.createElement("span", { style: { width: 6, height: 6, borderRadius: "50%", background: "#DC2626" } }), a.alertCount);
-            case "bmcFirmware": return React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontSize: 11.5 } }, a.bmcFirmware || "—");
+            case "biosVersion": return React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontSize: 11.5 } }, a.biosVersion || "—");
             case "lastSyncAt": return React.createElement("span", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748B" } }, a.lastSyncAt ? new Date(a.lastSyncAt).toLocaleString() : "Never");
             case "rackNo": return a.rackNo || "—";
             case "hardwareType": return a.hardwareType || "Uncategorized";
@@ -7521,6 +8483,7 @@ function RedfishTab({ canEdit, allowedSites }) {
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15.5, fontWeight: 700, color: "#0F172A" } }, "Multi-Vendor Server Hardware (Redfish)"),
                 React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#475569", marginTop: 3, maxWidth: 680, lineHeight: 1.5 } }, "Works directly against any server's management port (Dell iDRAC, HPE iLO, Lenovo XCC, Cisco standalone IMC, NVIDIA DGX, and any other Redfish-capable BMC) — no vendor appliance needed. This is additional to Dell OME / HPE OneView above, not a replacement.")),
             canEdit && React.createElement("div", { style: { display: "flex", gap: 8 } },
+                React.createElement("button", { onClick: () => runSync(false), disabled: !!(syncState && syncState.running), className: "neu-btn-secondary", title: "Re-read health, power, alerts and BIOS version from every configured device shown below" }, syncState && syncState.running ? `Syncing ${syncState.processed || 0}/${syncState.total || 0}…` : "Sync"),
                 React.createElement("button", { onClick: () => setDiscoverOpen(true), className: "neu-btn-secondary" }, "Discover"),
                 React.createElement("button", { onClick: () => setModalAsset(null), className: "neu-btn-primary" }, "+ Test & Detect"))),
         React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 14 } },
@@ -7536,14 +8499,16 @@ function RedfishTab({ canEdit, allowedSites }) {
             activeColumnFilterCount > 0 && React.createElement("button", { onClick: () => setColumnFilters(makeEmptyListColumnFilters(REDFISH_COLUMNS)), className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "8px 11px" } }, `Clear column filters (${activeColumnFilterCount})`)),
         canEdit && selectedIds.size > 0 && React.createElement("div", { className: "neu-card", style: { display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", marginBottom: 10, flexWrap: "wrap" } },
             React.createElement("strong", { style: { fontFamily: "Inter", fontSize: 12, color: "#4F46E5" } }, `${selectedIds.size} selected`),
+            React.createElement("button", { disabled: busyAction || !!(syncState && syncState.running), onClick: () => runSync(true), className: "neu-btn-primary", style: { fontSize: 11.5 } }, "Sync Selected"),
             React.createElement("button", { disabled: busyAction, onClick: deleteSelected, className: "neu-btn-secondary", style: { fontSize: 11.5, color: "#DC2626" } }, "Delete Selected (Remove Redfish Config)"),
             React.createElement("button", { disabled: busyAction, onClick: () => ignoreSelected(true), className: "neu-btn-secondary", style: { fontSize: 11.5 } }, "Ignore Selected"),
             React.createElement("button", { disabled: busyAction, onClick: () => ignoreSelected(false), className: "neu-btn-secondary", style: { fontSize: 11.5 } }, "Un-ignore Selected"),
             React.createElement("button", { onClick: () => setSelectedIds(new Set()), className: "neu-btn-secondary", style: { fontSize: 11.5 } }, "Clear")),
+        syncState && syncState.msg && React.createElement("div", { style: { padding: "8px 12px", borderRadius: 9, background: syncState.error ? "rgba(220,38,38,.08)" : "rgba(5,150,105,.08)", border: "1px solid " + (syncState.error ? "rgba(220,38,38,.25)" : "rgba(5,150,105,.25)"), color: syncState.error ? "#B91C1C" : "#047857", fontFamily: "Inter", fontSize: 12, marginBottom: 12 } }, syncState.msg),
         err && React.createElement("div", { style: { padding: "9px 12px", borderRadius: 9, background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.25)", color: "#B91C1C", fontFamily: "Inter", fontSize: 12, marginBottom: 14 } }, err),
         !assets && !err && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 13, color: "#64748B", padding: 20 } }, "Loading…"),
         assets && !assets.length && React.createElement("div", { style: { padding: "40px 20px", textAlign: "center", fontFamily: "Inter", fontSize: 13, color: "#64748B" } }, "No assets with a management IP yet. Add one from Asset Inventory, or click \"Discover\" to scan assets that already have one."),
-        assets && assets.length > 0 && React.createElement("div", { style: { overflowX: "auto" } }, React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12.5 } },
+        assets && assets.length > 0 && React.createElement(React.Fragment, null, React.createElement("div", { ref: tableWrapRef, style: { overflowX: "auto" } }, React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12.5 } },
             React.createElement("thead", null, React.createElement("tr", null,
                 canEdit && React.createElement("th", { style: { ...thBase, width: 34 } },
                     React.createElement("input", { type: "checkbox", checked: filtered.length > 0 && filtered.every((a) => selectedIds.has(a.id)), ref: (el) => { if (el)
@@ -7559,7 +8524,7 @@ function RedfishTab({ canEdit, allowedSites }) {
                     REDFISH_COLUMNS.map((col) => React.createElement("td", { key: col.key, style: { padding: "8px 9px", whiteSpace: "nowrap" } }, renderCell(col, a), col.key === "hardwareType" && a.monitorIgnored && React.createElement("span", { style: { marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#92400E", background: "#FEF3C7", borderRadius: 5, padding: "1px 6px" } }, "IGNORED"))),
                     React.createElement("td", { style: { padding: "8px 9px", textAlign: "right", whiteSpace: "nowrap" } },
                         canEdit && React.createElement("button", { onClick: () => toggleIgnore(a), className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px", marginRight: 6 }, title: a.monitorIgnored ? "Include this device in Redfish monitoring again" : "Exclude this device from Redfish monitoring (e.g. storage/network/firewall gear that doesn't need it)" }, a.monitorIgnored ? "Un-ignore" : "Ignore from Monitor"),
-                        React.createElement("button", { onClick: () => setModalAsset(a), className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px" } }, a.redfishConfigured ? "View / Sync" : "Configure"))))))),
+                        React.createElement("button", { onClick: () => setModalAsset(a), className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px" } }, a.redfishConfigured ? "View / Sync" : "Configure"))))))), React.createElement(FloatingHScroll, { wrapRef: tableWrapRef })),
         modalAsset !== undefined && React.createElement(RedfishDetectModal, { asset: modalAsset, onClose: () => setModalAsset(undefined), onSaved: load }),
         discoverOpen && React.createElement(RedfishDiscoverModal, { onClose: () => setDiscoverOpen(false), onApplied: load }),
         openFilter && React.createElement(ValueListFilterPopup, { column: openFilter, currentFilter: columnFilters[openFilter.key], optionRows: optionRowsForColumn(openFilter.key), onApply: (value) => setColumnFilters((prev) => ({ ...prev, [openFilter.key]: value })), onClose: () => setOpenFilter(null) }));
@@ -7573,10 +8538,11 @@ function FirmwareJobsTab({ canEdit }) {
     const [fSite, setFSite] = useState("all");
     const [fVendor, setFVendor] = useState("all");
     const [fState, setFState] = useState("all");
+    const [fDays, setFDays] = useState(30); // how far back the list goes (the server keeps 30 days)
     const [open, setOpen] = useState({});
     useEffect(() => {
         let alive = true;
-        const load = (refresh) => api.getActiveFirmwareJobs(24, refresh).then((r) => { if (alive) { setJobs((r && r.jobs) || []); setErr(""); } }).catch((e) => { if (alive) setErr(e.message || "Could not load firmware jobs"); });
+        const load = (refresh) => api.getActiveFirmwareJobs(720, refresh).then((r) => { if (alive) { setJobs((r && r.jobs) || []); setErr(""); } }).catch((e) => { if (alive) setErr(e.message || "Could not load firmware jobs"); });
         load(true);
         const t = setInterval(() => load(false), 8000);
         return () => { alive = false; clearInterval(t); };
@@ -7586,16 +8552,16 @@ function FirmwareJobsTab({ canEdit }) {
         try {
             const r = await api.scanFirmwareJobs();
             setScan(r);
-            const j = await api.getActiveFirmwareJobs(24, false);
+            const j = await api.getActiveFirmwareJobs(720, false);
             setJobs((j && j.jobs) || []);
         } catch (e) { setScanErr(e.message || "Scan failed"); }
         setScanBusy(false);
     };
     const all = jobs || [];
     const sites = Array.from(new Set(all.map((j) => j.site))).sort();
-    const shown = all.filter((j) => (fSite === "all" || j.site === fSite) && (fVendor === "all" || j.vendor === fVendor) && (fState === "all" || j.status === fState))
+    const shown = all.filter((j) => (fSite === "all" || j.site === fSite) && (fVendor === "all" || j.vendor === fVendor) && (fState === "all" || j.status === fState) && (j.startedAt >= Date.now() - fDays * 86400000))
         .sort((x, y) => ((y.status === "Running") - (x.status === "Running")) || (y.startedAt - x.startedAt));
-    const count = (s) => all.filter((j) => j.status === s).length;
+    const count = (s) => all.filter((j) => j.status === s && j.startedAt >= Date.now() - fDays * 86400000).length;
     const sel = { padding: "6px 10px", borderRadius: 8, border: "1px solid #CBD5E1", background: "#fff", fontFamily: "Inter", fontSize: 12, color: "#0F172A" };
     const chip = (label, n, color) => React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 12px", borderRadius: 999, background: color + "18", color, fontFamily: "Inter", fontSize: 12, fontWeight: 700 } }, label, React.createElement("span", { style: { fontVariantNumeric: "tabular-nums" } }, n));
     const grid = "16px 112px minmax(110px, 0.9fr) 84px minmax(110px, 0.9fr) minmax(100px, 0.8fr) minmax(120px, 1.3fr) 56px minmax(120px, 1fr)";
@@ -7603,12 +8569,13 @@ function FirmwareJobsTab({ canEdit }) {
         React.createElement("div", { style: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 12 } },
             React.createElement("div", null,
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15.5, fontWeight: 700, color: "#0F172A" } }, "Firmware Update Jobs"),
-                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#475569", marginTop: 3, maxWidth: 640, lineHeight: 1.5 } }, "Every firmware update running or finished in the last 24 hours at the locations you can access — started from DCIM or directly in Dell OME / HPE OneView (the appliances are checked about every 30 seconds). A server with a running update is locked in DCIM.")),
+                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#475569", marginTop: 3, maxWidth: 640, lineHeight: 1.5 } }, "Every firmware update running or finished in the last 30 days at the locations you can access — started from DCIM or directly in Dell OME / HPE OneView (the appliances are checked about every 30 seconds). A server with a running update is locked in DCIM.")),
             React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } }, chip("Running", count("Running"), "#2563EB"), chip("Completed", count("Completed"), "#059669"), chip("Failed", count("Failed"), "#DC2626"))),
         React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 } },
             React.createElement("select", { value: fSite, onChange: (e) => setFSite(e.target.value), style: sel, "aria-label": "Filter by location" }, React.createElement("option", { value: "all" }, "All locations"), sites.map((s) => React.createElement("option", { key: s, value: s }, s))),
             React.createElement("select", { value: fVendor, onChange: (e) => setFVendor(e.target.value), style: sel, "aria-label": "Filter by vendor" }, React.createElement("option", { value: "all" }, "Dell OME + HPE OneView"), React.createElement("option", { value: "ome" }, "Dell OME"), React.createElement("option", { value: "oneview" }, "HPE OneView")),
-            React.createElement("select", { value: fState, onChange: (e) => setFState(e.target.value), style: sel, "aria-label": "Filter by status" }, React.createElement("option", { value: "all" }, "Any status"), React.createElement("option", { value: "Running" }, "Running"), React.createElement("option", { value: "Completed" }, "Completed"), React.createElement("option", { value: "Failed" }, "Failed"))),
+            React.createElement("select", { value: fState, onChange: (e) => setFState(e.target.value), style: sel, "aria-label": "Filter by status" }, React.createElement("option", { value: "all" }, "Any status"), React.createElement("option", { value: "Running" }, "Running"), React.createElement("option", { value: "Completed" }, "Completed"), React.createElement("option", { value: "Failed" }, "Failed")),
+            React.createElement("select", { value: fDays, onChange: (e) => setFDays(Number(e.target.value)), style: sel, "aria-label": "Filter by period" }, React.createElement("option", { value: 1 }, "Last 24 hours"), React.createElement("option", { value: 7 }, "Last 7 days"), React.createElement("option", { value: 30 }, "Last 30 days"))),
         canEdit && React.createElement("div", { style: { marginBottom: 12 } },
             React.createElement("button", { className: "neu-btn-secondary", disabled: scanBusy, onClick: runScan, style: { fontSize: 11.5, padding: "5px 12px" }, title: "Ask every configured Dell OME / HPE OneView appliance right now which firmware updates are running" }, scanBusy ? "Scanning appliances\u2026" : "Scan appliances now"),
             scanErr && React.createElement("span", { style: { marginLeft: 10, color: "#B91C1C", fontFamily: "Inter", fontSize: 12 } }, scanErr),
@@ -7657,6 +8624,10 @@ function FirmwareJobsTab({ canEdit }) {
 function FirmwareJobAlerts({ currentUser, onOpen, onRunning }) {
     const seen = useRef(null);
     const [toasts, setToasts] = useState([]);
+    // Dismissed alerts are remembered in this browser (per user) so a page refresh does not bring them back.
+    const dismissKey = "dcim_fw_alerts_dismissed_" + ((currentUser && (currentUser.username || currentUser.name)) || "u");
+    const readDismissed = () => { try { const o = JSON.parse(localStorage.getItem(dismissKey) || "{}"); return o && typeof o === "object" ? o : {}; } catch (e) { return {}; } };
+    const rememberDismissed = (key) => { try { const o = readDismissed(); const cut = Date.now() - 7 * 86400000; Object.keys(o).forEach((k) => { if (o[k] < cut) delete o[k]; }); o[key] = Date.now(); localStorage.setItem(dismissKey, JSON.stringify(o)); } catch (e) { } };
     useEffect(() => {
         let alive = true;
         const mine = (j) => !!j.startedBy && (j.startedBy === currentUser.name || j.startedBy === currentUser.username);
@@ -7666,6 +8637,7 @@ function FirmwareJobAlerts({ currentUser, onOpen, onRunning }) {
             const prev = seen.current;
             const next = new Map();
             const fresh = [];
+            const dismissedNow = readDismissed();
             jobs.forEach((j) => {
                 const k = j.vendor + "|" + j.site + "|" + j.zone + "|" + j.jobRef + "|" + j.startedAt;
                 next.set(k, j.status);
@@ -7678,18 +8650,19 @@ function FirmwareJobAlerts({ currentUser, onOpen, onRunning }) {
             });
             seen.current = next;
             if (onRunning) onRunning(jobs.filter((j) => j.status === "Running").length);
-            if (fresh.length) setToasts((t) => [...t, ...fresh.map((f) => ({ ...f, id: f.k + "|" + f.kind + "|" + Date.now() }))].slice(-5));
+            const shown = fresh.filter((f) => !dismissedNow[f.k + "|" + f.kind]);
+            if (shown.length) setToasts((t) => [...t, ...shown.filter((f) => !t.some((x) => x.k === f.k && x.kind === f.kind)).map((f) => ({ ...f, id: f.k + "|" + f.kind + "|" + Date.now() }))].slice(-5));
         }).catch(() => { });
         tick();
         const t = setInterval(tick, 15000);
         return () => { alive = false; clearInterval(t); };
     }, []);
     useEffect(() => {
-        const timers = toasts.filter((x) => x.kind === "completed").map((x) => setTimeout(() => setToasts((t) => t.filter((y) => y.id !== x.id)), 20000));
+        const timers = toasts.filter((x) => x.kind === "completed").map((x) => setTimeout(() => { rememberDismissed(x.k + "|" + x.kind); setToasts((t) => t.filter((y) => y.id !== x.id)); }, 20000));
         return () => timers.forEach(clearTimeout);
     }, [toasts]);
     if (!toasts.length) return null;
-    const dismiss = (id) => setToasts((t) => t.filter((y) => y.id !== id));
+    const dismiss = (id) => { const x = toasts.find((y) => y.id === id); if (x) rememberDismissed(x.k + "|" + x.kind); setToasts((t) => t.filter((y) => y.id !== id)); };
     return React.createElement("div", { role: "alert", "aria-live": "assertive", style: { position: "fixed", right: 20, bottom: 44, zIndex: 900, display: "flex", flexDirection: "column", gap: 10, width: 360, maxWidth: "calc(100vw - 40px)" } }, toasts.map((x) => {
         const j = x.j;
         const col = x.kind === "failed" ? "#DC2626" : x.kind === "completed" ? "#059669" : "#D97706";
@@ -7737,7 +8710,10 @@ function MonitorVendorPanel({ vendorLabel, icon, result, canEdit, selectedIds, o
     }, { latest: 0, outdated: 0, unknown: 0, noTarget: 0 });
     const MONITOR_EXPORT_COLUMNS = [
         { key: "name", label: "Name" }, { key: "model", label: "Model" }, { key: "serialNumber", label: "Serial" },
-        { key: "healthStatus", label: "Health" }, { key: "powerState", label: "Power" }, { key: "ipAddress", label: "IP" },
+        { key: "healthStatus", label: "Health" }, { key: "powerState", label: "Power" },
+        { key: "powerWatts", label: "Power (W)", format: (v) => (v === null || v === undefined || v === "") ? "\u2014" : String(v) },
+        { key: "psuMaxWatts", label: "Max (W)", format: (v) => (v === null || v === undefined || v === "") ? "\u2014" : String(v) },
+        { key: "ipAddress", label: "IP" },
         { key: "firmwareVersion", label: "System BIOS" },
         { key: "_manualTarget", label: "Manual Target", format: (v, row) => (targetForDevice(row) && targetForDevice(row).targetVersion) || "—" },
         { key: "_status", label: "Status", format: (v, row) => !targetForDevice(row) ? "No Target" : !row.firmwareVersion ? "Unknown" : fwStatusText(row.firmwareVersion, targetForDevice(row).targetVersion) },
@@ -7745,7 +8721,10 @@ function MonitorVendorPanel({ vendorLabel, icon, result, canEdit, selectedIds, o
     const exportName = `${vendorLabel.replace(/\s+/g, "-").toLowerCase()}-inventory-${localDateStr(new Date())}`;
     const MONITOR_LIST_COLUMNS = [
         { key: "name", label: "Name" }, { key: "model", label: "Model" }, { key: "serialNumber", label: "Serial" },
-        { key: "healthStatus", label: "Health" }, { key: "powerState", label: "Power" }, { key: "ipAddress", label: "IP" },
+        { key: "healthStatus", label: "Health" }, { key: "powerState", label: "Power" },
+        { key: "powerWatts", label: "Power (W)", format: (v) => (v === null || v === undefined || v === "") ? "\u2014" : String(v) },
+        { key: "psuMaxWatts", label: "Max (W)", format: (v) => (v === null || v === undefined || v === "") ? "\u2014" : String(v) },
+        { key: "ipAddress", label: "IP" },
         { key: "firmwareVersion", label: "System BIOS" },
         { key: "_manualTarget", label: "Manual Target", format: (v, row) => (targetForDevice(row) && targetForDevice(row).targetVersion) || "—" },
         { key: "_status", label: "Status", format: (v, row) => !targetForDevice(row) ? "No Target" : !row.firmwareVersion ? "Unknown" : fwStatusText(row.firmwareVersion, targetForDevice(row).targetVersion) }
@@ -7875,6 +8854,8 @@ function MonitorVendorPanel({ vendorLabel, icon, result, canEdit, selectedIds, o
                                 React.createElement("td", { style: tdSm },
                                     React.createElement(MonitorHealthDot, { status: d.healthStatus })),
                                 React.createElement("td", { style: tdSm }, d.powerState || "Unknown"),
+                                React.createElement("td", { style: { ...tdSm, fontFamily: "'JetBrains Mono'", fontSize: 11.5 }, title: "Current draw reported by the appliance" }, d.powerWatts != null ? d.powerWatts + " W" : "\u2014"),
+                                React.createElement("td", { style: { ...tdSm, fontFamily: "'JetBrains Mono'", fontSize: 11.5 }, title: "Maximum / rated watts reported by the appliance" }, d.psuMaxWatts != null ? d.psuMaxWatts + " W" : "\u2014"),
                                 React.createElement("td", { style: { ...tdSm, fontFamily: "'JetBrains Mono'", fontSize: 11.5 } }, d.ipAddress ? React.createElement("a", { href: `https://${d.ipAddress}`, target: "_blank", rel: "noopener", style: { color: "#2563EB", textDecoration: "underline" } }, d.ipAddress) : "—"),
                                 React.createElement("td", { style: { ...tdSm, fontFamily: "'JetBrains Mono'", fontSize: 11.5 } }, d.firmwareVersion || "—"),
                                 React.createElement("td", { style: { ...tdSm, fontFamily: "'JetBrains Mono'", fontSize: 11.5 } }, (targetForDevice(d) && targetForDevice(d).targetVersion) || "—"),
@@ -8091,6 +9072,9 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
     const [data, setData] = useState(null); // { ome, oneview } for the selected zone
     const [loadErr, setLoadErr] = useState("");
     const [lastSynced, setLastSynced] = useState(null);
+    const [syncProg, setSyncProg] = useState(null); // live % of the zone's sync (manual or auto-sync), polled from the server
+    const [zoneLoading, setZoneLoading] = useState(false);
+    const syncWasRunningRef = useRef(false);
     const [tab, setTab] = useState(() => { if (typeof window !== "undefined" && window.__dcimOpenFwJobs) { window.__dcimOpenFwJobs = false; return "fwjobs"; } return "status"; }); // "status" | "fwjobs" | "firmware" | "reconciliation"
     useEffect(() => { const h = () => { window.__dcimOpenFwJobs = false; setTab("fwjobs"); }; window.addEventListener("dcim-open-fwjobs", h); return () => window.removeEventListener("dcim-open-fwjobs", h); }, []);
     const [selOme, setSelOme] = useState(new Set());
@@ -8545,6 +9529,7 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
     const loadZone = async (site, zone, forceRefresh = false) => {
         const mySeq = ++loadZoneSeqRef.current; // a slower answer for a previously clicked zone must never overwrite the zone now selected
         setSelected({ site, zone });
+        setZoneLoading(true);
         setData(null);
         setLoadErr("");
         setSelOme(new Set());
@@ -8570,7 +9555,41 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
             if (mySeq === loadZoneSeqRef.current)
                 setLoadErr(e.message || "Failed to load monitoring data");
         }
+        finally {
+            if (mySeq === loadZoneSeqRef.current)
+                setZoneLoading(false);
+        }
     };
+    // While a zone is selected, ask the server how far its sync is (cheap, in-memory). When a sync that was running
+    // finishes - e.g. the power readings that complete after the first reply - quietly re-read the zone so the table
+    // shows the final numbers without the user pressing anything.
+    useEffect(() => {
+        if (!selected || tab !== "status") { setSyncProg(null); return undefined; }
+        let stop = false;
+        const tick = async () => {
+            try {
+                const p = await api.getSyncProgress(selected.site, selected.zone);
+                if (stop) return;
+                setSyncProg(p && p.running ? p : null);
+                if (syncWasRunningRef.current && !(p && p.running)) {
+                    syncWasRunningRef.current = false;
+                    try {
+                        const res = await api.getMonitoringDevices(selected.site, selected.zone, false);
+                        if (!stop) {
+                            setData(res);
+                            const st = [res.ome && res.ome.configured ? res.ome.devicesFetchedAt : null, res.oneview && res.oneview.configured ? res.oneview.devicesFetchedAt : null].filter((v) => v != null);
+                            if (st.length) setLastSynced(new Date(Math.min(...st)));
+                        }
+                    } catch (e) { /* keep what is shown */ }
+                }
+                if (p && p.running) syncWasRunningRef.current = true;
+            } catch (e) { /* progress is a nicety; never break the page */ }
+        };
+        tick();
+        const t = setInterval(tick, 1200);
+        return () => { stop = true; clearInterval(t); };
+    }, [selected && selected.site, selected && selected.zone, tab]);
+    const syncBusy = zoneLoading || !!syncProg;
     const toggleOne = (setFn) => (id, checked) => setFn((prev) => { const n = new Set(prev); checked ? n.add(id) : n.delete(id); return n; });
     const toggleAll = (setFn) => (ids, checked) => setFn((prev) => { const n = new Set(prev); ids.forEach((id) => checked ? n.add(id) : n.delete(id)); return n; });
     const openFirmwareModal = (vendor, vendorLabel) => (deviceIds) => {
@@ -8742,7 +9761,7 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
                                 selected.site,
                                 " \u00B7 ",
                                 selected.zone),
-                            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#475569", marginTop: 3 } }, lastSynced ? `Last synced ${lastSynced.toLocaleTimeString()}` : "Syncing… fetching System ROM for every device, this can take a while on large estates"),
+                            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#475569", marginTop: 3 } }, syncBusy ? "Syncing… please wait until all data is captured" : (lastSynced ? `Last synced ${lastSynced.toLocaleTimeString()}` : "Not synced yet")),
                             autosyncStatus && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, color: "#A78BFA", marginTop: 2 } },
                                 "Auto-sync every ",
                                 Math.round(autosyncStatus.intervalMs / 60000),
@@ -8754,9 +9773,16 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
                                 React.createElement(RefreshCw, { s: 13 }),
                                 " ",
                                 alertRefreshing ? "Refreshing Alerts…" : "Refresh Alerts Now"),
-                            React.createElement("button", { onClick: () => loadZone(selected.site, selected.zone, true), className: "neu-btn-secondary", style: { display: "flex", alignItems: "center", gap: 6 } },
+                            React.createElement("button", { onClick: () => loadZone(selected.site, selected.zone, true), disabled: syncBusy, className: "neu-btn-secondary", style: { display: "flex", alignItems: "center", gap: 6, opacity: syncBusy ? 0.5 : 1, cursor: syncBusy ? "not-allowed" : "pointer" } },
                                 React.createElement(RefreshCw, { s: 13 }),
-                                " Sync from Dell OME / HPE OneView"))),
+                                syncBusy ? " Syncing…" : " Sync from Dell OME / HPE OneView"))),
+                    syncBusy && React.createElement("div", { className: "neu-card anim-in d1", style: { padding: "14px 18px", marginBottom: 16 } },
+                        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7, fontFamily: "Inter", fontSize: 12, fontWeight: 700, color: "#475569" } },
+                            React.createElement("span", null, syncProg ? `${syncProg.label}${syncProg.total ? ` \u00B7 ${syncProg.done} / ${syncProg.total}` : ""}${syncProg.vendor ? ` (${syncProg.vendor})` : ""}` : "Starting sync\u2026"),
+                            React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontSize: 14, fontWeight: 800, color: "#059669" } }, `${syncProg ? syncProg.percent : 1}%`)),
+                        React.createElement("div", { style: { height: 8, borderRadius: 6, background: "rgba(148,163,184,0.28)", boxShadow: "inset 1px 1px 3px rgba(34,48,70,0.15)", overflow: "hidden" } },
+                            React.createElement("div", { style: { height: "100%", width: `${syncProg ? syncProg.percent : 1}%`, borderRadius: 6, background: "linear-gradient(90deg,#059669,#10B981)", transition: "width .6s ease" } })),
+                        syncProg && syncProg.steps && React.createElement("div", { style: { display: "flex", gap: 18, marginTop: 9, fontFamily: "Inter", fontSize: 11, color: "#94A3B8", flexWrap: "wrap" } }, syncProg.steps.map((st) => React.createElement("span", { key: st.key, style: st.state === "active" ? { color: "#059669", fontWeight: 700 } : (st.state === "done" ? { color: "#059669" } : null) }, (st.state === "done" ? "\u2713 " : (st.state === "active" ? "\u25CF " : "\u25CB ")) + st.label)))),
                     alertRefreshMsg && React.createElement("div", { className: "neu-card anim-in d1", style: { background: alertRefreshMsg.startsWith("Alerts refreshed") ? "#F0FDF4" : "#FEF2F2", border: alertRefreshMsg.startsWith("Alerts refreshed") ? "1px solid rgba(16,185,129,0.25)" : "1px solid rgba(239,68,68,0.25)", padding: "10px 16px", marginBottom: 16, color: alertRefreshMsg.startsWith("Alerts refreshed") ? "#065F46" : "#991B1B", fontFamily: "Inter", fontSize: 12.5, display: "flex", justifyContent: "space-between", alignItems: "center" } },
                         React.createElement("span", null, alertRefreshMsg),
                         React.createElement("button", { onClick: () => setAlertRefreshMsg(""), style: { background: "none", border: "none", color: "inherit", cursor: "pointer", fontSize: 11, fontWeight: 700 } }, "Dismiss")),
@@ -10465,6 +11491,276 @@ function LicensePanel({ onActivated }) {
                 React.createElement("input", { ref: fileRef, type: "file", accept: ".lic", style: { display: "none" }, onChange: activateFile })),
             note && React.createElement("div", { style: { marginTop: 12, fontSize: 12.5, color: note.ok ? "#16A34A" : "#DC2626" } }, note.text)));
 }
+function NotificationSettingsPanel() {
+    const [smtp, setSmtp] = useState({ host: "", port: 587, secure: false, user: "", password: "", fromAddress: "", hasPassword: false });
+    const [recipients, setRecipients] = useState([]);
+    const [newRecipient, setNewRecipient] = useState({ name: "", email: "" });
+    const [loadErr, setLoadErr] = useState("");
+    const [busy, setBusy] = useState("");
+    const [note, setNote] = useState(null); // {ok, text}
+    const [testTo, setTestTo] = useState("");
+    const load = async () => {
+        try {
+            const s = await api.getIntegrationSettings();
+            if (s.smtp) setSmtp({ host: s.smtp.host || "", port: s.smtp.port || 587, secure: !!s.smtp.secure, user: s.smtp.user || "", password: "", fromAddress: s.smtp.fromAddress || "", hasPassword: !!s.smtp.hasPassword });
+            setRecipients(Array.isArray(s.notifyRecipients) ? s.notifyRecipients : []);
+            setLoadErr("");
+        }
+        catch (e) { setLoadErr(e.message || "Could not load notification settings"); }
+    };
+    useEffect(() => { load(); }, []);
+    const setS = (k, v) => setSmtp((f) => ({ ...f, [k]: v }));
+    const saveSmtp = async () => {
+        if (!smtp.host.trim() || !smtp.port) { setNote({ ok: false, text: "SMTP host and port are required" }); return; }
+        setBusy("smtp"); setNote(null);
+        try {
+            const body = { host: smtp.host.trim(), port: Number(smtp.port), secure: !!smtp.secure, user: smtp.user.trim(), fromAddress: smtp.fromAddress.trim() || smtp.user.trim() };
+            if (smtp.password) body.password = smtp.password;
+            await api.saveIntegrationSettings({ smtp: body });
+            setNote({ ok: true, text: "SMTP settings saved." });
+            await load();
+        }
+        catch (e) { setNote({ ok: false, text: e.message }); }
+        setBusy("");
+    };
+    const sendTest = async () => {
+        if (!testTo.trim()) { setNote({ ok: false, text: "Enter an address to send the test email to" }); return; }
+        setBusy("test"); setNote(null);
+        try {
+            const r = await api.testIntegration({ kind: "smtp", to: testTo.trim() });
+            setNote({ ok: !!(r && r.ok !== false), text: "Test email sent to " + testTo.trim() + "." });
+        }
+        catch (e) { setNote({ ok: false, text: e.message }); }
+        setBusy("");
+    };
+    const saveRecipients = async (next) => {
+        setBusy("recipients"); setNote(null);
+        try {
+            await api.saveIntegrationSettings({ notifyRecipients: next });
+            setRecipients(next);
+            setNote({ ok: true, text: "Notification recipients saved." });
+        }
+        catch (e) { setNote({ ok: false, text: e.message }); }
+        setBusy("");
+    };
+    const addRecipient = async () => {
+        const email = newRecipient.email.trim();
+        if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setNote({ ok: false, text: "Enter a valid email address" }); return; }
+        const next = [...recipients, { name: newRecipient.name.trim() || email, email }];
+        await saveRecipients(next);
+        setNewRecipient({ name: "", email: "" });
+    };
+    const removeRecipient = async (email) => { await saveRecipients(recipients.filter((r) => r.email !== email)); };
+    return React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 20 } },
+        loadErr && React.createElement("div", { style: { color: "#B91C1C", fontSize: 12.5, background: "#FEF2F2", border: "1px solid #FECACA", padding: "9px 12px", borderRadius: 10 } }, loadErr),
+        note && React.createElement("div", { style: { color: note.ok ? "#065F46" : "#B91C1C", fontSize: 12.5, background: note.ok ? "#ECFDF5" : "#FEF2F2", border: `1px solid ${note.ok ? "#A7F3D0" : "#FECACA"}`, padding: "9px 12px", borderRadius: 10 } }, note.text),
+        React.createElement("div", { className: "neu-card anim-in d1", style: { padding: 24 } },
+            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 700, color: "#0F172A", marginBottom: 4 } }, "Email (SMTP) server"),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", marginBottom: 16 } }, "Used to send all automated notifications - ticket creation, approvals/rejections, monthly reports, and manual report emails."),
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14, marginBottom: 14 } },
+                React.createElement(Field, { label: "SMTP host" },
+                    React.createElement("input", { value: smtp.host, onChange: (e) => setS("host", e.target.value), className: "neu-input", placeholder: "smtp.example.com" })),
+                React.createElement(Field, { label: "Port" },
+                    React.createElement("input", { type: "number", value: smtp.port, onChange: (e) => setS("port", e.target.value), className: "neu-input" }))),
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 } },
+                React.createElement(Field, { label: "Username" },
+                    React.createElement("input", { value: smtp.user, onChange: (e) => setS("user", e.target.value), className: "neu-input" })),
+                React.createElement(Field, { label: "Password" },
+                    React.createElement("input", { type: "password", value: smtp.password, onChange: (e) => setS("password", e.target.value), className: "neu-input", placeholder: smtp.hasPassword ? "•••••••• (leave blank to keep)" : "" }))),
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14, marginBottom: 16, alignItems: "end" } },
+                React.createElement(Field, { label: "From address" },
+                    React.createElement("input", { value: smtp.fromAddress, onChange: (e) => setS("fromAddress", e.target.value), className: "neu-input", placeholder: "dcim@example.com" })),
+                React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, fontFamily: "Inter", fontSize: 12.5, color: "#1E293B", paddingBottom: 10 } },
+                    React.createElement("input", { type: "checkbox", checked: !!smtp.secure, onChange: (e) => setS("secure", e.target.checked) }),
+                    "Use TLS/SSL")),
+            React.createElement("div", { style: { display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" } },
+                React.createElement("button", { onClick: saveSmtp, disabled: busy === "smtp", className: "neu-btn-primary", style: { fontSize: 13 } }, busy === "smtp" ? "Saving…" : "Save SMTP settings"),
+                React.createElement("input", { value: testTo, onChange: (e) => setTestTo(e.target.value), className: "neu-input", placeholder: "Send a test email to…", style: { width: 220, flex: "0 0 auto" } }),
+                React.createElement("button", { onClick: sendTest, disabled: busy === "test", className: "neu-btn-secondary", style: { fontSize: 13 } }, busy === "test" ? "Sending…" : "Send Test Email"))),
+        React.createElement("div", { className: "neu-card anim-in d2", style: { padding: 24 } },
+            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 700, color: "#0F172A", marginBottom: 4 } }, "Notification recipients"),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", marginBottom: 16 } }, "These addresses receive all automated emails, and their names appear as the Approver choices when approving or rejecting a visitor or material movement request."),
+            React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 } },
+                recipients.length === 0 && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#94A3B8" } }, "No recipients configured yet."),
+                recipients.map((r) => React.createElement("div", { key: r.email, className: "neu-pressed", style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 14px", borderRadius: 12 } },
+                    React.createElement("div", null,
+                        React.createElement("span", { style: { fontFamily: "Inter", fontSize: 13, fontWeight: 600, color: "#1E293B" } }, r.name),
+                        React.createElement("span", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", marginLeft: 8 } }, r.email)),
+                    React.createElement("button", { onClick: () => removeRecipient(r.email), className: "neu-icon-btn", style: { width: 30, height: 30, borderRadius: 9 }, title: "Remove" },
+                        React.createElement(Trash2, { s: 13, c: "#DC2626" }))))),
+            React.createElement("div", { style: { display: "flex", gap: 10, flexWrap: "wrap" } },
+                React.createElement("input", { value: newRecipient.name, onChange: (e) => setNewRecipient((f) => ({ ...f, name: e.target.value })), className: "neu-input", placeholder: "Name", style: { width: 180 } }),
+                React.createElement("input", { value: newRecipient.email, onChange: (e) => setNewRecipient((f) => ({ ...f, email: e.target.value })), className: "neu-input", placeholder: "Email address", style: { width: 240 } }),
+                React.createElement("button", { onClick: addRecipient, disabled: busy === "recipients", className: "neu-btn-secondary", style: { fontSize: 13 } }, "+ Add recipient"))));
+}
+function auditStatusDot(status) { return status === "failure" ? "#EF4444" : "#10B981"; }
+function auditActionChip(action) {
+    const a = String(action || "");
+    if (/_DELETE$/.test(a) || /FAILURE/.test(a)) return { bg: "#FEE2E2", fg: "#B91C1C" };
+    if (/_RESTORE$/.test(a)) return { bg: "#EDE9FE", fg: "#6D28D9" };
+    if (/_(CREATE|APPROVE|CHECKIN|LOGIN)$/.test(a)) return { bg: "#DCFCE7", fg: "#15803D" };
+    if (/_(UPDATE|REJECT|CHECKOUT|ISSUE)$/.test(a)) return { bg: "#FEF3C7", fg: "#A16207" };
+    return { bg: "#E0E7FF", fg: "#4F46E5" };
+}
+const AUDIT_LOG_EXPORT_COLUMNS = [
+    { key: "created_at", label: "Date & Time", format: (v) => fmtDateTime(v) || "-" },
+    { key: "username", label: "User" },
+    { key: "role", label: "Role" },
+    { key: "action", label: "Action" },
+    { key: "entity_type", label: "Module" },
+    { key: "entity_id", label: "Record ID" },
+    { key: "site", label: "Site" },
+    { key: "details", label: "Description" },
+    { key: "ip_address", label: "IP Address" },
+    { key: "status", label: "Status" },
+];
+// Column set used for the per-column Excel-style value filter + click-to-sort
+// header on the Activity Logs table (reuses the same ListFilterHeader-family
+// utilities DC Activity/Material Movements/Asset Inventory already use).
+// Deliberately NO row-selection/bulk-delete here - an audit trail must never
+// be bulk-deletable.
+const ACTIVITY_LOG_LIST_COLUMNS = [
+    { key: "created_at", label: "Date & Time", format: (v) => fmtDateTime(v) || "-" },
+    { key: "username", label: "User" },
+    { key: "action", label: "Action" },
+    { key: "entity_type", label: "Module / Site", format: (v, row) => row.site ? `${v || "—"} (${row.site})` : (v || "—") },
+    { key: "details", label: "Description" },
+    { key: "ip_address", label: "IP Address", format: (v) => v || "—" },
+    { key: "status", label: "Status", format: (v) => v === "failure" ? "Failure" : "Success" },
+];
+// Settings > Activity Logs. Site-scoped like every other list (a Global Admin
+// sees every site automatically via the same backend helper everything else
+// uses). Restore is offered only to an Admin, and only on a *_DELETE row that
+// has a saved snapshot - the backend enforces both regardless of this UI.
+function ActivityLogsPanel({ isAdmin }) {
+    const [rows, setRows] = useState([]);
+    const [total, setTotal] = useState(0);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState("");
+    const [q, setQ] = useState("");
+    const [statusF, setStatusF] = useState("");
+    const [fromF, setFromF] = useState("");
+    const [toF, setToF] = useState("");
+    const [page, setPage] = useState(0);
+    const [restoringId, setRestoringId] = useState(null);
+    const [note, setNote] = useState(null);
+    const [columnFilters, setColumnFilters] = useState(() => makeEmptyListColumnFilters(ACTIVITY_LOG_LIST_COLUMNS));
+    const [openFilter, setOpenFilter] = useState(null);
+    const [sortKey, setSortKey] = useState(null);
+    const [sortDir, setSortDir] = useState(null);
+    const handleSort = (key) => {
+        if (sortKey !== key) { setSortKey(key); setSortDir("asc"); }
+        else if (sortDir === "asc") setSortDir("desc");
+        else { setSortKey(null); setSortDir(null); }
+    };
+    const pageSize = 25;
+    const buildParams = (p) => { const params = { limit: pageSize, offset: p * pageSize }; if (statusF) params.status = statusF; if (fromF) params.from = fromF; if (toF) params.to = toF; return params; };
+    const load = async (p) => {
+        setLoading(true); setError("");
+        try {
+            const r = await api.getAuditLogs(buildParams(p));
+            setRows(r.rows || []);
+            setTotal(r.total || 0);
+        }
+        catch (e) { setError(e.message || "Could not load activity logs"); }
+        finally { setLoading(false); }
+    };
+    useEffect(() => { setPage(0); load(0); }, [statusF, fromF, toF]);
+    useEffect(() => { load(page); }, [page]);
+    const filterRow = (r, needle) => [r.username, r.role, r.action, r.entity_type, r.entity_id, r.site, r.details, r.ip_address].some((v) => String(v || "").toLowerCase().includes(needle));
+    const searchedRows = useMemo(() => { const needle = q.trim().toLowerCase(); return needle ? rows.filter((r) => filterRow(r, needle)) : rows; }, [rows, q]);
+    const columnFilteredRows = useMemo(() => searchedRows.filter((row) => ACTIVITY_LOG_LIST_COLUMNS.every((col) => listColumnFilterMatches(columnFilters[col.key], col, row))), [searchedRows, columnFilters]);
+    const sortColumn = sortKey ? ACTIVITY_LOG_LIST_COLUMNS.find((c) => c.key === sortKey) : null;
+    const filteredRows = useMemo(() => sortColumn ? sortListRows(columnFilteredRows, sortColumn, sortDir) : columnFilteredRows, [columnFilteredRows, sortColumn, sortDir]);
+    const optionRowsForColumn = (key) => searchedRows.filter((row) => ACTIVITY_LOG_LIST_COLUMNS.every((col) => col.key === key || listColumnFilterMatches(columnFilters[col.key], col, row)));
+    const activeColumnFilterCount = countListColumnFilters(columnFilters);
+    const restore = async (row) => {
+        if (!confirm(`Restore this deleted ${String(row.entity_type || "record").replace(/_/g, " ")}${row.entity_id ? " (" + row.entity_id + ")" : ""}? It will be re-inserted exactly as it was.`))
+            return;
+        setRestoringId(row.id);
+        setNote(null);
+        try {
+            await api.restoreAuditLog(row.id);
+            setNote({ ok: true, text: "Restored successfully." });
+            load(page);
+        }
+        catch (e) { setNote({ ok: false, text: e.message || "Restore failed" }); }
+        finally { setRestoringId(null); }
+    };
+    const exportCsv = async () => {
+        try {
+            const r = await api.getAuditLogs({ ...buildParams(0), limit: 500 });
+            const needle = q.trim().toLowerCase();
+            const out = needle ? (r.rows || []).filter((row) => filterRow(row, needle)) : (r.rows || []);
+            exportToCSV(out, AUDIT_LOG_EXPORT_COLUMNS, `activity-logs-${backupStampLocal()}.csv`);
+        }
+        catch (e) { setNote({ ok: false, text: e.message || "Export failed" }); }
+    };
+    const pageCount = Math.max(1, Math.ceil(total / pageSize));
+    return React.createElement("div", { className: "neu-card", style: { padding: 24 } },
+        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 4, flexWrap: "wrap" } },
+            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#0F172A" } }, "Activity Logs"),
+            React.createElement("span", { style: { fontSize: 11, color: "#94A3B8" } }, `${total} record${total === 1 ? "" : "s"}`)),
+        React.createElement("div", { style: { fontSize: 11.5, color: "#64748B", marginBottom: 16, lineHeight: 1.5 } },
+            "Every create, update, approval and deletion across the app, with who did it and when. Kept for 6 months, then automatically cleared. ",
+            isAdmin ? "Deleted records with a saved snapshot can be restored." : "Only an Admin can restore a deleted record."),
+        React.createElement("div", { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16, alignItems: "center" } },
+            React.createElement("div", { className: "neu-pressed", style: { display: "flex", alignItems: "center", gap: 8, padding: "9px 14px", borderRadius: 12, flex: "1 1 220px", minWidth: 0 } },
+                React.createElement(Search, { s: 14, c: "#94A3B8" }),
+                React.createElement("input", { value: q, onChange: (e) => setQ(e.target.value), placeholder: "Search user, action, record, IP…", style: { border: "none", outline: "none", background: "transparent", fontSize: 12.5, flex: 1, minWidth: 0, color: "#0F172A" } })),
+            React.createElement(ThemedSelect, { value: statusF, onChange: (e) => setStatusF(e.target.value), className: "neu-input", style: { width: 140 } },
+                React.createElement("option", { value: "" }, "All status"),
+                React.createElement("option", { value: "success" }, "Success"),
+                React.createElement("option", { value: "failure" }, "Failure")),
+            React.createElement("input", { type: "date", value: fromF, onChange: (e) => setFromF(e.target.value), className: "neu-input", style: { width: 140, fontSize: 12 }, title: "From date" }),
+            React.createElement("input", { type: "date", value: toF, onChange: (e) => setToF(e.target.value), className: "neu-input", style: { width: 140, fontSize: 12 }, title: "To date" }),
+            activeColumnFilterCount > 0 && React.createElement("button", { onClick: () => setColumnFilters(makeEmptyListColumnFilters(ACTIVITY_LOG_LIST_COLUMNS)), className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "8px 11px" } },
+                "Clear column filters (",
+                activeColumnFilterCount,
+                ")"),
+            React.createElement("button", { onClick: exportCsv, className: "neu-btn-secondary", style: { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12 } },
+                React.createElement(Download, { s: 14, c: "#4F46E5" }), " Export CSV"),
+            React.createElement("button", { onClick: () => load(page), className: "neu-icon-btn", style: { width: 36, height: 36, borderRadius: 10 }, title: "Refresh" },
+                React.createElement(RefreshCw, { s: 14, c: "#64748B" }))),
+        note && React.createElement("div", { style: { marginBottom: 12, padding: "9px 12px", borderRadius: 10, fontSize: 12, background: note.ok ? "#F0FDF4" : "#FEF2F2", color: note.ok ? "#15803D" : "#B91C1C", border: `1px solid ${note.ok ? "#BBF7D0" : "#FECACA"}` } }, note.text),
+        error && React.createElement("div", { style: { marginBottom: 12, padding: "9px 12px", borderRadius: 10, fontSize: 12, background: "#FEF2F2", color: "#B91C1C", border: "1px solid #FECACA" } }, error),
+        React.createElement("div", { style: { overflowX: "auto" } },
+            React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12 } },
+                React.createElement("thead", null,
+                    React.createElement("tr", { style: { textAlign: "left", color: "#94A3B8", fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.4 } },
+                        ACTIVITY_LOG_LIST_COLUMNS.map((col) => React.createElement(SortableListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpenFilter: setOpenFilter, sortKey: sortKey, sortDir: sortDir, onSort: handleSort, style: { padding: "8px 10px", borderBottom: "1px solid #E2E8F0", whiteSpace: "nowrap" } })),
+                        React.createElement("th", { style: { padding: "8px 10px", borderBottom: "1px solid #E2E8F0", whiteSpace: "nowrap" } }, "Restore"))),
+                React.createElement("tbody", null, loading ? React.createElement("tr", null, React.createElement("td", { colSpan: 8, style: { padding: "30px 10px", textAlign: "center", color: "#94A3B8" } }, "Loading…")) :
+                    filteredRows.length === 0 ? React.createElement("tr", null, React.createElement("td", { colSpan: 8, style: { padding: "30px 10px", textAlign: "center", color: "#94A3B8" } }, "No activity found for these filters.")) :
+                        filteredRows.map((r) => {
+                            const chip = auditActionChip(r.action);
+                            const isDelete = /_DELETE$/.test(r.action || "");
+                            return React.createElement("tr", { key: r.id, style: { borderBottom: "1px solid #F1F5F9" } },
+                                React.createElement("td", { style: { padding: "9px 10px", whiteSpace: "nowrap", color: "#475569", fontFamily: "'JetBrains Mono'", fontSize: 11 } }, fmtDateTime(r.created_at) || "-"),
+                                React.createElement("td", { style: { padding: "9px 10px", whiteSpace: "nowrap" } },
+                                    React.createElement("div", { style: { color: "#0F172A", fontWeight: 600 } }, r.username || "—"),
+                                    r.role && React.createElement("div", { style: { fontSize: 10, color: "#94A3B8" } }, r.role)),
+                                React.createElement("td", { style: { padding: "9px 10px", whiteSpace: "nowrap" } },
+                                    React.createElement("span", { style: { background: chip.bg, color: chip.fg, fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 20 } }, r.action)),
+                                React.createElement("td", { style: { padding: "9px 10px", whiteSpace: "nowrap" } },
+                                    React.createElement("div", { style: { color: "#334155" } }, r.entity_type || "—"),
+                                    r.site && React.createElement("div", { style: { fontSize: 10, color: "#94A3B8" } }, r.site)),
+                                React.createElement("td", { style: { padding: "9px 10px", maxWidth: 260, color: "#475569" } }, r.details || "—"),
+                                React.createElement("td", { style: { padding: "9px 10px", whiteSpace: "nowrap", fontFamily: "'JetBrains Mono'", fontSize: 11, color: "#64748B" } }, r.ip_address || "—"),
+                                React.createElement("td", { style: { padding: "9px 10px", whiteSpace: "nowrap" } },
+                                    React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: r.status === "failure" ? "#B91C1C" : "#15803D" } },
+                                        React.createElement("span", { style: { width: 7, height: 7, borderRadius: "50%", background: auditStatusDot(r.status) } }),
+                                        r.status === "failure" ? "Failure" : "Success")),
+                                React.createElement("td", { style: { padding: "9px 10px", whiteSpace: "nowrap" } }, isAdmin && isDelete ? (r.has_snapshot ? React.createElement("button", { onClick: () => restore(r), disabled: restoringId === r.id, className: "neu-btn-secondary", style: { fontSize: 11, padding: "5px 10px", display: "inline-flex", alignItems: "center", gap: 5 } },
+                                    React.createElement(RefreshCw, { s: 12, c: "#4F46E5" }), restoringId === r.id ? "Restoring…" : "Restore") : React.createElement("span", { style: { fontSize: 10.5, color: "#CBD5E1" } }, "No snapshot")) : React.createElement("span", { style: { fontSize: 10.5, color: "#CBD5E1" } }, "—")));
+                        })))),
+        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 14, fontSize: 11.5, color: "#64748B" } },
+            React.createElement("span", null, `Page ${page + 1} of ${pageCount}`),
+            React.createElement("div", { style: { display: "flex", gap: 8 } },
+                React.createElement("button", { onClick: () => setPage((p) => Math.max(0, p - 1)), disabled: page === 0, className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "6px 12px" } }, "Previous"),
+                React.createElement("button", { onClick: () => setPage((p) => Math.min(pageCount - 1, p + 1)), disabled: page >= pageCount - 1, className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "6px 12px" } }, "Next"))),
+        openFilter && React.createElement(ValueListFilterPopup, { column: openFilter, currentFilter: columnFilters[openFilter.key], optionRows: optionRowsForColumn(openFilter.key), onApply: (value) => setColumnFilters((prev) => ({ ...prev, [openFilter.key]: value })), onClose: () => setOpenFilter(null) }));
+}
 function SettingsPage({ users, onRefresh, locations, currentUser, isAdmin, isGlobalAdmin, onChangePassword }) {
     const [section, setSection] = useState(isGlobalAdmin ? "users" : "account");
     const pill = (key, label) => React.createElement("button", { key: key, "data-settings-tab": key, onClick: () => setSection(key), className: `tab-pill ${section === key ? "active" : ""}`, style: { fontSize: 12.5 } }, label);
@@ -10477,17 +11773,22 @@ function SettingsPage({ users, onRefresh, locations, currentUser, isAdmin, isGlo
             React.createElement("div", { className: "neu-pressed", style: { display: "inline-flex", gap: 6, padding: 5, borderRadius: 40, marginLeft: "auto" } }, isGlobalAdmin ? React.createElement(React.Fragment, null,
                 pill("users", "Users"),
                 pill("backup", "Backup & Restore"),
+                pill("notifications", "Notifications"),
+                pill("logs", "Activity Logs"),
                 pill("license", "License")) : React.createElement(React.Fragment, null,
                 pill("account", "My account"),
-                pill("export", "Manual backup")))),
+                pill("export", "Manual backup"),
+                pill("logs", "Activity Logs")))),
         isGlobalAdmin && section === "users" && React.createElement(UserManagement, { users: users, onRefresh: onRefresh, canAdmin: true, locations: locations }),
         isGlobalAdmin && section === "backup" && React.createElement(BackupRestorePanel, null),
+        isGlobalAdmin && section === "notifications" && React.createElement(NotificationSettingsPanel, null),
         isGlobalAdmin && section === "license" && React.createElement(LicensePanel, null),
         section === "account" && React.createElement(MyAccountPanel, { currentUser: currentUser, onChangePassword: onChangePassword }),
-        !isGlobalAdmin && section === "export" && React.createElement(ScopedBackupPanel, { currentUser: currentUser }));
+        !isGlobalAdmin && section === "export" && React.createElement(ScopedBackupPanel, { currentUser: currentUser }),
+        section === "logs" && React.createElement(ActivityLogsPanel, { isAdmin: isAdmin }));
 }
 function UserEditModal({ user, locations, onClose, onSaved }) {
-    const [form, setForm] = useState({ name: (user === null || user === void 0 ? void 0 : user.name) || "", role: (user === null || user === void 0 ? void 0 : user.role) || "Viewer", location_access: (user === null || user === void 0 ? void 0 : user.location_access) || "All", status: (user === null || user === void 0 ? void 0 : user.status) || "Active" });
+    const [form, setForm] = useState({ name: (user === null || user === void 0 ? void 0 : user.name) || "", role: (user === null || user === void 0 ? void 0 : user.role) || "Viewer", location_access: (user === null || user === void 0 ? void 0 : user.location_access) || "All", status: (user === null || user === void 0 ? void 0 : user.status) || "Active", is_approver: !!Number(user === null || user === void 0 ? void 0 : user.is_approver) });
     const [error, setError] = useState("");
     const [saving, setSaving] = useState(false);
     const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -10543,7 +11844,11 @@ function UserEditModal({ user, locations, onClose, onSaved }) {
                 React.createElement(Field, { label: "Account status", style: { gridColumn: "1 / -1" } },
                     React.createElement(ThemedSelect, { value: form.status, onChange: (e) => set("status", e.target.value), className: "neu-input" },
                         React.createElement("option", null, "Active"),
-                        React.createElement("option", null, "Inactive")))),
+                        React.createElement("option", null, "Inactive"))),
+                React.createElement(Field, { label: "Approver", style: { gridColumn: "1 / -1" } },
+                    React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, fontFamily: "Inter", fontSize: 12.5, color: "#475569", cursor: "pointer" } },
+                        React.createElement("input", { type: "checkbox", checked: form.is_approver, onChange: (e) => set("is_approver", e.target.checked), style: { width: 15, height: 15, accentColor: "#6366F1", cursor: "pointer" } }),
+                        "Can approve requests (Visitor Access, Material Movement) for their own sites"))),
             error && React.createElement("div", { style: { color: "#B91C1C", fontSize: 12.5, marginTop: 12, background: "#FEF2F2", border: "1px solid #FECACA", padding: "9px 12px", borderRadius: 10 } }, error),
             React.createElement("div", { style: { marginTop: 18, padding: "10px 12px", borderRadius: 10, background: "#F8FAFC", color: "#64748B", fontFamily: "Inter", fontSize: 11.5, lineHeight: 1.5 } }, "Only a global Admin can create or remove locations. Location-scoped users remain restricted to their assigned location."),
             React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 } },
@@ -10555,7 +11860,7 @@ function UserManagement({ users, onRefresh, canAdmin, locations }) {
     const [editUser, setEditUser] = useState(null);
     const [pwdModalOpen, setPwdModalOpen] = useState(false);
     const [pwdTarget, setPwdTarget] = useState(null);
-    const [form, setForm] = useState({ username: "", password: "", name: "", role: "Viewer", location_access: "All" });
+    const [form, setForm] = useState({ username: "", password: "", name: "", role: "Viewer", location_access: "All", is_approver: false });
     const [error, setError] = useState("");
     const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
     const locationNames = (locations || []).filter(l => (l.status || "Active") !== "Archived").map((l) => l.name);
@@ -10568,7 +11873,7 @@ function UserManagement({ users, onRefresh, canAdmin, locations }) {
         setError("");
         await api.createUser(form);
         setModalOpen(false);
-        setForm({ username: "", password: "", name: "", role: "Viewer", location_access: "All" });
+        setForm({ username: "", password: "", name: "", role: "Viewer", location_access: "All", is_approver: false });
         onRefresh();
     }
     catch (e) {
@@ -10585,6 +11890,7 @@ function UserManagement({ users, onRefresh, canAdmin, locations }) {
     const roleColor = { Admin: "#DC2626", Operator: "#D97706", Viewer: "#0891B2" };
     const USER_COLUMNS = [
         { key: "username", label: "Username" }, { key: "name", label: "Name" }, { key: "role", label: "Role" },
+        { key: "is_approver", label: "Approver", format: (v) => Number(v) ? "Yes" : "No" },
         { key: "location_access", label: "Location Access" }, { key: "status", label: "Status" },
         { key: "_online", label: "Online", format: (v, row) => row.isOnline ? "Online" : "Offline" },
         { key: "created_at", label: "Created", format: (v) => v ? new Date(v).toLocaleDateString() : "" }
@@ -10618,6 +11924,8 @@ function UserManagement({ users, onRefresh, canAdmin, locations }) {
                     React.createElement("td", { style: { padding: "11px 14px", borderBottom: "0.5px solid rgba(163,177,198,0.25)", fontFamily: "Inter", fontSize: 12, color: "#1E293B" } }, u.name),
                     React.createElement("td", { style: { padding: "11px 14px", borderBottom: "0.5px solid rgba(163,177,198,0.25)" } },
                         React.createElement("span", { className: "neu-badge", style: { color: roleColor[u.role] || "#475569", background: (roleColor[u.role] || "#475569") + "12" } }, u.role)),
+                    React.createElement("td", { style: { padding: "11px 14px", borderBottom: "0.5px solid rgba(163,177,198,0.25)" } },
+                        Number(u.is_approver) ? React.createElement("span", { className: "neu-badge", style: { color: "#4F46E5", background: "rgba(79,70,229,0.08)" } }, "Yes") : React.createElement("span", { style: { fontFamily: "Inter", fontSize: 12, color: "#94A3B8" } }, "No")),
                     React.createElement("td", { style: { padding: "11px 14px", borderBottom: "0.5px solid rgba(163,177,198,0.25)", fontFamily: "Inter", fontSize: 12, color: "#475569" } }, u.location_access),
                     React.createElement("td", { style: { padding: "11px 14px", borderBottom: "0.5px solid rgba(163,177,198,0.25)" } },
                         React.createElement("span", { className: "neu-badge", style: { color: u.status === "Active" ? "#059669" : "#64748B", background: u.status === "Active" ? "rgba(5,150,105,0.08)" : "transparent" } }, u.status)),
@@ -10657,7 +11965,11 @@ function UserManagement({ users, onRefresh, canAdmin, locations }) {
                             React.createElement("option", { value: "All" }, "All locations"),
                             locationNames.map((n) => React.createElement("option", { key: n, value: n },
                                 n,
-                                " only"))))),
+                                " only")))),
+                    React.createElement(Field, { label: "Approver", style: { gridColumn: "1 / -1" } },
+                        React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, fontFamily: "Inter", fontSize: 12.5, color: "#475569", cursor: "pointer" } },
+                            React.createElement("input", { type: "checkbox", checked: form.is_approver, onChange: (e) => set("is_approver", e.target.checked), style: { width: 15, height: 15, accentColor: "#6366F1", cursor: "pointer" } }),
+                            "Can approve requests (Visitor Access, Material Movement) for their own sites"))),
                 error && React.createElement("div", { style: { color: "#DC2626", fontSize: 13, marginTop: 12, background: "rgba(220,38,38,0.08)", padding: "8px 12px", borderRadius: 10 } }, error),
                 React.createElement("button", { onClick: handleCreate, className: "neu-btn-primary", style: { width: "100%", marginTop: 18, padding: "12px 0", fontSize: 14 } }, "Create user"))),
         editUser && React.createElement(UserEditModal, { user: editUser, locations: locations, onClose: () => setEditUser(null), onSaved: onRefresh }),
@@ -11430,7 +12742,12 @@ function DashPowerStatus() {
                             React.createElement("b", null, st.site),
                             React.createElement("small", null, rep ? `${servers(st.total)} · ${st.zonesReported} of ${st.zonesConfigured} zone${st.zonesConfigured === 1 ? "" : "s"} reporting` : "Not synced yet"))),
                     rep ? [chip(st.on, "on", "a"), chip(st.off, "off", "b"), chip(st.unknown, "unk", "c")] : React.createElement("span", { className: "pws-ns" }, "No cached data yet"));
-            }));
+            }),
+            sites.length === 1 ? React.createElement("div", { className: "dz-list", "data-dz": "pws" },
+                React.createElement("div", { className: "dz-h" }, "By zone"),
+                (() => { const m = new Map(); (sites[0].zones || []).forEach((z) => { const e = m.get(z.zone) || { zone: z.zone, on: 0, off: 0, unknown: 0, reported: false }; if (z.reported) { e.reported = true; e.on += z.on || 0; e.off += z.off || 0; e.unknown += z.unknown || 0; } m.set(z.zone, e); }); return [...m.values()].sort((a, b) => String(a.zone).localeCompare(String(b.zone), undefined, { numeric: true })); })().map((z, i) => React.createElement("div", { key: z.zone + i, className: "dz-row dz-pws", "data-dz": "row", style: { "--lc": colorOf(sites[0]) } },
+                    React.createElement("span", { className: "dz-n" }, z.zone),
+                    z.reported ? [chip(z.on, "on", "a"), chip(z.off, "off", "b"), chip(z.unknown, "unk", "c")] : React.createElement("span", { className: "pws-ns", style: { gridColumn: "2 / 5" } }, "Not synced yet")))) : null);
     }
     const detailsBtn = sites.length ? React.createElement("button", { type: "button", className: "pws-more", "data-pws": "open", onClick: () => open("All") }, "Details ›") : null;
     let modal = null;
@@ -11462,6 +12779,144 @@ function DashPowerStatus() {
     }
     return React.createElement(React.Fragment, null,
         React.createElement(DashCard, { title: "Server Power Status", sub: sub, className: "dash-power-card", action: detailsBtn }, body),
+        modal);
+}
+// ---- Server Power Consumption (main dashboard module, next to Server Power Status) ---------------------------------
+(function injectSpcStyle() {
+    if (typeof document === "undefined" || document.getElementById("spc-style")) return;
+    const st = document.createElement("style");
+    st.id = "spc-style";
+    st.textContent = ".dash-pair.dash-quad{grid-template-columns:330px 340px minmax(0,1fr) 400px}.dash-pair.dash-quad>*:nth-child(3) .sample-card-title,.dash-pair.dash-quad>*:nth-child(4) .sample-card-title{white-space:nowrap}@media (max-width:1380px){.dash-pair.dash-quad{grid-template-columns:repeat(2,minmax(0,1fr))}}@media (max-width:900px){.dash-pair.dash-quad{grid-template-columns:1fr}}"
+        + ".spc-list{display:flex;flex-direction:column;gap:9px}.spc-lr{--c:#3157EE;--t:rgba(49,87,238,.09);padding:11px 13px;border-radius:14px;cursor:pointer;background:linear-gradient(145deg,rgba(255,255,255,.95),var(--t));border:1px solid rgba(255,255,255,.85);border-left:5px solid var(--c);box-shadow:0 3px 10px rgba(34,48,70,.07);transition:transform .18s ease,box-shadow .18s ease}.spc-lr:hover{transform:translateX(3px);box-shadow:0 5px 14px rgba(34,48,70,.13)}.spc-lr:focus-visible{outline:2px solid #3157EE;outline-offset:2px}"
+        + ".spc-nm{font:800 11.5px Inter,sans-serif;color:var(--c);margin-bottom:5px;display:flex;justify-content:space-between;gap:8px}.spc-nm small{font-weight:600;color:#94A3B8}.spc-big{font:800 19px 'Space Grotesk',sans-serif;color:#17345D}.spc-big span{font-size:12px;color:#94A3B8;font-weight:600}"
+        + ".spc-bar{display:flex;align-items:center;gap:7px;margin-top:7px}.spc-trk{flex:1;height:6px;border-radius:5px;background:rgba(148,163,184,.25);overflow:hidden}.spc-trk i{display:block;height:100%;border-radius:5px}.spc-pc{font:800 12px 'Space Grotesk',sans-serif}.spc-sub{font:500 10.5px Inter,sans-serif;color:#94A3B8;margin-top:5px}"
+        + ".spc-ov{position:fixed;inset:0;z-index:3000;background:rgba(14,18,28,.45);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;padding:16px}.spc-win{background:rgba(255,255,255,.97);border:1px solid rgba(148,163,184,.19);border-radius:20px;box-shadow:9px 10px 30px rgba(15,23,42,.22);width:min(1120px,100%);max-height:92vh;overflow:auto;padding:22px;font-family:Inter,sans-serif;color:#1E293B}"
+        + ".spc-wh{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px}.spc-wh h2{margin:0;font:800 20px 'Space Grotesk',sans-serif;color:#17345D}.spc-wh p{margin:3px 0 0;font-size:12px;color:#64748B}.spc-x{border:none;border-radius:999px;padding:8px 16px;font:700 12px Inter,sans-serif;color:#334155;cursor:pointer;background:linear-gradient(145deg,#fff,#e6edf6);box-shadow:4px 5px 10px rgba(34,48,70,.14),-3px -3px 8px #fff}"
+        + ".spc-seg{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}.spc-seg button{border:1px solid rgba(148,163,184,.3);background:#fff;border-radius:999px;padding:6px 13px;font:700 11.5px Inter,sans-serif;color:#475569;cursor:pointer}.spc-seg button.on{background:#3157EE;border-color:#3157EE;color:#fff}"
+        + ".spc-kp{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}@media (max-width:760px){.spc-kp{grid-template-columns:repeat(2,minmax(0,1fr))}}.spc-k{padding:12px 14px;border-radius:14px;background:linear-gradient(145deg,rgba(255,255,255,.95),rgba(231,237,246,.9));border:1px solid rgba(255,255,255,.85);box-shadow:0 3px 10px rgba(34,48,70,.07)}.spc-k small{display:block;font:700 10.5px Inter,sans-serif;color:#64748B}.spc-k b{font:800 22px 'Space Grotesk',sans-serif;color:#17345D}"
+        + ".spc-loc{--c:#3157EE;--t:rgba(49,87,238,.08);border:1px solid rgba(148,163,184,.22);border-left:6px solid var(--c);border-radius:16px;padding:14px;margin-bottom:14px;background:linear-gradient(180deg,var(--t),#fff 90px)}.spc-lh{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}.spc-lh b{font:800 15px 'Space Grotesk',sans-serif;color:var(--c)}.spc-lh span{font:600 12px Inter,sans-serif;color:#64748B}"
+        + ".spc-tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}.spc-tools input,.spc-tools select{font:500 12px Inter,sans-serif;padding:6px 10px;border-radius:10px;border:1px solid rgba(148,163,184,.35);background:#F8FAFC;color:#1E293B}"
+        + ".spc-h{font:800 10.5px Inter,sans-serif;letter-spacing:.8px;text-transform:uppercase;color:var(--c,#64748B);margin:12px 0 4px}.spc-tw{overflow-x:auto}.spc-t{min-width:640px}.spc-tr{display:grid;gap:8px;align-items:center;padding:8px 10px;border-radius:10px;font:500 12px Inter,sans-serif}.spc-tr:nth-child(even){background:rgba(241,245,249,.7)}.spc-th{font:800 10.5px Inter,sans-serif;color:#64748B;text-transform:uppercase;letter-spacing:.6px;background:transparent!important}.spc-th button{all:unset;cursor:pointer;display:inline-flex;gap:3px;align-items:center}.spc-th button:hover{color:#3157EE}"
+        + ".spc-k-load{background:linear-gradient(145deg,#EAF0FF,#D6E1FF);border-color:rgba(49,87,238,.28)}.spc-k-load b{color:#2243C4}.spc-k-cap{background:linear-gradient(145deg,#F1EAFF,#E2D6FF);border-color:rgba(124,58,237,.28)}.spc-k-cap b{color:#5B21B6}.spc-k-util{background:linear-gradient(145deg,#E2F7F3,#CBEEE8);border-color:rgba(13,148,136,.28)}.spc-k-util b{color:#0B6F66}.spc-k-rep{background:linear-gradient(145deg,#FFF1E0,#FFE2C2);border-color:rgba(234,122,12,.3)}.spc-k-rep b{color:#B45309}.dz-list{margin-top:10px;display:flex;flex-direction:column;gap:5px}.dz-h{font:800 10px Inter,sans-serif;letter-spacing:.8px;text-transform:uppercase;color:#64748B;margin-bottom:1px}.dz-row{display:grid;align-items:center;gap:8px;padding:6px 10px;border-radius:10px;background:rgba(255,255,255,.62);border:1px solid rgba(148,163,184,.18)}.dz-pws{grid-template-columns:minmax(0,1fr) auto auto auto}.dz-spc{grid-template-columns:36px 128px minmax(0,1fr)}.dz-n{font:800 11.5px Inter,sans-serif;color:#17345D}.dz-v{font:800 12px 'Space Grotesk',sans-serif;color:#17345D;white-space:nowrap}.dz-v small{font:600 10px Inter,sans-serif;color:#94A3B8}.dz-mk{grid-template-columns:90px minmax(0,1fr) 62px}.sample-grid-bottom .hw-hbar-chart{min-height:170px;justify-content:space-evenly}.dz-na{font:500 10.5px Inter,sans-serif;color:#94A3B8}.sample-grid-bottom>.sample-card{min-height:0!important;height:auto!important}.pws-lr{box-shadow:0 5px 14px rgba(34,48,70,.14),0 1px 0 rgba(255,255,255,.85) inset!important}.pws-lr:hover{transform:translateY(-2px);box-shadow:0 9px 20px rgba(34,48,70,.2)!important}.pws-lr .pws-ch,.dz-pws .pws-ch{background:linear-gradient(145deg,#fff,#e8eef7)!important;box-shadow:3px 4px 8px rgba(34,48,70,.15),-2px -2px 6px rgba(255,255,255,.95)!important}.pws-lr .pws-tile{box-shadow:0 4px 10px color-mix(in srgb,var(--lc) 45%,transparent),inset 0 1px 0 rgba(255,255,255,.35)}.dz-pws{box-shadow:0 4px 11px rgba(34,48,70,.11)!important}.spc-sync{color:#3157EE!important}.spc-sync:disabled{opacity:.6;cursor:default}.spc-mono{font-family:'JetBrains Mono',monospace;font-size:11.5px}.spc-chip{display:inline-block;padding:2px 9px;border-radius:999px;font:800 10.5px Inter,sans-serif}.spc-empty{padding:14px;color:#64748B;font-size:12.5px}";
+    document.head.appendChild(st);
+})();
+const spcColor = (pct) => (pct == null ? "#94A3B8" : pct >= 85 ? "#DC2626" : pct >= 70 ? "#EA7A0C" : "#059669");
+const SPC_ACC = [["#3157EE", "rgba(49,87,238,.09)"], ["#0D9488", "rgba(13,148,136,.10)"], ["#7C3AED", "rgba(124,58,237,.09)"], ["#EA7A0C", "rgba(234,122,12,.10)"]];
+const spcAccent = (i) => { const a = SPC_ACC[(i < 0 ? 0 : i) % SPC_ACC.length]; return { "--c": a[0], "--t": a[1] }; };
+const spcFmt = (w) => (w == null ? "—" : w >= 1000 ? `${(w / 1000).toFixed(1)} kW` : `${Math.round(w)} W`);
+const spcStatusStyle = (s) => (s === "Critical" ? { background: "rgba(220,38,38,.12)", color: "#DC2626" } : s === "High" ? { background: "rgba(234,122,12,.14)", color: "#B45309" } : s === "Normal" ? { background: "rgba(5,150,105,.12)", color: "#059669" } : { background: "rgba(100,116,139,.14)", color: "#64748B" });
+function DashServerPower() {
+    const [data, setData] = useState(null);
+    const [err, setErr] = useState("");
+    const [view, setView] = useState(null);           // null = closed, otherwise { site: "All" | site }
+    const [zoneQ, setZoneQ] = useState("");
+    const [zoneSort, setZoneSort] = useState({ key: "loadWatts", dir: -1 });
+    const [srvQ, setSrvQ] = useState("");
+    const [srvStatus, setSrvStatus] = useState("all");
+    const [srvSort, setSrvSort] = useState({ key: "watts", dir: -1 });
+    const sigRef = useRef("");
+    const [syncing, setSyncing] = useState(false);
+    const [syncMsg, setSyncMsg] = useState("");
+    const syncNow = () => {
+        if (syncing) return;
+        setSyncing(true); setSyncMsg("");
+        api.getServerPowerConsumption().then((r) => {
+            sigRef.current = JSON.stringify(r); setData(r); setErr("");
+            setSyncMsg(`Updated from latest saved sync data · ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`);
+        }).catch((e) => setSyncMsg("Could not refresh: " + (e.message || e))).finally(() => { setSyncing(false); setTimeout(() => setSyncMsg(""), 9000); });
+    };
+    useEffect(() => {
+        let alive = true;
+        // Database read of values the 30-minute sync already saved - no appliance call, so a 2-minute refresh is plenty.
+        const load = () => api.getServerPowerConsumption().then((r) => {
+            if (!alive) return;
+            const sig = JSON.stringify(r);
+            if (sig !== sigRef.current) { sigRef.current = sig; setData(r); }
+            setErr("");
+        }).catch((e) => { if (alive) setErr(e.message || String(e)); });
+        load();
+        const t = setInterval(load, 120000);
+        return () => { alive = false; clearInterval(t); };
+    }, []);
+    useEffect(() => {
+        if (!view) return;
+        const h = (e) => { if (e.key === "Escape") { e.stopImmediatePropagation(); setView(null); } };
+        window.addEventListener("keydown", h, true);
+        return () => window.removeEventListener("keydown", h, true);
+    }, [view]);
+    const hhmm = (ts) => { try { return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch (e) { return ""; } };
+    const note = (t) => React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#64748B" } }, t);
+    const sites = data && data.anyData ? data.sites : [];
+    const open = (site) => { setZoneQ(""); setSrvQ(""); setSrvStatus("all"); setView({ site }); };
+    const onKey = (site) => (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(site); } };
+    const sortRows = (rows, s) => rows.slice().sort((a, b) => { const x = a[s.key], y = b[s.key]; if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return (typeof x === "string" ? x.localeCompare(y, undefined, { numeric: true }) : x - y) * s.dir; });
+    const th = (label, key, st, setSt) => React.createElement("span", { key }, React.createElement("button", { type: "button", onClick: () => setSt({ key, dir: st.key === key ? -st.dir : (key === "zone" || key === "name" || key === "label" ? 1 : -1) }) }, label, st.key === key ? (st.dir === 1 ? " ▲" : " ▼") : ""));
+    const bar = (pct) => React.createElement("div", { className: "spc-bar", style: { marginTop: 0 } }, React.createElement("div", { className: "spc-trk" }, React.createElement("i", { style: { width: `${Math.min(100, pct || 0)}%`, background: spcColor(pct) } })), React.createElement("span", { className: "spc-pc", style: { color: spcColor(pct) } }, pct == null ? "—" : `${pct}%`));
+    let body;
+    if (err && !data) body = note("Server power consumption is not available right now.");
+    else if (!data) body = note("Loading…");
+    else if (!sites.length) body = note("No server power readings yet. They appear after the next Dell OME / HPE OneView sync.");
+    else body = React.createElement("div", { className: "spc-list", "data-spc": "list" }, sites.map((st, si) => React.createElement("div", { key: st.site, className: "spc-lr", style: spcAccent(si), role: "button", tabIndex: 0, "data-spc": "loc", title: `${st.site}: open zone and top-5 server details`, onClick: () => open(st.site), onKeyDown: onKey(st.site) },
+        React.createElement("div", { className: "spc-nm" }, React.createElement("span", null, st.site), React.createElement("small", null, `${st.serversReporting} of ${st.serversMonitored} reporting`)),
+        React.createElement("div", { className: "spc-big" }, spcFmt(st.loadWatts), st.capacityWatts ? React.createElement("span", null, ` / ${spcFmt(st.capacityWatts)}`) : null),
+        st.pct != null ? bar(st.pct) : React.createElement("div", { className: "spc-sub" }, "PSU rating not reported yet"),
+        React.createElement("div", { className: "spc-sub" }, `${st.serversOn} server${st.serversOn === 1 ? "" : "s"} drawing power`))),
+        sites.length === 1 ? React.createElement("div", { className: "dz-list", "data-dz": "spc" },
+            React.createElement("div", { className: "dz-h" }, "By zone"),
+            (sites[0].zones || []).map((z) => React.createElement("div", { key: z.zone, className: "dz-row dz-spc", "data-dz": "row" },
+                React.createElement("span", { className: "dz-n" }, z.zone),
+                React.createElement("span", { className: "dz-v" }, spcFmt(z.loadWatts), z.capacityWatts ? React.createElement("small", null, ` / ${spcFmt(z.capacityWatts)}`) : null),
+                z.pct != null ? bar(z.pct) : React.createElement("span", { className: "dz-na" }, "No PSU rating")))) : null);
+    const detailsBtn = sites.length ? React.createElement("button", { type: "button", className: "pws-more", "data-spc": "open", onClick: () => open("All") }, "Details ›") : null;
+    let modal = null;
+    if (view && data) {
+        const pick = sites.filter((st) => view.site === "All" || st.site === view.site);
+        const T = pick.reduce((a, st) => ({ load: a.load + st.loadWatts, cap: a.cap + st.capacityWatts, rep: a.rep + st.serversReporting, mon: a.mon + st.serversMonitored, lc: a.lc + (st.pct != null ? Math.round(st.loadWatts) : 0) }), { load: 0, cap: 0, rep: 0, mon: 0, lc: 0 });
+        const totalPct = T.cap > 0 ? Math.round((pick.reduce((a, st) => a + (st.pct != null ? (st.pct / 100) * st.capacityWatts : 0), 0) / T.cap) * 100) : null;
+        const kp = (l, v, tone) => React.createElement("div", { className: `spc-k spc-k-${tone}` }, React.createElement("small", null, l), React.createElement("b", null, v));
+        const zq = zoneQ.trim().toLowerCase(), sq = srvQ.trim().toLowerCase();
+        modal = ReactDOM.createPortal(React.createElement("div", { className: "spc-ov", "data-spc": "modal", role: "dialog", "aria-modal": "true", "aria-label": "Server power consumption by location and zone", onMouseDown: (e) => { if (e.target === e.currentTarget) setView(null); } },
+            React.createElement("div", { className: "spc-win" },
+                React.createElement("div", { className: "spc-wh" },
+                    React.createElement("div", null, React.createElement("h2", null, "Server Power Consumption"), React.createElement("p", null, "Current load vs PSU rating by location and zone, and the top 10 servers per location" + (data.lastRunAt ? ` · last 30-min sync ${hhmm(data.lastRunAt)}` : ""))),
+                    React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexShrink: 0 } },
+                        React.createElement("button", { type: "button", className: "spc-x spc-sync", "data-spc": "sync", disabled: syncing, onClick: syncNow, title: "Refresh the figures from the latest Dell OME / HPE OneView data already saved (no appliance call)" }, syncing ? "Syncing…" : "Sync"),
+                        React.createElement("button", { type: "button", className: "spc-x", "data-spc": "close", onClick: () => setView(null) }, "Close"))),
+                syncMsg ? React.createElement("div", { "data-spc": "sync-msg", style: { margin: "-6px 0 10px", font: "600 11.5px Inter,sans-serif", color: syncMsg.startsWith("Could") ? "#B45309" : "#059669" } }, syncMsg) : null,
+                React.createElement("div", { className: "spc-seg" }, [["All", "All locations"]].concat(sites.map((st) => [st.site, st.site])).map(([v, l]) => React.createElement("button", { key: v, type: "button", className: view.site === v ? "on" : "", onClick: () => setView({ site: v }) }, l))),
+                React.createElement("div", { className: "spc-kp" }, kp("Total current load", spcFmt(T.load), "load"), kp("PSU capacity (1 PSU per server)", spcFmt(T.cap || null), "cap"), kp("Utilization", totalPct == null ? "—" : `${totalPct}%`, "util"), kp("Servers reporting", `${T.rep} / ${T.mon}`, "rep")),
+                React.createElement("div", { className: "spc-tools" },
+                    React.createElement("input", { type: "search", placeholder: "Filter zones…", value: zoneQ, onChange: (e) => setZoneQ(e.target.value), "aria-label": "Filter zones" }),
+                    React.createElement("input", { type: "search", placeholder: "Filter servers (name, serial, rack, model)…", value: srvQ, onChange: (e) => setSrvQ(e.target.value), "aria-label": "Filter top servers", style: { minWidth: 240 } }),
+                    React.createElement("select", { value: srvStatus, onChange: (e) => setSrvStatus(e.target.value), "aria-label": "Filter servers by status" }, [["all", "All statuses"], ["Critical", "Critical (85%+)"], ["High", "High (70–84%)"], ["Normal", "Normal"], ["Off", "Off"]].map(([v, l]) => React.createElement("option", { key: v, value: v }, l)))),
+                pick.map((st) => {
+                    const zones = sortRows(st.zones.filter((z) => !zq || String(z.zone).toLowerCase().includes(zq)), zoneSort);
+                    const servers = sortRows(st.top.map((r) => ({ ...r, label: [r.make, r.serial].filter(Boolean).join(" - ") || r.name })).filter((r) => (srvStatus === "all" || r.status === srvStatus) && (!sq || [r.name, r.serial, r.rack, r.model, r.make, r.zone].some((x) => String(x || "").toLowerCase().includes(sq)))), srvSort);
+                    const zcols = "minmax(90px,1.2fr) 80px 110px 120px minmax(150px,1.6fr)";
+                    const scols = "34px minmax(150px,1.6fr) 90px 70px 90px 100px minmax(140px,1.4fr) 84px 70px";
+                    return React.createElement("div", { key: st.site, className: "spc-loc", style: spcAccent(sites.indexOf(st)), "data-spc": "block" },
+                        React.createElement("div", { className: "spc-lh" }, React.createElement("b", null, st.site), React.createElement("span", null, `${spcFmt(st.loadWatts)}${st.capacityWatts ? ` of ${spcFmt(st.capacityWatts)}` : ""}${st.pct != null ? ` · ${st.pct}%` : ""} · ${st.serversReporting} of ${st.serversMonitored} servers reporting${st.asOf ? ` · oldest reading ${hhmm(st.asOf)}` : ""}`)),
+                        React.createElement("div", { className: "spc-h" }, "Zone breakdown"),
+                        React.createElement("div", { className: "spc-tw" }, React.createElement("div", { className: "spc-t" },
+                            React.createElement("div", { className: "spc-tr spc-th", style: { gridTemplateColumns: zcols } }, th("Zone", "zone", zoneSort, setZoneSort), th("Servers", "servers", zoneSort, setZoneSort), th("Load", "loadWatts", zoneSort, setZoneSort), th("PSU capacity", "capacityWatts", zoneSort, setZoneSort), th("Utilization", "pct", zoneSort, setZoneSort)),
+                            zones.length ? zones.map((z) => React.createElement("div", { key: z.zone, className: "spc-tr", "data-spc": "zone", style: { gridTemplateColumns: zcols } },
+                                React.createElement("b", null, z.zone), React.createElement("span", null, `${z.reporting}/${z.servers}`), React.createElement("span", { className: "spc-mono" }, spcFmt(z.loadWatts)), React.createElement("span", { className: "spc-mono" }, spcFmt(z.capacityWatts || null)), bar(z.pct)))
+                                : React.createElement("div", { className: "spc-empty" }, "No zones match the filter."))),
+                        React.createElement("div", { className: "spc-h" }, "Top 10 servers by power consumption"),
+                        React.createElement("div", { className: "spc-tw" }, React.createElement("div", { className: "spc-t", style: { minWidth: 860 } },
+                            React.createElement("div", { className: "spc-tr spc-th", style: { gridTemplateColumns: scols } }, React.createElement("span", null, "#"), th("Server", "label", srvSort, setSrvSort), th("Zone / Rack", "zone", srvSort, setSrvSort), th("Source", "source", srvSort, setSrvSort), th("Current load", "watts", srvSort, setSrvSort), th("PSU max", "maxWatts", srvSort, setSrvSort), th("Utilization", "pct", srvSort, setSrvSort), th("Status", "status", srvSort, setSrvSort), React.createElement("span", null, "Model")),
+                            servers.length ? servers.map((r, i) => React.createElement("div", { key: r.id, className: "spc-tr", "data-spc": "server", style: { gridTemplateColumns: scols } },
+                                React.createElement("span", { style: { color: "#94A3B8", fontWeight: 700 } }, i + 1),
+                                React.createElement("span", { style: { minWidth: 0 } }, React.createElement("b", { style: { display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: `${r.label}${r.name && r.name !== r.serial ? ` (${r.name})` : ""}` }, r.label)),
+                                React.createElement("span", null, `${r.zone || "-"}${r.rack ? ` / ${r.rack}` : ""}`), React.createElement("span", null, r.source || "—"),
+                                React.createElement("span", { className: "spc-mono", style: { fontWeight: 700 } }, spcFmt(r.watts)), React.createElement("span", { className: "spc-mono" }, spcFmt(r.maxWatts)), bar(r.pct),
+                                React.createElement("span", null, React.createElement("span", { className: "spc-chip", style: spcStatusStyle(r.status) }, r.status || "—")),
+                                React.createElement("span", { style: { fontSize: 11, color: "#64748B", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: r.model || "" }, r.model || "—")))
+                                : React.createElement("div", { className: "spc-empty" }, "No servers match the filter."))));
+                }))), document.body);
+    }
+    return React.createElement(React.Fragment, null,
+        React.createElement(DashCard, { title: "Server Power Consumption", sub: data && data.lastRunAt ? `Load vs PSU rating · last sync ${hhmm(data.lastRunAt)}` : "Load vs PSU rating", className: "dash-power-card", action: detailsBtn }, body),
         modal);
 }
 function DashDeviceCounts({ assets = [], sites = [] }) {
@@ -11525,7 +12980,7 @@ function DashDeviceCounts({ assets = [], sites = [] }) {
         React.createElement("button", { onClick: () => setOpen((o) => !o), className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px" }, title: "Choose which hardware types are counted" }, "Modify"),
         popover);
     return React.createElement(DashCard, { title: "Server Count", sub: sub, className: "dash-count-card" + (open ? " dash-count-open" : ""), action: action },
-        React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4, flex: 1, justifyContent: "space-around" } }, siteList.map((st, i) => {
+        React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4, flex: 1, justifyContent: siteList.length > 1 ? "space-around" : "flex-start", gap: siteList.length > 1 ? 4 : 8 } }, siteList.map((st, i) => {
             const zones = Object.keys(tree[st] || {}).sort();
             const n = zones.reduce((x, z) => x + zoneTotal(st, z), 0);
             const sm = siteMakes(st);
@@ -11544,7 +12999,13 @@ function DashDeviceCounts({ assets = [], sites = [] }) {
                         React.createElement("b", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#1E293B", textAlign: "right", fontVariantNumeric: "tabular-nums" } }, zt.toLocaleString()));
                 }),
                 !zones.length && React.createElement("div", { style: { paddingLeft: 10, fontFamily: "Inter", fontSize: 10.5, color: "#64748B" } }, "No servers"));
-        })));
+        }),
+        siteList.length === 1 && total > 0 ? React.createElement("div", { className: "dz-list", "data-dz": "count", style: { marginTop: 14 } },
+            React.createElement("div", { className: "dz-h" }, "By make"),
+            makeList.map((m) => React.createElement("div", { key: m, className: "dz-row dz-mk" },
+                React.createElement("span", { className: "dz-n", style: { display: "inline-flex", alignItems: "center", gap: 6 } }, React.createElement("i", { style: { width: 9, height: 9, borderRadius: 3, background: dashMakeColor(m), display: "inline-block" } }), m),
+                React.createElement("div", { className: "spc-trk" }, React.createElement("i", { style: { display: "block", height: "100%", borderRadius: 5, width: `${Math.round(allMakes[m] * 100 / total)}%`, background: dashMakeColor(m) } })),
+                React.createElement("b", { className: "dz-v" }, allMakes[m].toLocaleString(), React.createElement("small", null, ` · ${Math.round(allMakes[m] * 100 / total)}%`))))) : null));
 }
 // ---- Firmware Compliance (read-only) -------------------------------------------------------------------------------
 // Shows only what Dell OME (Dell servers) and HPE OneView (HPE servers) themselves report. The 30-minute auto-sync stores their
@@ -11619,6 +13080,18 @@ function DashFirmwareCompliance({ assets = [] }) {
     const [sel, setSelRaw] = useState(() => { try { const v = JSON.parse(localStorage.getItem("dashFwcTypes")); return Array.isArray(v) ? v : null; } catch (e) { return null; } });   // null = every hardware type; otherwise the ticked types (remembered in this browser)
     const setSel = (v) => { setSelRaw(v); try { if (v === null) localStorage.removeItem("dashFwcTypes"); else localStorage.setItem("dashFwcTypes", JSON.stringify(v)); } catch (e) { /* storage blocked */ } };
     const [pickOpen, setPickOpen] = useState(false); // lifts the card above the ones below while the list is open
+    const [syncing, setSyncing] = useState(false);
+    const [syncMsg, setSyncMsg] = useState(null);   // { ok, text } shown for a few seconds after a manual Sync
+    const syncNow = () => {
+        if (syncing) return;
+        setSyncing(true); setSyncMsg(null);
+        api.syncFirmwareCompliance().then((r) => {
+            if (r && r.data) { setData(r.data); setErr(null); }
+            const u = r ? r.updated : 0, n = r ? r.noCache : 0;
+            setSyncMsg({ ok: n === 0, text: `Updated from latest cache \u00B7 ${u} zone${u === 1 ? "" : "s"}` + (n ? ` \u00B7 ${n} not synced yet (use Monitoring \u203A Sync)` : "") });
+        }).catch((e) => setSyncMsg({ ok: false, text: (e && e.status === 404) ? "The server does not have this update yet. Copy the latest server.js and restart." : `Sync failed (${(e && e.message) || "error"})` }))
+            .finally(() => { setSyncing(false); setTimeout(() => setSyncMsg(null), 9000); });
+    };
     const [allTypes, setAllTypes] = useState([]);   // every hardware type defined in DCIM (components excluded)
     useEffect(() => {
         let alive = true;
@@ -11669,6 +13142,7 @@ function DashFirmwareCompliance({ assets = [] }) {
         React.createElement("div", { style: { fontFamily: "Inter", fontSize: 9.5, fontWeight: 800, letterSpacing: ".04em", color: FWC_META[k].fg, textTransform: "uppercase" } }, FWC_META[k].label),
         React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 19, fontWeight: 800, color: "#0F172A", lineHeight: 1.15, fontVariantNumeric: "tabular-nums" } }, loading ? "—" : num(v)));
     const action = React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+        React.createElement("button", { onClick: syncNow, disabled: syncing, className: "neu-btn-secondary pdu-sync-btn" + (syncing ? " syncing" : ""), "data-fwc": "sync", "aria-label": "Sync firmware and device status from the latest cache", title: "Update firmware and device status from the latest Dell OME / HPE OneView data already cached (no appliance call)", style: { fontSize: 11, padding: "4px 9px", display: "flex", alignItems: "center", gap: 4, opacity: syncing ? 0.6 : 1 } }, React.createElement(RefreshCw, { s: 11 }), syncing ? "Syncing\u2026" : "Sync"),
         React.createElement("button", { onClick: () => setOpen(true), className: "neu-btn-secondary", "data-fwc": "open", style: { fontSize: 11, padding: "4px 10px" }, title: "Location / zone comparison, device list and export" }, "View details"),
         React.createElement(FwcTypePicker, { types: typeList, counts: typeCounts, value: sel || typeList, onChange: pickTypes, onOpen: setPickOpen }));
     const typeLine = React.createElement("div", { "data-fwc": "hwtype-summary", style: { fontFamily: "Inter", fontSize: 11.5, fontWeight: 700, color: "#334155" } }, !sel ? "All hardware types" : !sel.length ? "No hardware type selected" : sel.length <= 3 ? sel.join(", ") : `${sel.length} hardware types`);
@@ -11695,6 +13169,7 @@ function DashFirmwareCompliance({ assets = [] }) {
                                 !zones.length ? "Dell OME / HPE OneView is not configured for any zone, so there is no firmware data." : "OME / OneView has not reported yet. The first 30-minute sync fills this in."),
                 React.createElement("div", { style: { marginTop: "auto", fontFamily: "Inter", fontSize: 10, color: "#64748B", lineHeight: 1.4 } },
                     !empty && c.UNKNOWN > 0 ? React.createElement("div", { "data-fwc": "unk-note" }, "Unknown = firmware not read yet, or no target firmware set for the model in Monitoring.") : null,
+                    syncMsg ? React.createElement("div", { "data-fwc": "sync-msg", style: { color: syncMsg.ok ? "#059669" : "#B45309", fontWeight: 700, marginBottom: 2 } }, syncMsg.text) : null,
                     waiting > 0 ? React.createElement("div", { style: { color: "#B45309", fontWeight: 700 } }, `${waiting} zone${waiting === 1 ? "" : "s"} not reported yet`) : null,
                     lastSync ? `Last sync ${fwcWhen(lastSync)}` : ""))),
         open && React.createElement(FwcDetails, { rows, inv, missing, zones, lastSync, types: typeList, typeCounts, selTypes: sel, onTypes: pickTypes, onClose: () => setOpen(false) }));
@@ -11720,7 +13195,7 @@ function FwcDetails({ rows, inv, missing, zones, lastSync, types, typeCounts, se
     const extraRows = useMemo(() => locRows.filter((r) => r.hwType === "Not in DCIM"), [locRows]);
     const sum = useMemo(() => fwcCount(locRows), [locRows]);
     const zeroT = () => ({ total: 0, dell: 0, hpe: 0, COMPLIANT: 0, OUTDATED: 0, UNKNOWN: 0, inv: 0, missing: 0, extra: 0 });
-    const addT = (t, x) => { Object.keys(t).forEach((k) => { t[k] += x[k] || 0; }); };
+    const addT = (t, x) => { Object.keys(zeroT()).forEach((k) => { t[k] += x[k] || 0; }); };
     // Generic grouping: servers, inventory and not-in lists grouped by the same key.
     const group = (rowKey, assetKey) => {
         const m = new Map(); const get = (k) => { if (!m.has(k)) m.set(k, { key: k, ...zeroT() }); return m.get(k); };
@@ -12018,8 +13493,8 @@ function DashboardOverview({ issues, assets, rackComponents = [], activities, ov
     // Hardware Mix: one bar per hardware type, segmented by actual locations.
     const hardwareMix = {};
     activeAssets.forEach(a => {
-        const raw = a.hardwareType && String(a.hardwareType).trim() ? String(a.hardwareType).trim() : "Unknown";
-        const key = hwKey(raw);
+        const raw = dashMakeLabel(a.manufacturer); // Hardware Mix is by hardware make (manufacturer), not hardware type
+        const key = raw.toLowerCase();
         if (!hardwareMix[key])
             hardwareMix[key] = { label: raw, sites: {} };
         hardwareMix[key].sites[a.site] = (hardwareMix[key].sites[a.site] || 0) + 1;
@@ -12075,7 +13550,7 @@ function DashboardOverview({ issues, assets, rackComponents = [], activities, ov
         ].map((k) => { const C = k.icon; const t = tone[k.tone]; return React.createElement("button", { key: k.label, className: "sample-kpi", onClick: () => goTo("inventory", null, { lifecycleHub: k.hub }), style: { ...accentVars(t.fg), '--kpi-ring': t.ring } },
             React.createElement("div", { className: "sample-kpi-icon", style: { background: t.bg, color: t.fg } }, React.createElement(C, { s: 18, c: t.fg })),
             React.createElement("div", { className: "sample-kpi-main" }, React.createElement("div", { className: "sample-kpi-label" }, k.label), React.createElement("div", { className: "sample-kpi-value" }, k.value), React.createElement("div", { className: "sample-kpi-hint" }, k.hint))); })),
-        React.createElement("div", { className: "dash-pair dash-trio", style: { marginBottom: 14 } }, React.createElement(DashPowerStatus, null), React.createElement(DashDeviceCounts, { assets: activeAssets, sites: allowedSites }), React.createElement(DashFirmwareCompliance, { assets: activeAssets })),
+        React.createElement("div", { className: "dash-pair dash-quad", style: { marginBottom: 14 } }, React.createElement(DashPowerStatus, null), React.createElement(DashServerPower, null), React.createElement(DashDeviceCounts, { assets: activeAssets, sites: allowedSites }), React.createElement(DashFirmwareCompliance, { assets: activeAssets })),
         React.createElement("div", { className: "neu-card anim-in d1", style: { padding: "18px 20px", marginBottom: 14 } }, [
             React.createElement("div", { key: "head", style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 } }, [
                 React.createElement("div", { key: "t", style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#17345D" } }, "⚡ Total Power Load by Location"),
@@ -12175,9 +13650,9 @@ function DashboardOverview({ issues, assets, rackComponents = [], activities, ov
                                     a.rackNo ? ` · ${a.rackNo}` : "")),
                             React.createElement("span", { className: "sample-activity-date" }, date ? String(date).slice(0, 10) : "—"));
                     }))),
-            React.createElement(DashCard, { title: "Hardware Mix", sub: `${hardwareRows.length} hardware type${hardwareRows.length === 1 ? "" : "s"} \u00B7 location-wise distribution`, action: React.createElement("button", { onClick: () => goTo("inventory", "all"), className: "sample-link-btn" }, "Inventory"), className: "hardware-mix-card" },
-                React.createElement("div", { className: "hw-hbar-chart", role: "img", "aria-label": "Hardware mix: every hardware type, split by location" },
-                    hardwareRows.map((row, ri) => { const rowBase = hardwareColor(row.hw); const shades = hwRowShades(rowBase, hardwareLocations.length); return (React.createElement("div", { key: row.hw, className: "hw-hbar-row" },
+            React.createElement(DashCard, { title: "Hardware Mix", sub: `${hardwareRows.length} hardware make${hardwareRows.length === 1 ? "" : "s"} \u00B7 location-wise distribution`, action: React.createElement("button", { onClick: () => goTo("inventory", "all"), className: "sample-link-btn" }, "Inventory"), className: "hardware-mix-card" },
+                React.createElement("div", { className: "hw-hbar-chart", role: "img", "aria-label": "Hardware mix: every hardware make, split by location" },
+                    hardwareRows.map((row, ri) => { const rowBase = dashMakeColor(row.hw); const shades = hwRowShades(rowBase, hardwareLocations.length); return (React.createElement("div", { key: row.hw, className: "hw-hbar-row" },
                         React.createElement("span", { className: "hw-hbar-label", title: row.hw }, row.hw),
                         React.createElement("div", { className: "hw-hbar-track" },
                             React.createElement("div", { className: "hw-hbar-stack", style: { width: `${Math.max((row.total / maxHardware) * 100, 6)}%` } }, hardwareLocations.filter(site => (row.sites[site] || 0) > 0).map(site => {
@@ -12192,7 +13667,7 @@ function DashboardOverview({ issues, assets, rackComponents = [], activities, ov
                         site,
                         " ",
                         React.createElement("b", null, activeAssets.filter(a => a.site === site).length)))),
-                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 9, color: "#475569", marginTop: 4 } }, "Each hardware type keeps its own color; light → dark within a row follows the location order above."))),
+                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 9, color: "#475569", marginTop: 4 } }, "Each hardware make keeps its own color; light → dark within a row follows the location order above."))),
             React.createElement(DashCard, { title: "Material Movement Details", sub: `${totalMovements} total records · ${inwardMovements} inward · ${outwardMovements} outward`, action: React.createElement("button", { onClick: () => goTo("movements", "all"), className: "sample-link-btn" }, "View all") },
                 React.createElement("div", { className: "sample-movement-list" },
                     recentMovementRows.length === 0 && React.createElement("div", { className: "sample-empty" }, "No material movement records available."),
@@ -12329,8 +13804,8 @@ function ReportModal({ assets, issues = [], activities, movements = [], onClose 
         const val = c.format ? c.format(m[c.key], m) : m[c.key];
         return `<td>${esc(val != null && val !== "" ? val : "—")}</td>`;
     }).join("")}</tr>`).join("");
-    const downloadReport = () => {
-        const html = `<!DOCTYPE html>
+    const buildReportHtml = () => {
+        return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -12441,6 +13916,9 @@ td{padding:8px 10px;border-bottom:1px solid #1E293B;color:#E2E8F0}
 <table><thead><tr>${MOVEMENT_COLUMNS.map(c => `<th>${esc(c.label)}</th>`).join("")}</tr></thead>
 <tbody>${reportMovementRows}</tbody></table></div>
 </body></html>`;
+    };
+    const downloadReport = () => {
+        const html = buildReportHtml();
         // Use a real temporary anchor and delay URL cleanup so Chrome/Edge reliably starts the download.
         const filename = `dc-report-${localDateStr(new Date())}.html`;
         const blob = new Blob([html], { type: "text/html;charset=utf-8" });
@@ -12452,6 +13930,20 @@ td{padding:8px 10px;border-bottom:1px solid #1E293B;color:#E2E8F0}
         document.body.appendChild(link);
         link.click();
         setTimeout(() => { document.body.removeChild(link); URL.revokeObjectURL(url); }, 1500);
+    };
+    const [emailTo, setEmailTo] = useState("");
+    const [emailBusy, setEmailBusy] = useState(false);
+    const [emailNote, setEmailNote] = useState(null);
+    const emailThisReport = async () => {
+        const addr = emailTo.trim();
+        if (!addr) { setEmailNote({ ok: false, text: "Enter a recipient email address" }); return; }
+        setEmailBusy(true); setEmailNote(null);
+        try {
+            await api.emailReport(addr, `Data Center Report - ${localDateStr(new Date())}`, buildReportHtml());
+            setEmailNote({ ok: true, text: `Report emailed to ${addr}.` });
+        }
+        catch (e) { setEmailNote({ ok: false, text: e.message }); }
+        setEmailBusy(false);
     };
     const bar = (entries, max, colorOffset = 0, labelWidth = 105, colorFn = null) => (entries.map(([k, v], i) => {
         const pct = Math.round((v / max) * 100);
@@ -12479,11 +13971,16 @@ td{padding:8px 10px;border-bottom:1px solid #1E293B;color:#E2E8F0}
                         " Download Report"),
                     React.createElement("button", { onClick: onClose, style: { width: 40, height: 40, borderRadius: 10, background: "#1E293B", border: "1px solid #334155", color: "#94A3B8", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" } },
                         React.createElement(X, { s: 18, c: "#94A3B8" })))),
-            React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, marginBottom: 14, padding: "10px 12px", background: "#111827", border: "1px solid #334155", borderRadius: 10 } },
+            React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, marginBottom: 14, padding: "10px 12px", background: "#111827", border: "1px solid #334155", borderRadius: 10, flexWrap: "wrap" } },
                 React.createElement("span", { style: { fontSize: 11, color: "#94A3B8", marginRight: "auto" } }, "Download a complete HTML copy of this report"),
+                React.createElement("input", { value: emailTo, onChange: (e) => setEmailTo(e.target.value), placeholder: "Email this report to…", style: { background: "#0F172A", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", color: "#E2E8F0", fontSize: 12, width: 190 } }),
+                React.createElement("button", { type: "button", onClick: emailThisReport, disabled: emailBusy, className: "neu-btn-secondary", style: { display: "inline-flex", alignItems: "center", gap: 7, padding: "9px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" } },
+                    React.createElement(Mail, { s: 14, c: "#6366F1" }),
+                    emailBusy ? " Sending…" : " Email Report"),
                 React.createElement("button", { type: "button", onClick: downloadReport, className: "neu-btn-secondary", style: { display: "inline-flex", alignItems: "center", gap: 7, padding: "9px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" } },
                     React.createElement(Download, { s: 14, c: "#6366F1" }),
                     " Download Report")),
+            emailNote && React.createElement("div", { style: { marginBottom: 14, padding: "8px 12px", borderRadius: 8, fontSize: 11.5, background: emailNote.ok ? "rgba(16,185,129,0.12)" : "rgba(220,38,38,0.12)", color: emailNote.ok ? "#34D399" : "#F87171", border: `1px solid ${emailNote.ok ? "#059669" : "#DC2626"}` } }, emailNote.text),
             React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 18 } },
                 React.createElement("div", { style: { background: "linear-gradient(135deg,#1E293B 0%,#0F172A 100%)", borderRadius: 12, padding: 15, border: "1px solid #334155", textAlign: "center", minHeight: 128 } },
                     React.createElement("div", { style: { fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "#94A3B8", fontWeight: 800 } }, "Total Assets"),
@@ -12597,16 +14094,20 @@ td{padding:8px 10px;border-bottom:1px solid #1E293B;color:#E2E8F0}
                     React.createElement(Download, { s: 24, c: "#fff" })))));
 }
 /* ===== OVERALL SUMMARY REPORT (Dark Theme) ===== */
-function OverallSummaryModal({ assets, rackComponents, issues, activities, movements, racks, zones, allowedSites, onClose }) {
+function OverallSummaryModal({ assets, rackComponents, issues, activities, movements, racks, zones, allowedSites, pduSummary, onClose }) {
     const today = new Date();
     // Rack Elevation = Device U + Component U — merge components into the same
     // shape so zone/rack U-usage below counts both, same as DC Capacity.
+    // Asset counts are DEVICES only (same as the Dashboard's Installed Devices); rack components are merged in
+    // below only for rack U-space, never for any asset count.
+    const deviceAssets = (assets || []).filter((a) => (a && a.lifecycleStatus || "Active") === "Active");
     const activeAssets = [
-        ...(assets || []).filter((a) => (a && a.lifecycleStatus || "Active") === "Active"),
+        ...deviceAssets,
         ...(rackComponents || []).map(componentAsAssetShape),
     ];
     // Every permitted location is listed (even a brand-new one with no data yet), plus any site that only appears in the data.
-    const allSites = [...new Set([...(allowedSites || []), ...activeAssets.map(a => a.site), ...issues.map(i => i.site), ...activities.map(a => a.site), ...(movements || []).map(m => m.site), ...(zones || []).map(z => z.site)].filter(Boolean))].sort();
+    const allSites = [...new Set([...(allowedSites || []), ...deviceAssets.map(a => a.site), ...issues.map(i => i.site), ...activities.map(a => a.site), ...(movements || []).map(m => m.site), ...(zones || []).map(z => z.site)].filter(Boolean))].sort();
+    const singleLoc = allSites.length === 1; // one location: location-wise repeats of the same numbers are hidden
     // Re-use the same parse helpers from the main app
     function parseUPosition(pos) {
         const s = String(pos || "").trim();
@@ -12649,7 +14150,8 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                 ...siteAssets.map(a => a.zone || 'AZ-1'),
                 ...siteRacks.map(r => r.zone),
             ].filter(Boolean))];
-        const byHw = groupByHardwareType(siteAssets);
+        const siteDevices = deviceAssets.filter(a => a.site === site);
+        const byHw = groupByHardwareType(siteDevices);
         const bySeverity = {
             // "Open" means the same thing here as in Issue Tracker / Dashboard (isIssueOpen), not just "no completed date".
             Critical: siteIssues.filter(i => i.severity === 'critical' && isIssueOpen(i)).length,
@@ -12672,7 +14174,7 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
             const utilPct = totalU > 0 ? Math.round((usedU / totalU) * 100) : 0;
             return { zone: zn, totalRacks: totalR, usedRacks: usedR, emptyRacks: emptyR, utilPct, totalU, usedU };
         });
-        return { siteAssets, siteIssues, siteActivities, siteMovements, siteRacks, siteZones, byHw, bySeverity, zoneRackData };
+        return { siteAssets, siteDevices, siteIssues, siteActivities, siteMovements, siteRacks, siteZones, byHw, bySeverity, zoneRackData };
     }
     const colors = ['#6366F1', '#0EA5E9', '#10B981', '#F59E0B', '#EC4899', '#8B5CF6', '#DC2626', '#14B8A6', '#06B6D4', '#D97706'];
     const pieColors = ['#6366F1', '#0EA5E9', '#10B981', '#F59E0B', '#EC4899', '#8B5CF6'];
@@ -12707,7 +14209,7 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
         }));
     }
     // Global totals
-    const totalAssets = activeAssets.length;
+    const totalAssets = deviceAssets.length;
     const totalActivities = activities.length;
     // Same rack count the per-zone cards below (and DC Capacity) show - not just the racks planned on the floor.
     const totalRacks = allSites.reduce((sum, st) => sum + siteData(st).zoneRackData.reduce((z, d) => z + d.totalRacks, 0), 0);
@@ -12731,6 +14233,115 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
     const actSiteEntries = Object.entries(actBySite).sort((a, b) => b[1] - a[1]);
     const actReportSites = [...new Set([...Object.keys(actBySite), ...allSites])].sort();
     const summaryRef = useRef(null);
+    // Dashboard-module data that lives on the server (all are cache / database reads, no appliance calls).
+    const [mods, setMods] = useState({ power: null, spc: null, fw: null, targets: null });
+    useEffect(() => {
+        let alive = true;
+        const get = (fn) => fn().catch(() => null);
+        Promise.all([get(() => api.getPowerSummary()), get(() => api.getServerPowerConsumption()), get(() => api.getFirmwareCompliance()), get(() => api.getFirmwareModelTargets())])
+            .then(([power, spc, fw, targets]) => { if (alive) setMods({ power, spc, fw, targets }); });
+        return () => { alive = false; };
+    }, []);
+
+
+    // ---- Single-location Assets card: total devices, zone-wise counts, and rack components (kept separate) as a pie ----
+    const assetsSingle = () => {
+        const E = React.createElement;
+        const zoneCounts = {};
+        deviceAssets.forEach((a) => { const z = a.zone || "AZ-1"; zoneCounts[z] = (zoneCounts[z] || 0) + 1; });
+        const zoneList = Object.entries(zoneCounts).sort((x, y) => x[0].localeCompare(y[0], undefined, { numeric: true }));
+        const maxZ = Math.max(1, ...zoneList.map((e) => e[1]));
+        const compCounts = {};
+        (rackComponents || []).forEach((c) => { const k = String(c.hardwareType || "Other").trim() || "Other"; compCounts[k] = (compCounts[k] || 0) + 1; });
+        const compList = Object.entries(compCounts).sort((x, y) => y[1] - x[1]);
+        const compTotal = compList.reduce((n, e) => n + e[1], 0);
+        const lab = { fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "#64748B", fontWeight: 700, marginBottom: 8 };
+        return E("div", { "data-summary": "assets-single", style: { background: "linear-gradient(135deg, #1E293B 0%, #0F172A 100%)", borderRadius: 12, padding: 16, border: "1px solid #334155", display: "grid", gridTemplateColumns: "minmax(140px, 0.6fr) minmax(0, 1fr) minmax(0, 1fr)", gap: 20, alignItems: "stretch" } },
+            E("div", { style: { display: "flex", flexDirection: "column", justifyContent: "center", borderRight: "1px solid #334155", paddingRight: 16 } },
+                E("div", { style: lab }, "Total Assets"),
+                E("div", { style: { fontSize: 38, fontWeight: 800, color: "#6366F1", fontFamily: "'Space Grotesk'", lineHeight: 1 } }, totalAssets),
+                E("div", { style: { fontSize: 10, color: "#94A3B8", marginTop: 6 } }, "installed devices"),
+                E("div", { style: { fontSize: 9.5, color: "#64748B", marginTop: 3 } }, `+ ${compTotal} rack component${compTotal === 1 ? "" : "s"} (counted separately)`)),
+            E("div", { style: { minWidth: 0 } },
+                E("div", { style: lab }, "Zone-wise Assets"),
+                zoneList.length ? E("div", { style: { display: "flex", alignItems: "center", gap: 16 } },
+                    E("div", { style: { flexShrink: 0 } }, DonutChart(zoneCounts, 112, 15)),
+                    E("div", { style: { display: "flex", flexDirection: "column", gap: 5, minWidth: 0, flex: 1 } }, zoneList.map(([z, n], i) => E("div", { key: z, style: { display: "flex", alignItems: "center", gap: 7, fontSize: 10.5, color: "#CBD5E1" } },
+                        E("span", { style: { width: 8, height: 8, borderRadius: 2, background: pieColors[i % pieColors.length], flexShrink: 0 } }),
+                        E("span", { style: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, z),
+                        E("span", { style: { fontFamily: "'JetBrains Mono'", color: "#94A3B8" } }, `${n} (${Math.round(n / totalAssets * 100)}%)`))))) : E("div", { style: { fontSize: 11, color: "#64748B" } }, "No assets yet.")),
+            E("div", { style: { minWidth: 0, borderLeft: "1px solid #334155", paddingLeft: 18 } },
+                E("div", { style: lab }, "Rack Components"),
+                compTotal ? E("div", { style: { display: "flex", alignItems: "center", gap: 16 } },
+                    E("div", { style: { flexShrink: 0 } }, DonutChart(compCounts, 112, 15)),
+                    E("div", { style: { display: "flex", flexDirection: "column", gap: 5, minWidth: 0, flex: 1 } }, compList.map(([k, v], i) => E("div", { key: k, style: { display: "flex", alignItems: "center", gap: 7, fontSize: 10.5, color: "#CBD5E1" } },
+                        E("span", { style: { width: 8, height: 8, borderRadius: 2, background: pieColors[i % pieColors.length], flexShrink: 0 } }),
+                        E("span", { style: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, k),
+                        E("span", { style: { fontFamily: "'JetBrains Mono'", color: "#94A3B8" } }, `${v} (${Math.round(v / compTotal * 100)}%)`))))) : E("div", { style: { fontSize: 11, color: "#64748B", paddingTop: 6 } }, "No rack components recorded.")));
+    };
+    // ---- Operations snapshot: ONLY the Dashboard figures this summary did not already show, one row per location ----
+    const dashModules = () => {
+        const E = React.createElement;
+        const sc = siteColorMap(allSites);
+        const inScope = (x) => x && allSites.includes(x.site);
+        const pw = mods.power && Array.isArray(mods.power.sites) ? mods.power.sites.filter(inScope) : null;
+        const sp = mods.spc && Array.isArray(mods.spc.sites) ? mods.spc.sites.filter(inScope) : null;
+        const pduRows = pduSummary && Array.isArray(pduSummary.bySite) ? pduSummary.bySite.filter(inScope) : null;
+        let fwRows = null;
+        if (mods.fw && mods.targets) fwRows = (mods.fw.rows || []).filter(inScope).map((r) => { const list = (r.vendor === "OME" ? mods.targets.ome : mods.targets.oneview) || []; const tg = list.find((t) => fwcModelKey(t.model) === fwcModelKey(r.model)); return { ...r, status: fwcStatusOf(r.current, tg && tg.targetVersion).status }; });
+        const srv = deviceAssets.filter((a) => /server/i.test(String(a.hardwareType || "")));
+        const bucket = (i) => { const s2 = getStatus(i).label; return s2 === "Completed" ? "Completed" : ["Faulty part in store", "Returned to OEM"].includes(s2) ? "Resolved" : ["In progress", "Part received", "Scheduled", "Overdue"].includes(s2) ? "In Progress" : "New"; };
+        const lcN = (st, v) => (assets || []).filter((a) => a && a.site === st && a.lifecycleStatus === v).length;
+        const kw = (w) => (Number(w || 0) / 1000).toFixed(1);
+        const pctC = (p) => (p >= 85 ? "#F87171" : p >= 70 ? "#FBBF24" : "#34D399");
+        const dash = E("span", { style: { color: "#475569" } }, "—");
+        const mk = (st) => { const m = {}; srv.filter((a) => a.site === st).forEach((a) => { const k = dashMakeLabel(a.manufacturer); m[k] = (m[k] || 0) + 1; }); return m; };
+        // one entry per location
+        const rows = allSites.map((st) => {
+            const p = pw && pw.find((r) => r.site === st), s = sp && sp.find((r) => r.site === st), d = pduRows && pduRows.find((r) => r.site === st);
+            const f = fwRows ? fwcCount(fwRows.filter((r) => r.site === st)) : null;
+            const iss = issues.filter((i) => i.site === st);
+            return { st, p, s, d, f, makes: mk(st), srvN: srv.filter((a) => a.site === st).length,
+                iss: { New: iss.filter((i) => bucket(i) === "New").length, "In Progress": iss.filter((i) => bucket(i) === "In Progress").length, Resolved: iss.filter((i) => bucket(i) === "Resolved").length, Completed: iss.filter((i) => bucket(i) === "Completed").length },
+                tr: { pend: lcN(st, "Transferred"), store: lcN(st, "In Store"), rej: lcN(st, "Transfer Refused") } };
+        });
+        const sum = (f) => rows.reduce((n, r) => n + (f(r) || 0), 0);
+        const totals = { st: "All locations", p: { on: sum((r) => r.p && r.p.on), off: sum((r) => r.p && r.p.off), unknown: sum((r) => r.p && r.p.unknown) },
+            s: rows.some((r) => r.s) ? { loadWatts: sum((r) => r.s && r.s.loadWatts), capacityWatts: sum((r) => r.s && r.s.capacityWatts) } : null, d: rows.some((r) => r.d) ? { totalKw: sum((r) => r.d && r.d.totalKw), ratedKw: sum((r) => r.d && r.d.ratedKw) } : null,
+            f: fwRows ? fwcCount(fwRows) : null, makes: (() => { const m = {}; rows.forEach((r) => Object.entries(r.makes).forEach(([k, v]) => { m[k] = (m[k] || 0) + v; })); return m; })(), srvN: srv.length,
+            iss: { New: sum((r) => r.iss.New), "In Progress": sum((r) => r.iss["In Progress"]), Resolved: sum((r) => r.iss.Resolved), Completed: sum((r) => r.iss.Completed) }, tr: { pend: sum((r) => r.tr.pend), store: sum((r) => r.tr.store), rej: sum((r) => r.tr.rej) } };
+        const th = (t, extra) => E("th", { style: { textAlign: "right", padding: "5px 8px", fontSize: 8.5, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: .5, whiteSpace: "nowrap", ...extra } }, t);
+        const grp = (t, span, color) => E("th", { colSpan: span, style: { padding: "6px 8px", fontSize: 10, fontWeight: 800, color, textAlign: "center", borderLeft: "1px solid #334155", borderBottom: `2px solid ${color}55`, textTransform: "uppercase", letterSpacing: .6 } }, t);
+        const td = (v, color, first) => E("td", { style: { padding: "7px 8px", textAlign: "right", fontFamily: "'Space Grotesk'", fontSize: 12.5, fontWeight: 800, color: color || "#fff", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", borderLeft: first ? "1px solid #334155" : undefined } }, v);
+        const nameCell = (r, isTotal) => E("td", { style: { padding: "7px 8px", whiteSpace: "nowrap" } }, E("span", { style: { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, fontWeight: 800, color: "#E2E8F0" } }, !isTotal && E("span", { style: { width: 8, height: 8, borderRadius: "50%", background: sc[r.st] || "#6366F1" } }), r.st));
+        const lineA = (r, isTotal) => {
+            const sPct = r.s && r.s.capacityWatts > 0 ? Math.round(r.s.loadWatts / r.s.capacityWatts * 100) : null;
+            const dPct = r.d && r.d.ratedKw > 0 ? Math.round(r.d.totalKw / r.d.ratedKw * 100) : null;
+            const mkTxt = Object.entries(r.makes).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${k} ${v}`).join(" · ");
+            return E("tr", { key: r.st, style: { borderTop: "1px solid #273449", background: isTotal ? "#0F172A" : "transparent" } }, nameCell(r, isTotal),
+                r.p ? td(r.p.on, "#34D399", true) : td(dash, null, true), r.p ? td(r.p.off, "#F87171") : td(dash), r.p ? td(r.p.unknown, "#94A3B8") : td(dash),
+                r.s ? td(kw(r.s.loadWatts) + " / " + kw(r.s.capacityWatts), "#fff", true) : td(dash, null, true), sPct != null ? td(sPct + "%", pctC(sPct)) : td(dash),
+                r.d ? td(r.d.totalKw.toFixed(1) + " / " + r.d.ratedKw.toFixed(1), "#fff", true) : td(dash, null, true), dPct != null ? td(dPct + "%", pctC(dPct)) : td(dash),
+                E("td", { style: { padding: "7px 8px", textAlign: "left", fontSize: 10.5, color: "#CBD5E1", whiteSpace: "nowrap", borderLeft: "1px solid #334155" } }, r.srvN ? E("span", null, E("b", { style: { color: "#fff", fontSize: 12.5, marginRight: 6 } }, r.srvN), mkTxt) : dash));
+        };
+        const lineB = (r, isTotal) => E("tr", { key: r.st, style: { borderTop: "1px solid #273449", background: isTotal ? "#0F172A" : "transparent" } }, nameCell(r, isTotal),
+            r.f ? td(r.f.total ? r.f.pct.toFixed(0) + "%" : "—", r.f.total && r.f.pct >= 90 ? "#34D399" : r.f.total && r.f.pct >= 70 ? "#FBBF24" : "#F87171", true) : td(dash, null, true), r.f ? td(r.f.OUTDATED, r.f.OUTDATED ? "#F87171" : "#94A3B8") : td(dash), r.f ? td(r.f.UNKNOWN, "#94A3B8") : td(dash),
+            td(r.iss.New, "#F87171", true), td(r.iss["In Progress"], "#FBBF24"), td(r.iss.Resolved, "#60A5FA"), td(r.iss.Completed, "#34D399"),
+            td(r.tr.pend, r.tr.pend ? "#FBBF24" : "#94A3B8", true), td(r.tr.store, r.tr.store ? "#fff" : "#94A3B8"), td(r.tr.rej, r.tr.rej ? "#F87171" : "#94A3B8"));
+        const tbl = (groups, heads, lineFn) => E("div", { style: { overflowX: "auto", marginBottom: 6 } }, E("table", { style: { width: "100%", borderCollapse: "collapse" } },
+            E("thead", null, E("tr", null, E("th", null), groups.map(([t, n, c]) => grp(t, n, c))), E("tr", null, th("Location", { textAlign: "left" }), heads.map(([t, ex], i) => th(t, ex)))),
+            E("tbody", null, rows.map((r) => lineFn(r, false)), rows.length > 1 && lineFn(totals, true))));
+        const loading = mods.power === null && mods.spc === null && mods.fw === null;
+        return E("div", { "data-summary": "dashboard-modules", style: { background: "#1E293B", borderRadius: 12, padding: 18, border: "1px solid #334155", marginBottom: 20 } },
+            E("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 6, marginBottom: 12 } },
+                E("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#fff" } }, "Operations Snapshot"),
+                E("div", { style: { fontSize: 10.5, color: "#64748B" } }, "Dashboard figures not shown elsewhere in this summary · one row per location" + (loading ? " · loading…" : ""))),
+            tbl([["Server Power", 3, "#34D399"], ["Power Consumption", 2, "#38BDF8"], ["PDU Load", 2, "#F472B6"], ["Servers by Make", 1, "#A78BFA"]],
+                [["On", { borderLeft: "1px solid #334155" }], ["Off"], ["Unk"], ["kW load / rated", { borderLeft: "1px solid #334155" }], ["Use"], ["kW / rated", { borderLeft: "1px solid #334155" }], ["Use"], ["Total · make", { textAlign: "left", borderLeft: "1px solid #334155" }]], lineA),
+            tbl([["Firmware", 3, "#FBBF24"], ["Issue Status", 4, "#F87171"], ["Transfers", 3, "#2DD4BF"]],
+                [["Compliant", { borderLeft: "1px solid #334155" }], ["Old"], ["Unk"], ["New", { borderLeft: "1px solid #334155" }], ["In prog"], ["Resolved"], ["Done"], ["Pending", { borderLeft: "1px solid #334155" }], ["In store"], ["Rejected"]], lineB),
+            E("div", { style: { marginTop: 8, fontSize: 9.5, color: "#64748B" } }, "Installed devices, racks, utilization, asset distribution, hardware and movements are shown in the sections of this summary."));
+    };
     // Shared by both the PNG and PDF downloads: clones the actual rendered
     // Overall Summary (so the export matches the on-screen design exactly,
     // graphics and all, instead of a separately-built template) and rasterizes
@@ -12862,7 +14473,7 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
     // here previously made the big total and this per-site breakdown disagree
     // whenever rack components existed or an asset had a non-Active status.
     const assetBySite = {};
-    activeAssets.forEach(a => { assetBySite[a.site] = (assetBySite[a.site] || 0) + 1; });
+    deviceAssets.forEach(a => { assetBySite[a.site] = (assetBySite[a.site] || 0) + 1; });
     // Location-wise Material Movements summary for the executive summary card.
     const movementSummaryBySite = allSites.map(site => {
         const siteMovements = (movements || []).filter(m => m.site === site);
@@ -12896,17 +14507,18 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                         " Download Summary PDF"),
                     React.createElement("button", { onClick: onClose, style: { width: 36, height: 36, borderRadius: 10, background: "#1E293B", border: "1px solid #334155", color: "#94A3B8", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" } },
                         React.createElement(X, { s: 16, c: "#94A3B8" })))),
-            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "minmax(220px, 0.7fr) minmax(0, 1.3fr)", gap: 12, marginBottom: 20 } },
-                React.createElement("div", { style: { background: "linear-gradient(135deg, #1E293B 0%, #0F172A 100%)", borderRadius: 12, padding: 14, border: "1px solid #334155", textAlign: "center" } },
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: singleLoc ? "1fr" : "minmax(220px, 0.7fr) minmax(0, 1.3fr)", gap: 12, marginBottom: 20 } },
+                singleLoc && assetsSingle(),
+                React.createElement("div", { style: { background: "linear-gradient(135deg, #1E293B 0%, #0F172A 100%)", borderRadius: 12, padding: 14, border: "1px solid #334155", textAlign: "center", display: singleLoc ? "none" : undefined } },
                     React.createElement("div", { style: { fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "#64748B", fontWeight: 700 } }, "Assets"),
                     React.createElement("div", { style: { fontSize: 24, fontWeight: 800, color: "#6366F1", marginTop: 6, fontFamily: "'Space Grotesk'" } }, totalAssets),
                     // Devices + rack components combined - called out explicitly since the
                     // Dashboard's "Installed Devices" tile is device-only, so the two numbers
                     // can legitimately differ once rack components exist; without this label
                     // that difference reads as a data-sync bug rather than what it is.
-                    React.createElement("div", { style: { fontSize: 8.5, color: "#64748B", marginTop: 2 } }, "devices + rack components"),
-                    React.createElement("div", { style: { fontSize: 9, color: "#94A3B8", marginTop: 4, fontFamily: "'JetBrains Mono'" } }, Object.entries(assetBySite).map(([s, v]) => `${s}: ${v}`).join(' · '))),
-                React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 14, border: "1px solid #334155" } },
+                    React.createElement("div", { style: { fontSize: 8.5, color: "#64748B", marginTop: 2 } }, "installed devices (rack components not counted)"),
+                    React.createElement("div", { style: { fontSize: 9, color: "#94A3B8", marginTop: 4, fontFamily: "'JetBrains Mono'" } }, singleLoc ? '' : Object.entries(assetBySite).map(([s, v]) => `${s}: ${v}`).join(' · '))),
+                React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 14, border: "1px solid #334155", display: singleLoc ? "none" : undefined } },
                     React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 } },
                         React.createElement("div", null,
                             React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 800, color: "#fff" } }, "Material Movements Summary"),
@@ -12927,6 +14539,7 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                         React.createElement("div", { style: { fontSize: 10, color: "#94A3B8", textAlign: "right", fontFamily: "'JetBrains Mono'" } },
                             r.total,
                             " total")))) : React.createElement("div", { style: { fontSize: 10, color: '#64748B' } }, "No material movement records available.")))),
+            dashModules(),
             React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 18, border: "1px solid #334155", marginBottom: 20 } },
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, marginBottom: 14, color: "#fff" } }, "DC Activity Record Summary"),
                 React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 16 } }, [
@@ -12936,8 +14549,8 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                 ].map(k => React.createElement("div", { key: k.label, style: { textAlign: "center", padding: "11px 6px", background: "#0F172A", borderRadius: 10, border: "1px solid #334155" } },
                     React.createElement("div", { style: { fontSize: 21, fontWeight: 800, color: k.color, fontFamily: "'Space Grotesk'" } }, k.value),
                     React.createElement("div", { style: { fontSize: 9, color: "#64748B", textTransform: "uppercase", letterSpacing: .5, marginTop: 4 } }, k.label)))),
-                React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 } },
-                    React.createElement("div", null,
+                React.createElement("div", { style: { display: "grid", gridTemplateColumns: singleLoc ? "1fr" : "1fr 1fr", gap: 18 } },
+                    React.createElement("div", { style: singleLoc ? { display: "none" } : undefined },
                         React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: "#94A3B8", marginBottom: 10, textTransform: "uppercase" } }, "Activities by Location"),
                         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 8 } }, actSiteEntries.length ? actSiteEntries.map(([site, count]) => React.createElement("div", { key: site, style: { background: "#0F172A", border: "1px solid #334155", borderRadius: 9, padding: "10px 12px" } },
                             React.createElement("div", { style: { fontSize: 10, color: "#94A3B8", fontWeight: 700, textTransform: "uppercase", letterSpacing: .5 } }, site),
@@ -12954,15 +14567,27 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                             ": ",
                             actCompletedBySite[site] || 0)))),
                     React.createElement("div", null,
-                        React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: "#94A3B8", marginBottom: 10, textTransform: "uppercase" } }, "By Activity Type"),
-                        React.createElement("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", gap: 12 } },
-                            DonutChart(actByType, 128, 18),
-                            React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 7, justifyContent: "center" } }, Object.entries(actByType).sort((a, b) => b[1] - a[1]).map(([k, v], i) => (React.createElement("span", { key: k, style: { fontSize: 9, color: "#94A3B8", display: "inline-flex", alignItems: "center", gap: 4, background: "#0F172A", border: "1px solid #1E293B", borderRadius: 6, padding: "3px 7px" } },
-                                React.createElement("span", { style: { width: 7, height: 7, borderRadius: 2, background: pieColors[i % pieColors.length], flexShrink: 0 } }),
-                                k,
-                                " (",
-                                v,
-                                ")")))))))),
+                        React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: "#94A3B8", marginBottom: 10, textTransform: "uppercase" } }, "Activity Notes"),
+                        // A short text summary instead of a donut chart - the counts are
+                        // already captured per type, so a ranked list reads faster than a
+                        // chart + separate legend did.
+                        (() => {
+                            const toMs = (a) => Date.parse(a.startDate || a.completionDate || "") || 0;
+                            const list = [...activities].sort((x, y) => toMs(y) - toMs(x));
+                            if (!list.length)
+                                return React.createElement("div", { style: { fontSize: 11, color: "#64748B" } }, "No activity records.");
+                            const short = (t) => { const x = String(t || "").replace(/\s+/g, " ").trim(); return x.length > 80 ? x.slice(0, 77) + "\u2026" : x; };
+                            const shown = list.slice(0, 8);
+                            return React.createElement(React.Fragment, null,
+                                React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, shown.map((a, i) => {
+                                    const done = !!a.completionDate;
+                                    return React.createElement("div", { key: a.id || i, title: String(a.description || ""), style: { display: "flex", alignItems: "center", gap: 8, fontSize: 10.5, color: "#CBD5E1", background: "#0F172A", border: "1px solid #1E293B", borderRadius: 6, padding: "6px 9px" } },
+                                        React.createElement("span", { style: { width: 7, height: 7, borderRadius: "50%", background: done ? "#10B981" : "#F59E0B", flexShrink: 0 }, title: done ? "Completed" : "In progress" }),
+                                        React.createElement("span", { style: { flex: "1 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, short(a.description) || a.activityType || "Activity"),
+                                        React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", color: "#64748B", flexShrink: 0, fontSize: 9.5 } }, (singleLoc ? "" : a.site + " \u00B7 ") + (a.zone || "AZ-1") + " \u00B7 " + String(a.startDate || a.completionDate || "").slice(0, 10)));
+                                })),
+                                list.length > shown.length && React.createElement("div", { style: { fontSize: 9.5, color: "#64748B", marginTop: 6 } }, `Latest ${shown.length} of ${list.length} activities`));
+                        })()))),
             React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 18, border: "1px solid #334155", marginBottom: 20 } },
                 React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 } },
                     React.createElement("div", null,
@@ -13029,20 +14654,20 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                     React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 16, fontWeight: 800, color: "#fff", marginBottom: 12, paddingBottom: 8, borderBottom: "1px solid #334155", display: "flex", alignItems: "center", gap: 10 } },
                         React.createElement("span", { style: { width: 10, height: 10, borderRadius: "50%", background: summarySiteColor[site] || '#6366F1' } }),
                         site,
-                        React.createElement("span", { style: { fontSize: 12, color: "#64748B", fontWeight: 400, marginLeft: 8 } },
-                            sd.siteAssets.length,
+                        React.createElement("span", { style: { fontSize: 12, color: "#64748B", fontWeight: 400, marginLeft: 8, display: singleLoc ? "none" : undefined } },
+                            sd.siteDevices.length,
                             " assets \u00B7 ",
                             sd.siteIssues.length,
                             " issues \u00B7 ",
                             sd.siteActivities.length,
                             " activities")),
-                    React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 } },
-                        React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 16, border: "1px solid #334155" } },
+                    React.createElement("div", { style: { display: "grid", gridTemplateColumns: singleLoc ? "1fr" : "1fr 1fr", gap: 14, marginBottom: 14 } },
+                        React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 16, border: "1px solid #334155", display: singleLoc ? "none" : undefined } },
                             React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, marginBottom: 10, color: "#fff" } }, "Hardware Types"),
                             HorizontalBars(sd.byHw, maxHw, 16)),
                         React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 16, border: "1px solid #334155" } },
-                            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, marginBottom: 10, color: "#fff" } }, "Material Movements Summary"),
-                            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6, marginBottom: 10 } },
+                            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, marginBottom: 10, color: "#fff" } }, singleLoc ? "Material Movements Summary" : "Items Moved"),
+                            React.createElement("div", { style: { display: singleLoc ? "grid" : "none", gridTemplateColumns: "repeat(3, 1fr)", gap: 6, marginBottom: 10 } },
                                 React.createElement("div", { style: { textAlign: "center", background: "#0F172A", borderRadius: 8, padding: "7px 4px" } },
                                     React.createElement("div", { style: { fontSize: 16, fontWeight: 800, color: "#fff" } }, sd.siteMovements.length),
                                     React.createElement("div", { style: { fontSize: 8, color: "#64748B", textTransform: "uppercase" } }, "Total")),
@@ -13105,7 +14730,7 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                                 "."))),
                     (() => {
                         const hwTypesSeen = {};
-                        sd.siteAssets.forEach(a => { if (a.hardwareType) {
+                        sd.siteDevices.forEach(a => { if (a.hardwareType) {
                             const k = hwKey(a.hardwareType);
                             if (!hwTypesSeen[k])
                                 hwTypesSeen[k] = a.hardwareType;
@@ -13118,16 +14743,16 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                             const row = { hw };
                             let total = 0;
                             zoneNames.forEach(zn => {
-                                const cnt = sd.siteAssets.filter(a => hwEquals(a.hardwareType, hw) && (a.zone || "AZ-1") === zn).length;
+                                const cnt = sd.siteDevices.filter(a => hwEquals(a.hardwareType, hw) && (a.zone || "AZ-1") === zn).length;
                                 row[zn] = cnt;
                                 total += cnt;
                             });
                             row.total = total;
                             return row;
                         });
-                        const grandTotal = { hw: "Grand Total", total: sd.siteAssets.length };
+                        const grandTotal = { hw: "Grand Total", total: sd.siteDevices.length };
                         zoneNames.forEach(zn => {
-                            grandTotal[zn] = sd.siteAssets.filter(a => (a.zone || "AZ-1") === zn).length;
+                            grandTotal[zn] = sd.siteDevices.filter(a => (a.zone || "AZ-1") === zn).length;
                         });
                         const allRows = [...pivotRows, grandTotal];
                         const colW = Math.max(110, 220 / (zoneNames.length + 1));
@@ -13905,6 +15530,7 @@ function DataCenterDashboard() {
     const [selectedIssueIds, setSelectedIssueIds] = useState(new Set());
     const [selectedActivityIds, setSelectedActivityIds] = useState(new Set());
     const [selectedMovementIds, setSelectedMovementIds] = useState(new Set());
+    const [selectedVisitorIds, setSelectedVisitorIds] = useState(new Set());
     const [assetZoom, setAssetZoom] = useState(80);
     const assetScrollRef = useRef(null);
     const [assetScrollMax, setAssetScrollMax] = useState(0);
@@ -13948,6 +15574,10 @@ function DataCenterDashboard() {
     const [activityModalOpen, setActivityModalOpen] = useState(false);
     const [editingActivity, setEditingActivity] = useState(null);
     const [movements, setMovements] = useState([]);
+    const [visitorRequests, setVisitorRequests] = useState([]);
+    const [visitorModalOpen, setVisitorModalOpen] = useState(false);
+    const [multiVisitorModalOpen, setMultiVisitorModalOpen] = useState(false);
+    const [editingVisitor, setEditingVisitor] = useState(null);
     const [inventoryView, setInventoryView] = useState("inventory");
     const [lifecycleActionAsset, setLifecycleActionAsset] = useState(null);
     const [lifecycleActionPreset, setLifecycleActionPreset] = useState(null);
@@ -13974,6 +15604,7 @@ function DataCenterDashboard() {
     const currentUser = auth && auth.user;
     const isAdmin = currentUser && currentUser.role === "Admin";
     const isOperator = currentUser && currentUser.role === "Operator" || isAdmin;
+    const canApprove = isAdmin || !!(currentUser && Number(currentUser.is_approver)); // Admin always; any user an Admin flagged "Approver" can approve for their own sites
     const canEdit = isOperator;
     // Resolve access before any hook references it.
     const allowedSites = getAllowedSites(currentUser, locations);
@@ -14068,6 +15699,7 @@ function DataCenterDashboard() {
             ['users', () => isGlobalAdmin ? api.getUsers() : Promise.resolve([])],
             ['activities', () => api.getActivities()],
             ['movements', () => api.getMaterialMovements()],
+            ['visitorRequests', () => api.getVisitorRequests()],
             ['zones', () => api.getZones()],
             ['racks', () => api.getRacks()],
             ['locations', () => api.getLocations()],
@@ -14105,6 +15737,7 @@ function DataCenterDashboard() {
             apply('users', setUsers, []);
             apply('activities', setActivities, []);
             apply('movements', setMovements, []);
+            apply('visitorRequests', setVisitorRequests, []);
             apply('zones', setZones, []);
             apply('racks', setRacks, []);
             apply('rackTypes', setRackTypes, []);
@@ -14149,7 +15782,7 @@ function DataCenterDashboard() {
     const handleLogout = () => { try {
         api.logout().catch(() => { });
     }
-    catch (e) { } clearAuth(); setAuth(null); setIssues([]); setAssets([]); setRackComponents([]); setUsers([]); setActivities([]); setMovements([]); setInventoryView("inventory"); setZones([]); setRacks([]); setRackTypes([]); setLocations([]); CACHED_LOCATIONS = []; };
+    catch (e) { } clearAuth(); setAuth(null); setIssues([]); setAssets([]); setRackComponents([]); setUsers([]); setActivities([]); setMovements([]); setVisitorRequests([]); setInventoryView("inventory"); setZones([]); setRacks([]); setRackTypes([]); setLocations([]); CACHED_LOCATIONS = []; };
     // ===== IDLE-SESSION AUTO-LOGOUT =====
     // 10 min of no mouse/keyboard/touch/scroll activity -> show a warning modal with a
     // live 60s countdown -> if not acknowledged, force logout. Passive activity while the
@@ -14420,6 +16053,161 @@ function DataCenterDashboard() {
     catch (e) {
         alert(e.message);
     } };
+    const approveMovement = async (id) => {
+        const approverName = prompt("Approver name (shown on the record and in the notification email):", (currentUser && currentUser.name) || "");
+        if (approverName === null) return; // cancelled
+        try {
+            await api.approveMaterialMovement(id, approverName.trim());
+            await loadAll();
+        }
+        catch (e) {
+            alert(e.message);
+        }
+    };
+    const rejectMovement = async (id) => {
+        const approverName = prompt("Approver name:", (currentUser && currentUser.name) || "");
+        if (approverName === null) return;
+        const reason = prompt("Reason for rejecting this material movement request:");
+        if (reason === null) return;
+        if (!reason.trim()) { alert("A reason is required to reject a request."); return; }
+        try {
+            await api.rejectMaterialMovement(id, approverName.trim(), reason.trim());
+            await loadAll();
+        }
+        catch (e) {
+            alert(e.message);
+        }
+    };
+    const generateMovementTicket = async (id) => {
+        try { await api.generateMaterialMovementTicket(id); await loadAll(); }
+        catch (e) { alert(e.message); }
+    };
+    const receiveMovement = async (id, remarks, receiverName) => {
+        try { await api.receiveMaterialMovement(id, remarks, receiverName); await loadAll(); }
+        catch (e) { alert(e.message); }
+    };
+    const notReceivedMovement = async (id, remarks) => {
+        try { await api.notReceivedMaterialMovement(id, remarks); await loadAll(); }
+        catch (e) { alert(e.message); }
+    };
+    const outwardCompleteMovement = async (id, remarks) => {
+        try { await api.outwardCompleteMaterialMovement(id, remarks); await loadAll(); }
+        catch (e) { alert(e.message); }
+    };
+    const cancelMovement = async (id, remarks) => {
+        try { await api.cancelMaterialMovement(id, remarks); await loadAll(); }
+        catch (e) { alert(e.message); }
+    };
+    const createVisitorRequest = async (form) => {
+        try {
+            await api.createVisitorRequest(form);
+            await loadAll();
+            setVisitorModalOpen(false);
+        }
+        catch (e) { alert(e.message); }
+    };
+    // Submits each pasted visitor as its own normal visitor access request,
+    // one by one, through the exact same endpoint and validation the
+    // single-entry form already uses (no backend/schema change) - mirrors
+    // how bulk Excel import already works for Material Movements/DC
+    // Activity elsewhere in this app. A request that fails is reported
+    // back (with the ones that succeeded already created) rather than
+    // losing the whole batch to one bad row.
+    const createVisitorRequestsBulk = async (shared, visitors) => {
+        let created = 0;
+        const errors = [];
+        for (let i = 0; i < visitors.length; i++) {
+            const v = visitors[i];
+            try {
+                await api.createVisitorRequest({
+                    visitorName: v.visitorName, company: v.company || shared.company || "", phone: v.phone,
+                    purpose: shared.purpose || "", hostEmployee: "",
+                    site: shared.site, zone: "AZ-1", visitDate: shared.visitDateFrom,
+                    visitDateTo: shared.visitDateTo && shared.visitDateTo !== shared.visitDateFrom ? shared.visitDateTo : "",
+                    expectedCheckin: "", expectedCheckout: "",
+                    idProofType: VISITOR_ID_PROOF_TYPES[0],
+                    idProofNumber: v.idProofNumber || "", remarks: v.remarks || "",
+                });
+                created++;
+            } catch (rowErr) {
+                errors.push({ row: i + 1, identifier: v.visitorName || v.phone || `Row ${i + 1}`, error: rowErr.message || "Request failed" });
+            }
+        }
+        await loadAll();
+        if (created > 0) showToast("success", `${created} visitor access request${created === 1 ? "" : "s"} submitted for approval${errors.length ? ` (${errors.length} failed)` : ""}`);
+        return { created, errors };
+    };
+    const updateVisitorRequest = async (form) => {
+        try {
+            await api.updateVisitorRequest(form.id, form);
+            await loadAll();
+            setEditingVisitor(null);
+        }
+        catch (e) { alert(e.message); }
+    };
+    const deleteVisitorRequest = async (id) => {
+        if (!confirm("Delete this visitor access request?")) return;
+        try { await api.deleteVisitorRequest(id); await loadAll(); }
+        catch (e) { alert(e.message); }
+    };
+    const approveVisitorRequest = async (id) => {
+        const approverName = prompt("Approver name (shown on the ticket and in the notification email):", (currentUser && currentUser.name) || "");
+        if (approverName === null) return;
+        try { await api.approveVisitorRequest(id, approverName.trim()); await loadAll(); }
+        catch (e) { alert(e.message); }
+    };
+    const rejectVisitorRequest = async (id) => {
+        const approverName = prompt("Approver name:", (currentUser && currentUser.name) || "");
+        if (approverName === null) return;
+        const reason = prompt("Reason for rejecting this visitor access request:");
+        if (reason === null) return;
+        if (!reason.trim()) { alert("A reason is required to reject a request."); return; }
+        try { await api.rejectVisitorRequest(id, approverName.trim(), reason.trim()); await loadAll(); }
+        catch (e) { alert(e.message); }
+    };
+    const generateVisitorTicket = async (id) => {
+        try { await api.generateVisitorTicket(id); await loadAll(); }
+        catch (e) { alert(e.message); }
+    };
+    const checkinVisitor = async (id, remarks) => {
+        try { await api.checkinVisitor(id, remarks); await loadAll(); }
+        catch (e) { alert(e.message); }
+    };
+    const holdVisitor = async (id, remarks) => {
+        try { await api.holdVisitor(id, remarks); await loadAll(); }
+        catch (e) { alert(e.message); }
+    };
+    const checkoutVisitor = async (id, remarks) => {
+        try { await api.checkoutVisitor(id, remarks); await loadAll(); }
+        catch (e) { alert(e.message); }
+    };
+    const deleteSelectedVisitorRequests = async () => { const ids = Array.from(selectedVisitorIds); if (!ids.length)
+        return; if (!confirm(`Delete ${ids.length} selected visitor access request(s)? This cannot be undone.`))
+        return; try {
+        const r = await deleteManySettled(ids, (id) => api.deleteVisitorRequest(id));
+        setSelectedVisitorIds(new Set(r.failed.map((f) => f.id)));
+        await loadAll();
+        if (r.failed.length)
+            alert(`${r.deleted.length} deleted, ${r.failed.length} could not be deleted: ${r.failed[0].message}`);
+    }
+    catch (e) {
+        alert(e.message);
+    } };
+    const uploadVisitorDocument = async (id, files) => {
+        try {
+            for (const f of Array.from(files)) { await api.uploadVisitorDocument(id, f); }
+            await loadAll();
+        }
+        catch (e) { alert(e.message); }
+    };
+    const downloadVisitorDocument = async (id, docId, name) => {
+        try { await api.downloadVisitorDocument(id, docId, name); }
+        catch (e) { alert(e.message); }
+    };
+    const removeVisitorDocument = async (id, docId) => {
+        try { await api.deleteVisitorDocument(id, docId); await loadAll(); }
+        catch (e) { alert(e.message); }
+    };
     const deleteSelectedMovements = async () => { const ids = Array.from(selectedMovementIds); if (!ids.length)
         return; if (!confirm(`Delete ${ids.length} selected material movement record(s)? This cannot be undone.`))
         return; try {
@@ -15019,6 +16807,7 @@ function DataCenterDashboard() {
     };
     const siteRestrictedActivities = activities.filter((a) => allowedSites.includes(a.site));
     const siteRestrictedMovements = movements.filter((m) => allowedSites.includes(m.site));
+    const siteRestrictedVisitorRequests = visitorRequests.filter((v) => allowedSites.includes(v.site));
     const overallStats = useMemo(() => {
         const visibleIssues = issues.filter((i) => allowedSites.includes(i.site));
         // Every tile uses the same getStatus() labels as the tracker's filter dropdown,
@@ -15132,7 +16921,7 @@ function DataCenterDashboard() {
                     React.createElement(Lock, { s: 16, c: "#5D7394" })),
                 React.createElement("button", { onClick: handleLogout, className: "neu-icon-btn", title: "Sign out" },
                     React.createElement(LogOut, { s: 16, c: "#5D7394" })))),
-        React.createElement("div", { className: "neu-pressed dcim-nav", style: { display: "inline-flex", gap: 6, marginBottom: 28, padding: "6px", borderRadius: 50 } }, [{ key: "dashboard", label: "Dashboard" }, { key: "inventory", label: "Asset Inventory" }, { key: "capacity", label: "DC Capacity" }, { key: "monitoring", label: "Monitoring" }, { key: "pdu", label: "Power Capacity" }, { key: "issues", label: "Issue Tracker" }, { key: "activities", label: "DC Activity" }, { key: "movements", label: "Material Movements" }, { key: "settings", label: "Settings" }].map((t) => (React.createElement("button", { key: t.key, onClick: () => setTab(t.key), className: `tab-pill ${tab === t.key ? "active" : ""}` }, t.label, t.key === "monitoring" && fwRunning > 0 && React.createElement("span", { title: fwRunning + " firmware update(s) running", style: { marginLeft: 7, padding: "1px 7px", borderRadius: 999, background: "#D97706", color: "#fff", fontSize: 10, fontWeight: 800 } }, fwRunning))))),
+        React.createElement("div", { className: "neu-pressed dcim-nav", style: { display: "inline-flex", gap: 6, marginBottom: 28, padding: "6px", borderRadius: 50 } }, [{ key: "dashboard", label: "Dashboard" }, { key: "inventory", label: "Asset Inventory" }, { key: "capacity", label: "DC Capacity" }, { key: "monitoring", label: "Monitoring" }, { key: "pdu", label: "Power Capacity" }, { key: "issues", label: "Issue Tracker" }, { key: "activities", label: "DC Activity" }, { key: "movements", label: "Material Movements" }, { key: "visitors", label: "Visitor Access" }, { key: "settings", label: "Settings" }].map((t) => (React.createElement("button", { key: t.key, onClick: () => setTab(t.key), className: `tab-pill ${tab === t.key ? "active" : ""}` }, t.label, t.key === "monitoring" && fwRunning > 0 && React.createElement("span", { title: fwRunning + " firmware update(s) running", style: { marginLeft: 7, padding: "1px 7px", borderRadius: 999, background: "#D97706", color: "#fff", fontSize: 10, fontWeight: 800 } }, fwRunning))))),
         apiError && React.createElement("div", { className: "neu-card anim-in d1", style: { background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)", padding: "14px 18px", marginBottom: 20, color: "#DC2626", fontFamily: "Inter", fontSize: 13 } },
             "API Error: ",
             apiError,
@@ -15335,7 +17124,7 @@ function DataCenterDashboard() {
                                                 React.createElement("text", { x: dCx, y: dCy - 4, textAnchor: "middle", fontFamily: "'Space Grotesk'", fontSize: "19", fontWeight: "800", fill: "#0F172A" }, locTotal),
                                                 React.createElement("text", { x: dCx, y: dCy + 12, textAnchor: "middle", fontFamily: "Inter", fontSize: "9", fill: "#94A3B8" }, "assets"));
                                         })())),
-                                React.createElement("div", { style: { flex: "1 1 280px", minWidth: 200, borderLeft: "1px solid #F1F4FA", paddingLeft: 16 } },
+                                React.createElement("div", { style: { flex: "1 1 280px", minWidth: 200, borderLeft: "1px solid #F1F4FA", paddingLeft: 16, display: "flex", flexDirection: "column", justifyContent: "center" } },
                                     React.createElement("div", { style: { fontFamily: "Inter", fontSize: 9.5, color: "#475569", marginBottom: 6 } }, "Device count · by site + zone"),
                                     zoneEntries.length === 0 ? React.createElement("div", { style: { color: "#64748B", fontSize: 11, padding: "20px 0", textAlign: "center" } }, "No devices yet") : React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 7 } }, zoneEntries.map(([label, n, site, z], zi) => { const rowColor = entryColor(zi); const rowColorDark = darkenHex(rowColor, 0.22); const widthPct = Math.max(10, (n / zoneMax) * 100); return React.createElement("div", { key: label, onClick: () => { setAssetSearch(""); setAssetZoneFilter(z); setAssetSiteFilter(site); setAssetHwFilter("all"); }, style: { cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }, title: `${site} · ${z}: ${n} device(s)` },
                                         React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6, width: 86, flexShrink: 0 } },
@@ -15671,7 +17460,7 @@ function DataCenterDashboard() {
                     React.createElement("button", { onClick: () => setSelectedAssetIds(new Set()), className: "neu-btn-secondary", style: { fontSize: 12, marginLeft: "auto" } }, "Clear Selection"))),
                 React.createElement("div", { ref: assetScrollRef, className: "asset-table-scroll-host", style: { overflowX: "auto", width: "100%" } },
                     React.createElement("div", { className: "asset-table-scroll-content", style: { zoom: `${assetZoom}%`, width: "2200px", minWidth: "2200px" } },
-                        React.createElement(AssetTable, { assets: paginatedAssets, allFilteredAssets: filteredAssets, filterOptionAssets: getAssetFilterOptions, startIndex: (assetPageClamped - 1) * assetPageSize, onDelete: deleteAsset, onEdit: openEditAsset, canEdit: canEdit, colFilters: assetColFilters, onColFilterChange: (key, val) => setAssetColFilters(prev => ({ ...prev, [key]: val })), selectedIds: selectedAssetIds, onSelectId: (id, checked) => setSelectedAssetIds(prev => { const next = new Set(prev); if (checked)
+                        React.createElement(AssetTable, { onOpenRack: openRackModal, assets: paginatedAssets, allFilteredAssets: filteredAssets, filterOptionAssets: getAssetFilterOptions, startIndex: (assetPageClamped - 1) * assetPageSize, onDelete: deleteAsset, onEdit: openEditAsset, canEdit: canEdit, colFilters: assetColFilters, onColFilterChange: (key, val) => setAssetColFilters(prev => ({ ...prev, [key]: val })), selectedIds: selectedAssetIds, onSelectId: (id, checked) => setSelectedAssetIds(prev => { const next = new Set(prev); if (checked)
                                 next.add(id);
                             else
                                 next.delete(id); return next; }), onSelectAll: (checked, ids) => setSelectedAssetIds(prev => { const next = new Set(prev); ids.forEach(id => checked ? next.add(id) : next.delete(id)); return next; }) }))),
@@ -15816,13 +17605,30 @@ function DataCenterDashboard() {
                 canEdit && React.createElement("button", { onClick: () => setMovementModalOpen(true), className: "neu-btn-secondary", style: { display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, padding: "9px 14px", color: "#0EA5E9" }, title: "Record material movement" },
                     React.createElement(Package, { s: 14, c: "#0EA5E9" }),
                     " Record Movement")),
-            React.createElement(MaterialMovements, { movements: siteRestrictedMovements, allowedSites: allowedSites, canEdit: canEdit, onEdit: (m) => setEditingMovement(m), onDelete: deleteMovement, selectedIds: selectedMovementIds, onSelectId: (id, checked) => setSelectedMovementIds(prev => { const n = new Set(prev); checked ? n.add(id) : n.delete(id); return n; }), onSelectAll: (checked, ids) => setSelectedMovementIds(prev => { const n = new Set(prev); ids.forEach(id => checked ? n.add(id) : n.delete(id)); return n; }), onDeleteSelected: deleteSelectedMovements, onClearSelection: () => setSelectedMovementIds(new Set()), onDownload: downloadMovementDocument, onExportExcel: handleExportMovementsXlsx, onExportCSV: handleExportMovementsCsv, onImport: handleImportMovements, importError: importError, importProgress: importProgress, importErrorDetails: importErrorDetails }),
+            React.createElement(MaterialMovements, { movements: siteRestrictedMovements, allowedSites: allowedSites, canEdit: canEdit, isAdmin: isAdmin, canApprove: canApprove, onEdit: (m) => setEditingMovement(m), onDelete: deleteMovement, onApprove: approveMovement, onReject: rejectMovement, onGenerateTicket: generateMovementTicket, onReceive: receiveMovement, onNotReceived: notReceivedMovement, onOutwardComplete: outwardCompleteMovement, onCancel: cancelMovement, selectedIds: selectedMovementIds, onSelectId: (id, checked) => setSelectedMovementIds(prev => { const n = new Set(prev); checked ? n.add(id) : n.delete(id); return n; }), onSelectAll: (checked, ids) => setSelectedMovementIds(prev => { const n = new Set(prev); ids.forEach(id => checked ? n.add(id) : n.delete(id)); return n; }), onDeleteSelected: deleteSelectedMovements, onClearSelection: () => setSelectedMovementIds(new Set()), onDownload: downloadMovementDocument, onExportExcel: handleExportMovementsXlsx, onExportCSV: handleExportMovementsCsv, onImport: handleImportMovements, importError: importError, importProgress: importProgress, importErrorDetails: importErrorDetails }),
             movementModalOpen && React.createElement(RecordMovementModal, { onClose: () => setMovementModalOpen(false), onSave: createMovement, assets: siteRestrictedAssets, zones: siteRestrictedZones, onDownload: downloadMovementDocument, onRemoveDocument: removeMovementDocument, onDownloadDoc: downloadMovementDocumentById, onRemoveDoc: removeMovementDocumentById }),
             editingMovement && React.createElement(RecordMovementModal, { initial: editingMovement, onClose: () => setEditingMovement(null), onSave: (f, files, ocrMeta) => updateMovement({ ...editingMovement, ...f }, files, ocrMeta), assets: siteRestrictedAssets, zones: siteRestrictedZones, onDownload: downloadMovementDocument, onRemoveDocument: removeMovementDocument, onDownloadDoc: downloadMovementDocumentById, onRemoveDoc: removeMovementDocumentById })),
+        !loading && tab === "visitors" && React.createElement(React.Fragment, null,
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 } },
+                React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
+                    React.createElement("span", { className: "module-title-icon", style: { background: "linear-gradient(145deg,#E0E7FF,#A5B4FC)", color: "#4F46E5" } },
+                        React.createElement(User, { s: 18, c: "#4F46E5" })),
+                    React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617" } }, "Visitor Access")),
+                canEdit && React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
+                    React.createElement("button", { onClick: () => setMultiVisitorModalOpen(true), className: "neu-btn-secondary", style: { display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, padding: "9px 14px", color: "#4F46E5" }, title: "Paste a guest list to create several requests at once" },
+                        React.createElement(User, { s: 14, c: "#4F46E5" }),
+                        " Multi-Visitor Entry"),
+                    React.createElement("button", { onClick: () => setVisitorModalOpen(true), className: "neu-btn-secondary", style: { display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, padding: "9px 14px", color: "#4F46E5" }, title: "New visitor access request" },
+                        React.createElement(User, { s: 14, c: "#4F46E5" }),
+                        " New Visitor Request"))),
+            React.createElement(VisitorAccess, { requests: siteRestrictedVisitorRequests, allowedSites: allowedSites, canEdit: canEdit, isAdmin: isAdmin, canApprove: canApprove, onEdit: (v) => setEditingVisitor(v), onDelete: deleteVisitorRequest, onApprove: approveVisitorRequest, onReject: rejectVisitorRequest, onGenerateTicket: generateVisitorTicket, onCheckin: checkinVisitor, onHold: holdVisitor, onCheckout: checkoutVisitor, onUpload: uploadVisitorDocument, onDownloadDoc: downloadVisitorDocument, onRemoveDoc: removeVisitorDocument, selectedIds: selectedVisitorIds, onSelectId: (id, checked) => setSelectedVisitorIds(prev => { const n = new Set(prev); checked ? n.add(id) : n.delete(id); return n; }), onSelectAll: (checked, ids) => setSelectedVisitorIds(prev => { const n = new Set(prev); ids.forEach(id => checked ? n.add(id) : n.delete(id)); return n; }), onDeleteSelected: deleteSelectedVisitorRequests, onClearSelection: () => setSelectedVisitorIds(new Set()) }),
+            visitorModalOpen && React.createElement(VisitorRequestModal, { onClose: () => setVisitorModalOpen(false), onSave: createVisitorRequest }),
+            multiVisitorModalOpen && React.createElement(MultiVisitorEntryModal, { onClose: () => setMultiVisitorModalOpen(false), onSubmit: createVisitorRequestsBulk }),
+            editingVisitor && React.createElement(VisitorRequestModal, { initial: editingVisitor, onClose: () => setEditingVisitor(null), onSave: (f) => updateVisitorRequest({ ...editingVisitor, ...f }) })),
         !loading && tab === "settings" && React.createElement(SettingsPage, { users: users, onRefresh: loadAll, locations: locations, currentUser: currentUser, isAdmin: !!isAdmin, isGlobalAdmin: isGlobalAdmin, onChangePassword: () => setPwdModalOpen(true) }),
         pwdModalOpen && React.createElement(PasswordChangeModal, { onClose: () => setPwdModalOpen(false), isAdmin: false, targetUser: null }),
         reportOpen && React.createElement(ReportModal, { assets: filteredAssets, issues: siteRestrictedIssues, activities: siteRestrictedActivities, movements: siteRestrictedMovements, onClose: () => setReportOpen(false) }),
-        summaryModalOpen && React.createElement(OverallSummaryModal, { assets: siteRestrictedAssets, rackComponents: siteRestrictedRackComponents, issues: siteRestrictedIssues, activities: siteRestrictedActivities, movements: siteRestrictedMovements, racks: siteRestrictedRacks, zones: siteRestrictedZones, allowedSites: allowedSites, onClose: () => setSummaryModalOpen(false) }),
+        summaryModalOpen && React.createElement(OverallSummaryModal, { assets: siteRestrictedAssets, rackComponents: siteRestrictedRackComponents, issues: siteRestrictedIssues, activities: siteRestrictedActivities, movements: siteRestrictedMovements, racks: siteRestrictedRacks, zones: siteRestrictedZones, allowedSites: allowedSites, pduSummary: pduSummary, onClose: () => setSummaryModalOpen(false) }),
         lifecycleActionAsset && React.createElement(AssetLifecycleActionModal, { key: (lifecycleActionAsset.id || "") + "|" + (lifecycleActionPreset || ""), asset: lifecycleActionAsset, initialAction: lifecycleActionPreset, allowedSites: allowedSites, zones: siteRestrictedZones, racks: siteRestrictedRacks, rackTypes: rackTypes, onClose: () => { setLifecycleActionAsset(null); setLifecycleActionPreset(null); }, onSaved: async () => { setLifecycleActionAsset(null); setLifecycleActionPreset(null); setSelectedAssetIds(new Set()); await loadAll(); showToast("success", "Asset lifecycle updated"); } }),
         manageDCModalOpen && React.createElement(ManageDCCapacityModal, { onClose: () => setManageDCModalOpen(false), canEdit: canEdit, isAdmin: isAdmin, canManageLocations: isGlobalAdmin, currentSite: manageDCSite || capacitySite, onAddLocation: () => setLocationModalOpen(true), onDeleteLocation: () => setDeleteLocationModalOpen(true), onAddZone: () => setZoneModalOpen(true), onAddRack: () => setRackAddModalOpen(true) }),
         rackModal && React.createElement(RackLayoutModal, { rack: rackModal, assets: siteRestrictedAssets, rackComponents: siteRestrictedRackComponents, racks: siteRestrictedRacks, zones: siteRestrictedZones, onClose: () => setRackModal(null), onViewInventory: viewRackInInventory }),

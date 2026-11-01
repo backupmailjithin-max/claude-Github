@@ -49,6 +49,8 @@ if find "$PAYLOAD/webapp" \( -name 'license-keygen*' -o -name 'license-issue*' -
   echo "ERROR: vendor licence tooling is still present in the appliance payload." >&2; exit 1
 fi
 mkdir -p "$PAYLOAD/webapp/uploads" "$PAYLOAD/webapp/backups" "$PAYLOAD/webapp/logs"
+. "$REPO_ROOT/packaging/tools/prune-customer-payload.sh"
+prune_customer_payload "$PAYLOAD/webapp"
 
 # Signed integrity manifest + build gate: FAILS the build on licence tools / signing material / private keys.
 # Bytenode is on by default here: the appliance always bundles its own exact Node runtime (checked above),

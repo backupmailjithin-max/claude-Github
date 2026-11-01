@@ -380,7 +380,7 @@ sync_payload() {
   fi
   mkdir -p "$INSTALL_DIR/webapp/uploads" "$INSTALL_DIR/webapp/backups" "$INSTALL_DIR/webapp/logs"
   # Vendor-only licence tooling is never installed on a customer machine.
-  rm -f "$INSTALL_DIR"/webapp/tools/license-*.js "$INSTALL_DIR/webapp/tools/Run-License-Generator.bat" "$INSTALL_DIR/webapp/tools/LICENSE-ISSUE-TEMPLATE.txt"
+  rm -rf "$INSTALL_DIR/webapp/tools" "$INSTALL_DIR/webapp/tests" "$INSTALL_DIR/webapp/docs"
   if [ -d "$PAYLOAD_RUNTIME" ]; then
     rm -rf "$INSTALL_DIR/runtime"
     install -d "$INSTALL_DIR/runtime"

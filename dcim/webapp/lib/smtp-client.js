@@ -118,4 +118,58 @@ async function testSmtp({ host, port, secure, user, pass, fromAddress, toAddress
   }
 }
 
-module.exports = { testSmtp };
+/**
+ * Sends one HTML email to one or more recipients over the same minimal SMTP
+ * client (EHLO / STARTTLS / AUTH LOGIN). Used by the notification framework
+ * (setup-routes.sendNotification). Throws an Error naming the failed step.
+ */
+function encodeHeader(v) { return /^[\x20-\x7e]*$/.test(v) ? v : '=?UTF-8?B?' + Buffer.from(v, 'utf8').toString('base64') + '?='; }
+async function sendMail({ host, port, secure, user, pass, fromAddress, toAddresses, subject, html, timeoutMs = 15000 }) {
+  const rcpts = (toAddresses || []).filter(Boolean);
+  if (!rcpts.length) throw new Error('No recipients');
+  let socket = secure ? await connectTls(host, port, timeoutMs) : await connectPlain(host, port, timeoutMs);
+  try {
+    const greet = await readResponse(socket, timeoutMs);
+    if (greet.code !== 220) throw new Error(`Unexpected greeting: ${greet.text}`);
+    let ehlo = await sendCmd(socket, 'EHLO dcim-notifier', timeoutMs);
+    if (ehlo.code !== 250) throw new Error(`EHLO rejected: ${ehlo.text}`);
+    if (!secure && /STARTTLS/i.test(ehlo.text)) {
+      const sr = await sendCmd(socket, 'STARTTLS', timeoutMs);
+      if (sr.code !== 220) throw new Error(`STARTTLS rejected: ${sr.text}`);
+      socket = await upgradeToTls(socket, host, timeoutMs);
+      ehlo = await sendCmd(socket, 'EHLO dcim-notifier', timeoutMs);
+      if (ehlo.code !== 250) throw new Error(`EHLO (after STARTTLS) rejected: ${ehlo.text}`);
+    }
+    if (user) {
+      const a = await sendCmd(socket, 'AUTH LOGIN', timeoutMs);
+      if (a.code !== 334) throw new Error(`AUTH LOGIN not accepted: ${a.text}`);
+      const u = await sendCmd(socket, Buffer.from(user, 'utf8').toString('base64'), timeoutMs);
+      if (u.code !== 334) throw new Error(`Username rejected: ${u.text}`);
+      const pw = await sendCmd(socket, Buffer.from(pass || '', 'utf8').toString('base64'), timeoutMs);
+      if (pw.code !== 235) throw new Error(`Authentication failed: ${pw.text}`);
+    }
+    const mf = await sendCmd(socket, `MAIL FROM:<${fromAddress}>`, timeoutMs);
+    if (mf.code !== 250) throw new Error(`MAIL FROM rejected: ${mf.text}`);
+    let accepted = 0, lastErr = '';
+    for (const r of rcpts) {
+      const rc = await sendCmd(socket, `RCPT TO:<${r}>`, timeoutMs);
+      if (rc.code === 250 || rc.code === 251) accepted++; else lastErr = `${r}: ${rc.text}`;
+    }
+    if (!accepted) throw new Error(`RCPT TO rejected: ${lastErr}`);
+    const d = await sendCmd(socket, 'DATA', timeoutMs);
+    if (d.code !== 354) throw new Error(`DATA rejected: ${d.text}`);
+    const b64 = Buffer.from(String(html || ''), 'utf8').toString('base64').replace(/.{1,76}/g, '$&\r\n').trimEnd();
+    const msg = [
+      `From: ${fromAddress}`, `To: ${rcpts.join(', ')}`, `Subject: ${encodeHeader(String(subject || '').replace(/[\r\n]+/g, ' '))}`,
+      `Date: ${new Date().toUTCString()}`, 'MIME-Version: 1.0', 'Content-Type: text/html; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', b64, '.',
+    ].join('\r\n');
+    const sent = await sendCmd(socket, msg, timeoutMs);
+    if (sent.code !== 250) throw new Error(`Message not accepted: ${sent.text}`);
+    await sendCmd(socket, 'QUIT', timeoutMs).catch(() => {});
+    return { ok: true, accepted };
+  } finally {
+    socket.destroy();
+  }
+}
+
+module.exports = { testSmtp, sendMail };

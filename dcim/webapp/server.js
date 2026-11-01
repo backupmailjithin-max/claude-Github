@@ -8,8 +8,8 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
-const zlib = require('zlib'); // also used by BACKUP & RESTORE further down
 const license = require('./lib/license');
+const zlib = require('zlib'); // also used by BACKUP & RESTORE further down
 
 const app = express();
 // Do not disclose the Express implementation/version in response headers.
@@ -117,6 +117,54 @@ async function auditLog(req, action, o = {}) {
     );
   } catch (e) { log.warn('[audit] could not write audit record:', e.message); }
 }
+// Same audit trail as auditLog(), but for a delete: also saves a full,
+// unredacted, untruncated copy of the row into its own `snapshot_data`
+// column so the Logs page's Restore button has something to re-insert.
+// `row` should be the complete record read from the DB right before the
+// DELETE statement runs. Deliberately bypasses auditLog()'s scrub/4000-char
+// truncation - those exist for the human-readable `details` line, not for
+// this restore data - so this is only ever used for entities whose columns
+// are safe to keep verbatim (no live secrets like a password hash).
+// mysql2 reads DATE/DATETIME/TIMESTAMP columns back as JS Date objects. A plain
+// JSON.stringify() on those turns them into ISO-with-"T...Z" strings - which
+// MySQL (under the strict mode this app runs with) REFUSES to insert back into
+// a DATE/DATETIME column ("Incorrect date value"). Reformatting them here to
+// MySQL's own "YYYY-MM-DD HH:MM:SS" wire format (MySQL is happy to truncate the
+// time part itself when the target is DATE-only) is what lets a snapshot be
+// re-inserted unchanged by Restore, for every entity, not just ones without a
+// date column.
+function snapshotSafeValue(v) {
+  if (v instanceof Date) {
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${v.getFullYear()}-${pad(v.getMonth() + 1)}-${pad(v.getDate())} ${pad(v.getHours())}:${pad(v.getMinutes())}:${pad(v.getSeconds())}`;
+  }
+  return v;
+}
+async function auditLogDeleteWithSnapshot(req, action, entity, entityId, site, row) {
+  // Several of these delete routes (assets, rack components, activities, material
+  // movements) are ALSO matched by the generic AUDIT_RULES auto-logger below
+  // (app.use('/api', ...) -> res.on('finish', ...)), which would otherwise write
+  // its own second, snapshot-less row for the same deletion right after this one.
+  // Flagging the response here (before res.json() runs, so it's set well before
+  // that 'finish' handler fires) tells that generic logger to stand down for this
+  // request, so a delete produces exactly one audit row - the richer one, with
+  // the restore snapshot - never two.
+  try { if (req && req.res) req.res.locals.auditHandled = true; } catch (e) { /* non-fatal */ }
+  try {
+    const u = (req && req.user) || {};
+    const safeRow = row ? Object.fromEntries(Object.entries(row).map(([k, v]) => [k, snapshotSafeValue(v)])) : null;
+    const snapshot = safeRow ? JSON.stringify(safeRow) : null;
+    if (!pool) return;
+    await pool.query(
+      'INSERT INTO audit_logs (user_id, username, role, action, entity_type, entity_id, site, status, ip_address, user_agent, details, snapshot_data) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+      [u.id != null ? u.id : null, u.username != null ? String(u.username).slice(0, 100) : null, u.role || null, String(action).slice(0, 60),
+        String(entity).slice(0, 50), entityId != null ? String(entityId).slice(0, 100) : null, site ? String(site).slice(0, 50) : null,
+        'success', clientIp(req), String((req && req.headers && req.headers['user-agent']) || '').slice(0, 255),
+        `Deleted ${entity} ${entityId || ''}`.trim(), snapshot]
+    );
+    log.audit(`${action} OK user=${u.username || '-'} ip=${clientIp(req) || '-'} ${entity}=${entityId != null ? entityId : '-'}${snapshot ? ' (snapshot saved)' : ''}`);
+  } catch (e) { log.warn('[audit] could not write delete snapshot:', e.message); }
+}
 // Integrity of the licensing code (lib/integrity.js). Verified here, as early as the logger exists, so INTEGRITY_MODE=enforce
 // can refuse normal startup. Audit events raised before the database is ready are queued and written once it is.
 license.ensureIntegrity({ log, defer: true });
@@ -195,7 +243,7 @@ const perfStats = { queries: 0, slowQueries: 0, apiRequests: 0, slowApi: 0, cach
 function noteSlow(kind, text, ms) { perfStats.recentSlow.push({ kind, text: String(text).replace(/\s+/g, ' ').slice(0, 220), ms: Math.round(ms), at: new Date().toISOString() }); if (perfStats.recentSlow.length > 30) perfStats.recentSlow.shift(); }
 function sqlText(a0) { return typeof a0 === 'string' ? a0 : (a0 && a0.sql) || ''; }
 // Any DB write that touches cached data (e.g. background OME/OneView firmware sync, which runs outside HTTP) drops the read cache.
-const CACHED_WRITE_RE = /^\s*(?:INSERT|UPDATE|DELETE|REPLACE|TRUNCATE|ALTER|DROP)\b[^;]*?\b(?:assets|issues|dc_activities|material_movements|material_movement_documents|rack_components|asset_movements|locations|zones|racks|sites|asset_lifecycle\w*)\b/i;
+const CACHED_WRITE_RE = /^\s*(?:INSERT|UPDATE|DELETE|REPLACE|TRUNCATE|ALTER|DROP)\b[^;]*?\b(?:assets|issues|dc_activities|material_movements|material_movement_documents|visitor_requests|visitor_access_documents|rack_components|asset_movements|locations|zones|racks|sites|asset_lifecycle\w*)\b/i;
 function noteWriteSql(a0) { try { const t = sqlText(a0); if (t && CACHED_WRITE_RE.test(t)) apiCacheClear(); } catch (e) { /* never break a query */ } }
 function timedQuery(orig) { // wraps a promise-style .query / .execute; the SQL text (never the parameter values) is logged when slow
   return function (...args) {
@@ -499,6 +547,7 @@ app.use('/api', (req, res, next) => {
   if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') {
     res.on('finish', () => {
       try {
+        if (res.locals.auditHandled) return; // route already wrote its own, richer audit entry (e.g. a delete snapshot) - don't also write this generic one
         const p = req.originalUrl.split('?')[0].replace(/\/+$/, '');
         for (const rule of AUDIT_RULES) {
           if (rule.m !== req.method) continue;
@@ -587,7 +636,9 @@ function appBundlePath() {
   } catch (e) { /* no minified build */ }
   return src;
 }
-app.get('/app-compiled.js', (req, res, next) => sendStaticFile(req, res, next, appBundlePath(), req.query.v ? APP_CACHE : 'no-cache'));
+// The bundle is ALWAYS revalidated (ETag/304 costs a few bytes): a copied-over app-compiled.js must reach every browser on its next
+// load, never from a 24 h cache entry. X-App-Bundle tells which file was served (min/src + content hash) so a stale deployment is visible.
+app.get('/app-compiled.js', (req, res, next) => { const abs = appBundlePath(); res.set('X-App-Bundle', `${abs.endsWith('.min.js') ? 'min' : 'src'}:${_bundleCheck.hash}`); sendStaticFile(req, res, next, abs, 'no-cache'); });
 // Production HTML: always revalidated (ETag -> 304 when unchanged) so a deployment is picked up at once.
 // Served through getRenderedIndex(), not sendStaticFile(), because the app-compiled.js ?v= cache-buster
 // inside it is rewritten live from the bundle's own content hash - see getRenderedIndex() above.
@@ -746,6 +797,7 @@ async function initDB() {
         role ENUM('Admin','Operator','Viewer') DEFAULT 'Viewer',
         location_access VARCHAR(50) DEFAULT 'All',
         status ENUM('Active','Inactive') DEFAULT 'Active',
+        is_approver TINYINT(1) NOT NULL DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     `);
@@ -871,6 +923,7 @@ async function initDB() {
     await conn.query(`
       CREATE TABLE IF NOT EXISTS material_movements (
         id VARCHAR(50) PRIMARY KEY,
+        ticket_no VARCHAR(50),
         movement_type ENUM('Inward','Outward') NOT NULL,
         site VARCHAR(50) NOT NULL,
         item_name VARCHAR(200) NOT NULL,
@@ -884,10 +937,62 @@ async function initDB() {
         dc_invoice_original_name VARCHAR(255),
         movement_date DATE,
         remarks TEXT,
+        status ENUM('Pending Approval','Approved','Rejected','Ticket Issued','Received at Site','Not Received','Outward Complete','Cancelled') NOT NULL DEFAULT 'Pending Approval',
+        approver_name VARCHAR(150) NULL,
+        approved_at DATETIME NULL,
+        reject_reason VARCHAR(255) NULL,
         created_by VARCHAR(100),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     `);
+    try { await conn.query('ALTER TABLE material_movements ADD COLUMN ticket_no VARCHAR(50)'); } catch (e) { /* already exists */ }
+    try {
+      await conn.query("ALTER TABLE material_movements ADD COLUMN status ENUM('Pending Approval','Approved','Rejected','Received at Site','Not Received','Outward Complete','Cancelled') NOT NULL DEFAULT 'Pending Approval'");
+      await conn.query("ALTER TABLE material_movements ADD COLUMN approver_name VARCHAR(150) NULL");
+      await conn.query("ALTER TABLE material_movements ADD COLUMN approved_at DATETIME NULL");
+      await conn.query("ALTER TABLE material_movements ADD COLUMN reject_reason VARCHAR(255) NULL");
+      // Approval is new - every movement recorded before this column existed already happened in
+      // the real world (most already carry a ticket_no from the old no-approval flow), so treat
+      // that pre-existing history as already Approved instead of suddenly asking for retroactive
+      // sign-off on records nobody is going to go back and approve. Only runs once, right here,
+      // the first time this column is added (the surrounding try/catch is why: on every later
+      // restart the ADD COLUMN above throws "already exists" and this backfill is skipped).
+      await conn.query("UPDATE material_movements SET status = 'Approved' WHERE status = 'Pending Approval'");
+      // Same reasoning one step further: this ADD COLUMN only succeeds on an install that had
+      // no status column at all (pre-approval), so every one of its existing rows predates the
+      // Received at Site / Outward Complete closing step too - back those straight to their
+      // type's terminal state in the same one-time pass, rather than leaving them at "Approved"
+      // forever (the enum-widen block below only fires when this ADD COLUMN instead throws
+      // "already exists", so it would never catch these rows on its own).
+      await conn.query("UPDATE material_movements SET status = IF(movement_type = 'Inward', 'Received at Site', 'Outward Complete') WHERE status = 'Approved'");
+    } catch (e) { /* already exists */ }
+    // "Approved" used to be the terminal state (no further action existed). Now a DC engineer
+    // marks the actual outcome (Received at Site / Not Received for Inward, Outward Complete /
+    // Cancelled for Outward). Widening the enum is safe to run every startup (MySQL accepts
+    // re-applying the same definition as a no-op); the one-time backfill below is guarded by
+    // checking the column's own current definition, NOT by try/catch - otherwise a movement an
+    // Admin approves tomorrow and leaves "Approved" overnight would get silently auto-closed on
+    // the next server restart, which must never happen (only movements that were "Approved" back
+    // when that status truly had no further step get backfilled, once).
+    const [[mvStatusColInfo]] = await conn.query(
+      `SELECT COLUMN_TYPE FROM information_schema.columns WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'material_movements' AND COLUMN_NAME = 'status'`
+    );
+    const mvStatusNeedsWiden = mvStatusColInfo && !/Received at Site/.test(mvStatusColInfo.COLUMN_TYPE);
+    if (mvStatusNeedsWiden) {
+      await conn.query("ALTER TABLE material_movements MODIFY status ENUM('Pending Approval','Approved','Rejected','Received at Site','Not Received','Outward Complete','Cancelled') NOT NULL DEFAULT 'Pending Approval'");
+      await conn.query("UPDATE material_movements SET status = IF(movement_type = 'Inward', 'Received at Site', 'Outward Complete') WHERE status = 'Approved'");
+    }
+    // Ticket creation is now its own step after approval (Pending Approval -> Approved -> Ticket Issued -> outcome).
+    // Guarded by the column's own definition (not try/catch) so the one-time conversion below never re-runs:
+    // movements that were already approved WITH a ticket number under the old combined flow move to "Ticket Issued";
+    // approved ones without a ticket stay "Approved" and wait for someone to generate it.
+    const [[mvTicketColInfo]] = await conn.query(
+      `SELECT COLUMN_TYPE FROM information_schema.columns WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'material_movements' AND COLUMN_NAME = 'status'`
+    );
+    if (mvTicketColInfo && !/Ticket Issued/.test(mvTicketColInfo.COLUMN_TYPE)) {
+      await conn.query("ALTER TABLE material_movements MODIFY status ENUM('Pending Approval','Approved','Rejected','Ticket Issued','Received at Site','Not Received','Outward Complete','Cancelled') NOT NULL DEFAULT 'Pending Approval'");
+      await conn.query("UPDATE material_movements SET status = 'Ticket Issued' WHERE status = 'Approved' AND ticket_no IS NOT NULL AND ticket_no <> ''");
+    }
     await createIndexIfNotExists(conn, 'idx_movements_site', 'material_movements', 'site');
     await createIndexIfNotExists(conn, 'idx_movements_type', 'material_movements', 'movement_type');
     await createIndexIfNotExists(conn, 'idx_movements_date', 'material_movements', 'movement_date');
@@ -1054,6 +1159,12 @@ async function initDB() {
         KEY idx_audit_entity (entity_type, entity_id)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     `);
+    // Full copy of a deleted record, for the Restore button on the Logs page. Kept
+    // separate from `details` (which is scrubbed of sensitive fields and capped at
+    // 4000 chars for readability) because this needs the exact row, in full, to
+    // insert back unchanged - written directly by auditLogDeleteWithSnapshot(),
+    // never through the regular auditLog() scrub/truncate path.
+    try { await conn.query('ALTER TABLE audit_logs ADD COLUMN snapshot_data MEDIUMTEXT NULL AFTER details'); } catch (e) { /* already exists */ }
 
     // Seed the two zones the app always shipped with, for both sites, so
     // existing installs keep working unchanged once this table exists.
@@ -1085,6 +1196,9 @@ async function initDB() {
     try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_port INT DEFAULT 443'); } catch (e) { /* already exists */ }
     try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_version VARCHAR(20)'); } catch (e) { /* already exists */ }
     try { await conn.query('ALTER TABLE assets ADD COLUMN bmc_firmware VARCHAR(100)'); } catch (e) { /* already exists */ }
+    // Host BIOS version exactly as the BMC reports it on every Redfish sync (always overwritten with the latest
+    // reading - unlike assets.firmware, which only fills once if blank).
+    try { await conn.query('ALTER TABLE assets ADD COLUMN bios_version VARCHAR(100)'); } catch (e) { /* already exists */ }
     try { await conn.query('ALTER TABLE assets ADD COLUMN health_status VARCHAR(20)'); } catch (e) { /* already exists */ }
     try { await conn.query('ALTER TABLE assets ADD COLUMN power_state VARCHAR(20)'); } catch (e) { /* already exists */ }
     try { await conn.query('ALTER TABLE assets ADD COLUMN last_redfish_sync_at DATETIME NULL'); } catch (e) { /* already exists */ }
@@ -1095,12 +1209,33 @@ async function initDB() {
     // OneView devices. Always reflects the latest poll (live state), same
     // as health_status/power_state above - never COALESCE-protected.
     try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_alert_count INT NULL'); } catch (e) { /* already exists */ }
+    // Power reading from the Power subresource - live state, same COALESCE-free
+    // treatment as health_status/power_state above.
+    try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_power_watts INT NULL'); } catch (e) { /* already exists */ }
+    // Power read from Dell OME / HPE OneView (their own columns, so Inventory fields are never touched).
+    try { await conn.query('ALTER TABLE assets ADD COLUMN hw_power_watts INT NULL'); } catch (e) { /* already exists */ }
+    try { await conn.query('ALTER TABLE assets ADD COLUMN hw_psu_max_watts INT NULL'); } catch (e) { /* already exists */ }
+    try { await conn.query("ALTER TABLE assets ADD COLUMN hw_power_source VARCHAR(12) NULL"); } catch (e) { /* already exists */ }
+    try { await conn.query('ALTER TABLE assets ADD COLUMN hw_power_synced_at DATETIME NULL'); } catch (e) { /* already exists */ }
+
     // Lets an admin exclude a device from the Multi-Vendor (Redfish) monitoring
     // list without touching its Asset Inventory record - for devices that have
     // a management IP captured (storage arrays, network switches, firewalls,
     // etc.) but aren't meant to be polled over Redfish. Hidden from the default
     // list view; still filterable back in with "Show ignored".
     try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_monitor_ignored TINYINT(1) NOT NULL DEFAULT 0'); } catch (e) { /* already exists */ }
+
+    // Dedicated column for the serial number the BMC itself reports over Redfish -
+    // deliberately SEPARATE from the shared `serial_number` field above. That field is
+    // COALESCE-protected because many sites (this one included) put their own internal
+    // asset-tag-style value into Asset Inventory's Serial Number at creation time, not the
+    // vendor's real hardware serial, and OME/OneView device matching keys off that exact
+    // value - silently overwriting it with whatever Redfish reports would both discard an
+    // intentionally-entered value and risk breaking that matching. This column instead
+    // always reflects the latest Redfish readout (same live-state treatment as
+    // health_status/power_state above), so the Multi-Vendor (Redfish) table can show the
+    // BMC's own serial without touching or depending on Asset Inventory's field at all.
+    try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_serial_number VARCHAR(150)'); } catch (e) { /* already exists */ }
 
     // ---- Widen id columns (VARCHAR(20) -> VARCHAR(50)) ----
     // Bulk-upsert generates IDs like AST-<13-digit timestamp>-<batch index>,
@@ -1260,6 +1395,12 @@ async function initDB() {
     // HARDENING: forced change of seeded/default passwords (additive columns; existing users default to 0 = nothing changes for them)
     try { await conn.query('ALTER TABLE users ADD COLUMN must_change_password TINYINT(1) NOT NULL DEFAULT 0'); } catch (e) { /* column already exists */ }
     try { await conn.query('ALTER TABLE users ADD COLUMN password_changed_at DATETIME NULL'); } catch (e) { /* column already exists */ }
+    // Generic "Approver" flag: lets an Admin designate any user (any role) as someone who
+    // can approve requests wherever an approval stage exists in this app (Visitor Access,
+    // Material Movement, and any future one) - in addition to Admin, who can always approve
+    // everything. Site scope for an Approver reuses that user's existing location_access,
+    // same as every other permission in this app; no separate approver-site mapping needed.
+    try { await conn.query('ALTER TABLE users ADD COLUMN is_approver TINYINT(1) NOT NULL DEFAULT 0'); } catch (e) { /* column already exists */ }
 
     // Admin-declared "current firmware version being pushed" per vendor —
     // deliberately a manual value, not derived from an OME/OneView baseline
@@ -1323,7 +1464,7 @@ async function initDB() {
     for (const ddl of ["ALTER TABLE firmware_jobs ADD COLUMN source VARCHAR(20) NOT NULL DEFAULT 'dcim'", 'ALTER TABLE firmware_jobs ADD COLUMN job_name VARCHAR(255) NULL']) {
       try { await conn.query(ddl); } catch (e) { /* column already exists */ }
     }
-    try { await conn.query('DELETE FROM firmware_jobs WHERE started_at < ?', [Date.now() - 14 * 24 * 3600 * 1000]); } catch (e) { /* housekeeping only */ }
+    try { await conn.query('DELETE FROM firmware_jobs WHERE started_at < ?', [Date.now() - 31 * 24 * 3600 * 1000]); } catch (e) { /* housekeeping only */ }
 
     // Consolidate hardware types that differ only by case (e.g. "DellServer",
     // "Dellserver", "DELLServer" from data entered before normalization was
@@ -1536,7 +1677,7 @@ async function initDB() {
     await relaxLegacyRequiredColumns(conn, 'asset_movements', new Set(['id', 'asset_id', 'serial_number', 'movement_type', 'from_site', 'from_zone', 'from_rack_no', 'from_position', 'to_site', 'to_zone', 'to_rack_no', 'to_position', 'movement_date', 'reason', 'reference_no', 'performed_by', 'remarks', 'created_at']));
     await relaxLegacyRequiredColumns(conn, 'issues', new Set(['id', 'ticket_no', 'asset_id', 'asset_type', 'site', 'zone', 'rack_no', 'u_position', 'location_detail', 'title', 'description', 'severity', 'part_required', 'part_name', 'reported_date', 'diagnosed_date', 'received_date', 'scheduled_date', 'completed_date', 'moved_to_store_date', 'returned_to_oem_date', 'notes', 'created_at']));
     await relaxLegacyRequiredColumns(conn, 'dc_activities', new Set(['id', 'site', 'zone', 'hardware_type', 'activity_type', 'description', 'start_date', 'completion_date', 'created_by', 'created_at']));
-    await relaxLegacyRequiredColumns(conn, 'material_movements', new Set(['id', 'movement_type', 'site', 'item_name', 'description', 'quantity', 'unit', 'receiver_name', 'sender_name', 'dc_invoice_no', 'dc_invoice_file', 'dc_invoice_original_name', 'movement_date', 'remarks', 'created_by', 'created_at']));
+    await relaxLegacyRequiredColumns(conn, 'material_movements', new Set(['id', 'ticket_no', 'movement_type', 'site', 'item_name', 'description', 'quantity', 'unit', 'receiver_name', 'sender_name', 'dc_invoice_no', 'dc_invoice_file', 'dc_invoice_original_name', 'movement_date', 'remarks', 'status', 'approver_name', 'approved_at', 'reject_reason', 'created_by', 'created_at']));
     await relaxLegacyRequiredColumns(conn, 'locations', new Set(['id', 'name', 'status', 'created_by', 'created_at', 'archived_at', 'archived_by']));
     await relaxLegacyRequiredColumns(conn, 'rack_types', new Set(['id', 'name', 'created_by', 'created_at']));
     await relaxLegacyRequiredColumns(conn, 'hardware_types', new Set(['id', 'name', 'created_by', 'created_at', 'category', 'default_height']));
@@ -1699,6 +1840,8 @@ function sendErr(res, e) {
   if (status >= 500) { res.locals.errLogged = true; const rq = res.req || {}; log.error(`[error] ${rq.method || ''} ${String(rq.originalUrl || '').split('?')[0]} -> ${status} (req ${rq.id || '-'}): ${(e && e.stack) || (e && e.message) || e}`); }
   res.status(status).json({ error: (e && e.message) || 'Internal server error' }); // code / status / requestId are added by the /api response wrapper
 }
+// Minimal HTML-escape for values interpolated into notification emails (ticket/visitor details are plain user-entered text, never meant as markup).
+function esc(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 // PREFIX-<ms>, with a counter appended when two ids are requested in the same millisecond.
 let _idLastMs = 0, _idSeq = 0;
 function genId(prefix) {
@@ -2075,6 +2218,26 @@ async function generateTicketNo(site) {
   }
   return `${base}${String(seq).padStart(2, '0')}`;
 }
+// Same scheme as generateTicketNo() above (PREFIX + YY + MM + 2-digit monthly
+// sequence), generalized to any ticket-numbered table/column/prefix - used by
+// Visitor Access (VIS) and Material Movements (MOV) so every ticket number in
+// the app follows one consistent, independently-verifiable format.
+async function generateTicketNoGeneric(prefix, table, column = 'ticket_no') {
+  const now = new Date();
+  const yy = String(now.getFullYear()).slice(-2);
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const base = `${prefix}${yy}${mm}`;
+  const [rows] = await pool.query(
+    `SELECT ${column} AS ticket_no FROM ${table} WHERE ${column} LIKE ? ORDER BY CAST(SUBSTRING(${column}, ?) AS UNSIGNED) DESC LIMIT 1`,
+    [`${base}%`, base.length + 1]
+  );
+  let seq = 1;
+  if (rows.length > 0 && rows[0].ticket_no) {
+    const match = String(rows[0].ticket_no).match(new RegExp(`^${base}(\\d+)$`));
+    if (match) seq = parseInt(match[1], 10) + 1;
+  }
+  return `${base}${String(seq).padStart(2, '0')}`;
+}
 
 // ===== Dynamic locations (DCs) =====
 // location_access on the users table now stores either 'All' (access to
@@ -2196,7 +2359,7 @@ function authenticateToken(req, res, next) {
     try {
       // Always enforce the current DB role/location assignment, not stale JWT claims.
       const [rows] = await pool.query(
-        'SELECT id, username, name, role, location_access, status, session_id, must_change_password FROM users WHERE id = ?',
+        'SELECT id, username, name, role, location_access, status, session_id, must_change_password, is_approver FROM users WHERE id = ?',
         [tokenUser.id]
       );
       if (rows.length === 0 || rows[0].status !== 'Active') {
@@ -2248,6 +2411,15 @@ function requireRole(roles) {
   };
 }
 
+// Gate for every "Approve / Reject" action in the app (Visitor Access, Material Movement,
+// and any future one): Admin can always approve; anyone else needs the is_approver flag set
+// on their account. This only checks the flag - which SITE they may approve for is still
+// enforced separately by assertSiteAccess(req.user, <record's site>) in each handler, using
+// that same user's existing location_access, exactly like every other site-scoped action.
+function requireApproverOrAdmin(req, res, next) {
+  if (req.user.role === 'Admin' || Number(req.user.is_approver)) return next();
+  return res.status(403).json({ error: 'Insufficient permissions' });
+}
 // ============================================================================
 // LICENSING — see lib/license.js and docs/LICENSING.md. Inert (status always
 // reports enforced:false) until lib/license-public-key.js has a real key.
@@ -2359,8 +2531,25 @@ function getMonitorConfig(product, site, zone) {
 // already set at the process level.
 const https = require('https');
 let insecureDispatcher = null;
-try { const { Agent } = require('undici'); insecureDispatcher = new Agent({ connect: { rejectUnauthorized: false } }); }
-catch (e) { log.warn('NOTE: "undici" is not installed - Dell OME / HPE OneView appliances with self-signed certificates will be rejected. Run: npm install undici'); }
+try {
+  const { Agent } = require('undici');
+  insecureDispatcher = new Agent({
+    connect: {
+      rejectUnauthorized: false,
+      // A real-world fleet of Dell iDRAC / HPE iLO BMCs commonly includes older generations
+      // (iDRAC7/8, iLO4 and earlier) whose TLS stack negotiates only TLS 1.0/1.1 and older
+      // cipher suites. Recent Node/OpenSSL builds refuse that handshake outright by default -
+      // which surfaces here as a bare, unhelpful "fetch failed" with no indication it was a TLS
+      // version/cipher mismatch rather than the device genuinely being unreachable. This widens
+      // what this SPECIFIC dispatcher (used only for BMC/appliance monitoring calls, never
+      // globally) will negotiate, so an old-firmware BMC that Test & Detect's own single call
+      // happens to tolerate isn't rejected here. rejectUnauthorized is already false above for
+      // the same reason (self-signed certs) - this does the equivalent for protocol/cipher age.
+      minVersion: 'TLSv1',
+      ciphers: 'DEFAULT:@SECLEVEL=0',
+    },
+  });
+} catch (e) { log.warn('NOTE: "undici" is not installed - Dell OME / HPE OneView appliances with self-signed certificates will be rejected. Run: npm install undici'); }
 const MONITOR_FETCH_TIMEOUT_MS = 30000;
 function monitorFetch(url, opts = {}) {
   const isHttps = url.startsWith('https://');
@@ -2438,6 +2627,8 @@ function normalizeOmeDevice(d) {
     healthStatus: OME_HEALTH_MAP[d.Status] || 'Unknown',
     powerState: OME_POWER_MAP[d.PowerState] || 'Unknown',
     firmwareVersion: null, // filled in below, per device, via fetchOmeSystemRom
+    powerWatts: null, // current draw in watts (needs the OME Power Manager plugin) - filled in per device
+    psuMaxWatts: null, // maximum / rated watts
   };
 }
 // Dell OME device Status enum: 1000 Normal, 2000 Unknown, 3000 Warning, 4000 Critical, 5000 No status/informational.
@@ -2561,6 +2752,335 @@ const MONITOR_MAX_PAGES = 25; // 25 * 200 = 5000 devices ceiling, safety-net onl
 // device on every zone (fetchOmeDevices' full behavior) was pure waste —
 // likely the actual cause of Reconciliation timing out on any estate with
 // more than a handful of zones.
+// ---------------------------------------------------------------------------
+// Per-server POWER (current watts + maximum watts) from the appliances the
+// Monitoring page already talks to. Both numbers are best-effort: a device
+// (or a whole appliance) that does not expose them simply reports null and
+// the UI shows a dash - it never fails the device list.
+//
+//  * HPE OneView: GET <server uri>/utilization gives the live AveragePower
+//    metric (latest sample) and PowerCap; GET <server uri>/environmentalConfiguration
+//    gives calibratedMaxPower. Both are part of OneView itself.
+//  * Dell OME: live watts exist ONLY through the OME Power Manager plugin
+//    (POST /api/MetricService/Metrics, metric type 4 = instant system power;
+//    POST /api/PowerService/DeviceDetails returns EstimatedMaxPower). Plain
+//    OME without that plugin has no live-watts call, so those zones report
+//    null and the dashboard falls back to the Redfish reading for the server.
+// Set MONITOR_POWER_FETCH=off to skip all of this (e.g. a very large estate).
+// ---------------------------------------------------------------------------
+// ---- Sync progress (shown as a % bar on the Monitoring page) -------------------------------------------------
+// One record per zone; each vendor (OME / OneView) reports its own phase. Phases and their share of the bar:
+// device list 0-5%, firmware 5-60%, power readings 60-95%, saving 95-100%.
+const syncProgressByZone = new Map();
+const SYNC_PHASE_LABEL = { list: 'Reading device list', firmware: 'Reading firmware for every device', power: 'Reading power & PSU capacity', saving: 'Saving to Asset Inventory', done: 'Done' };
+function progressBegin(site, zone, vendor) {
+  const k = `${site}|${zone}`;
+  let z = syncProgressByZone.get(k);
+  const stale = !z || Date.now() - z.updatedAt > 20 * 60 * 1000 || Object.values(z.vendors).every((v) => v.finished);
+  if (stale) { z = { vendors: {}, updatedAt: Date.now() }; syncProgressByZone.set(k, z); }
+  z.vendors[vendor] = { phase: 'list', done: 0, total: 0, finished: false };
+  z.updatedAt = Date.now();
+}
+function progressSet(site, zone, vendor, phase, done = 0, total = 0) {
+  const z = syncProgressByZone.get(`${site}|${zone}`); const v = z && z.vendors[vendor];
+  if (!v) return;
+  v.phase = phase; v.done = done; v.total = total; z.updatedAt = Date.now();
+}
+function progressEnd(site, zone, vendor) {
+  const z = syncProgressByZone.get(`${site}|${zone}`); const v = z && z.vendors[vendor];
+  if (!v) return;
+  v.phase = 'done'; v.finished = true; z.updatedAt = Date.now();
+}
+function vendorPercent(v) {
+  if (v.finished) return 100;
+  const f = v.total > 0 ? Math.min(1, v.done / v.total) : 0;
+  if (v.phase === 'list') return 2;
+  if (v.phase === 'firmware') return Math.round(5 + 55 * f);
+  if (v.phase === 'power') return Math.round(60 + 35 * f);
+  if (v.phase === 'saving') return 97;
+  return 0;
+}
+function getSyncProgress(site, zone) {
+  const z = syncProgressByZone.get(`${site}|${zone}`);
+  if (!z) return { running: false };
+  const vs = Object.entries(z.vendors);
+  const active = vs.filter(([, v]) => !v.finished);
+  if (!active.length) return { running: false, percent: 100 };
+  const percent = Math.min(99, Math.round(vs.reduce((a, [, v]) => a + vendorPercent(v), 0) / vs.length));
+  const [name, cur] = active[0];
+  return { running: true, percent, phase: cur.phase, label: SYNC_PHASE_LABEL[cur.phase] || '', done: cur.done, total: cur.total, vendor: name === 'OME' ? 'Dell OME' : 'HPE OneView',
+    steps: ['list', 'firmware', 'power', 'saving'].map((p) => ({ key: p, label: { list: 'Device list', firmware: 'Firmware', power: 'Power readings', saving: 'Saving' }[p], state: ['list', 'firmware', 'power', 'saving'].indexOf(p) < ['list', 'firmware', 'power', 'saving'].indexOf(cur.phase) ? 'done' : (p === cur.phase ? 'active' : 'todo') })) };
+}
+const POWER_FETCH_ENABLED = String(process.env.MONITOR_POWER_FETCH || 'on').toLowerCase() !== 'off';
+const POWER_FETCH_CONCURRENCY = 10;
+const OME_POWER_MANAGER_PLUGIN_ID = '2F6D05BE-EE4B-4B0E-B873-C8D2F64A4625'; // Dell's published Power Manager plugin id
+const OME_POWER_RETRY_AFTER_MS = 30 * 60 * 1000;
+const omePsuCache = {}; // `${site}|${zone}|${deviceId}` -> { watts, at }  (PSU rating rarely changes)
+const omePowerState = {}; // "site|zone" -> { fails, disabledUntil } so a zone without the plugin is not hammered once per device
+const oneviewMaxPowerCache = {}; // server uri (per host) -> { watts, at }: the calibrated maximum almost never changes
+
+function toWatts(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 && n < 100000 ? Math.round(n) : null;
+}
+// OneView metric samples arrive either as [timestamp, value] pairs or as "timestamp value" strings.
+function latestMetricSample(metric) {
+  const samples = (metric && Array.isArray(metric.metricSamples)) ? metric.metricSamples : [];
+  for (let i = samples.length - 1; i >= 0; i--) {
+    const s = samples[i];
+    const val = Array.isArray(s) ? s[1] : (typeof s === 'string' ? s.trim().split(/\s+/)[1] : (s && typeof s === 'object' ? s.value : s));
+    const w = toWatts(val);
+    if (w !== null) return w;
+  }
+  return null;
+}
+async function fetchOneviewPower(site, zone, uri) {
+  const out = { powerWatts: null, psuMaxWatts: null };
+  if (!uri) return out;
+  const session = await getOneviewSession(site, zone);
+  if (!session) return out;
+  const headers = { Auth: session.sessionId, 'X-API-Version': String(session.apiVersion) };
+  try {
+    const res = await monitorFetch(`${session.host}${uri}/utilization?fields=AveragePower,PeakPower,PowerCap`, { headers });
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      const list = (data && Array.isArray(data.metricList)) ? data.metricList : [];
+      const avg = list.find((m) => /^averagepower$/i.test(m.metricName || ''));
+      const cap = list.find((m) => /^powercap$/i.test(m.metricName || ''));
+      out.powerWatts = latestMetricSample(avg);
+      if (avg) out.psuMaxWatts = toWatts(avg.metricCapacity); // fallback maximum if environmentalConfiguration has none
+      const capW = toWatts(cap && cap.metricCapacity);
+      if (capW && !out.psuMaxWatts) out.psuMaxWatts = capW;
+    }
+  } catch (e) { /* utilization unavailable for this server */ }
+  const cacheKey = `${session.host}${uri}`;
+  const cached = oneviewMaxPowerCache[cacheKey];
+  if (cached && Date.now() - cached.at < 24 * 3600 * 1000) {
+    if (cached.watts) out.psuMaxWatts = cached.watts;
+  } else {
+    try {
+      const res = await monitorFetch(`${session.host}${uri}/environmentalConfiguration`, { headers });
+      if (res.ok) {
+        const env = await res.json().catch(() => null);
+        const w = toWatts(env && (env.calibratedMaxPower != null ? env.calibratedMaxPower : env.maxPower));
+        oneviewMaxPowerCache[cacheKey] = { watts: w, at: Date.now() };
+        if (w) out.psuMaxWatts = w; // calibrated maximum is the better figure when present
+      } else {
+        oneviewMaxPowerCache[cacheKey] = { watts: null, at: Date.now() };
+      }
+    } catch (e) { /* leave whatever the utilization call gave */ }
+  }
+  return out;
+}
+// Pulls a watts figure out of an OME power response whose exact shape differs between OME versions:
+// a flat object, a {Value:[...]} list, or an array of samples. Prefers fields named like current/instant/average power.
+function omeWattsFromPayload(data) {
+  if (data == null) return null;
+  const pick = (o) => {
+    if (!o || typeof o !== 'object') return null;
+    const keys = Object.keys(o);
+    const rank = [/^(current|instant|instantaneous)/i, /(current|instant).*(power|watt)/i, /(power|watt).*(current|instant)/i, /^(average|avg).*(power|watt)/i, /^power(consumption|usage)?(watts)?$/i, /^value$/i];
+    for (const re of rank) { const k = keys.find((x) => re.test(x) && toWatts(o[x]) !== null); if (k) return toWatts(o[k]); }
+    return null;
+  };
+  if (Array.isArray(data)) { for (let i = data.length - 1; i >= 0; i -= 1) { const w = pick(data[i]); if (w !== null) return w; } return null; }
+  const direct = pick(data);
+  if (direct !== null) return direct;
+  for (const k of ['Value', 'value', 'Data', 'PowerUsage', 'Metrics']) { if (data[k] && typeof data[k] === 'object') { const w = omeWattsFromPayload(data[k]); if (w !== null) return w; } }
+  return null;
+}
+async function fetchOmePower(site, zone, deviceId) {
+  const out = { powerWatts: null, psuMaxWatts: null };
+  if (deviceId == null) return out;
+  const stateKey = `${site}|${zone}`;
+  const st = omePowerState[stateKey] || (omePowerState[stateKey] = { fails: 0, disabledUntil: 0, skip: {} });
+  if (!st.skip) st.skip = {};
+  if (st.disabledUntil > Date.now()) return out; // nothing answered power calls for this zone recently
+  const session = await getOmeToken(site, zone);
+  if (!session) return out;
+  const headers = { 'X-Auth-Token': session.token, 'Content-Type': 'application/json' };
+  const id = Number(deviceId);
+  let answered = false;
+  // An endpoint this OME version refuses (e.g. "power usage not applicable", plugin missing) is skipped for 6 h
+  // in this zone after 3 refusals in a row, so we do not ask the appliance for it on every cycle.
+  const endpointOff = (name) => (st.skip[name] && st.skip[name].until > Date.now());
+  const noteEndpoint = (name, ok) => {
+    const e = st.skip[name] || (st.skip[name] = { n: 0, until: 0 });
+    if (ok) { e.n = 0; e.until = 0; } else if (++e.n >= 3) { e.until = Date.now() + 6 * 3600 * 1000; e.n = 0; }
+  };
+  const getJson = async (path, name) => {
+    if (endpointOff(name)) return null;
+    try {
+      const res = await monitorFetch(`${session.host}${path}`, { headers });
+      noteEndpoint(name, res.ok);
+      if (!res.ok) return null;
+      answered = true;
+      return await res.json().catch(() => null);
+    } catch (e) { return null; }
+  };
+  // 1) Core OME (no plugin needed): PSU inventory gives the installed rated capacity.
+  const psuKey = `${stateKey}|${id}`;
+  const psuHit = omePsuCache[psuKey];
+  const psu = (psuHit && Date.now() - psuHit.at < 24 * 3600 * 1000) ? null : await getJson(`/api/DeviceService/Devices(${id})/InventoryDetails('serverPowerSupplies')`, 'psu');
+  const psus = psu && Array.isArray(psu.InventoryInfo) ? psu.InventoryInfo : [];
+  // Server capacity = ONE PSU's rating (the other PSU is redundancy), so take the largest, not the sum.
+  let rated = 0;
+  for (const p of psus) rated = Math.max(rated, toWatts(p.RatedMaxOutputPower) || toWatts(p.OutputWatts) || toWatts(p.Range1MaxInputPowerWatts) || 0);
+  if (rated > 0) { out.psuMaxWatts = rated; omePsuCache[psuKey] = { watts: rated, at: Date.now() }; }
+  else if (psuHit) out.psuMaxWatts = psuHit.watts;
+  // 2) Core OME (confirmed on OME 4.8): the device Overview's own data - GET Devices(id)/Power returns the current draw in
+  //    `power` (watts, as text) next to instantaneousHeadroom / peakPower / minimumPower / avgPower. No plugin needed.
+  const pw = await getJson(`/api/DeviceService/Devices(${id})/Power`, 'power');
+  out.powerWatts = toWatts(pw && pw.power);
+  // 3) Power Manager plugin, only when core OME gave no live reading.
+  if (out.powerWatts === null && !endpointOff('metrics')) {
+    try {
+      const res = await monitorFetch(`${session.host}/api/MetricService/Metrics`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ PluginId: OME_POWER_MANAGER_PLUGIN_ID, EntityType: 0, EntityId: id, MetricTypes: [4], Duration: 0, SortOrder: 0 }),
+      });
+      noteEndpoint('metrics', res.ok);
+      if (res.ok) {
+        answered = true;
+        const data = await res.json().catch(() => null);
+        const rows = (data && Array.isArray(data.Value)) ? data.Value : [];
+        const row = rows.find((r) => Number(r.Type) === 4) || rows[0];
+        out.powerWatts = toWatts(row && row.Value);
+      }
+    } catch (e) { /* plugin not installed */ }
+  }
+  if (out.psuMaxWatts === null && !endpointOff('details')) {
+    try {
+      const res = await monitorFetch(`${session.host}/api/PowerService/DeviceDetails`, { method: 'POST', headers, body: JSON.stringify({ DeviceId: id }) });
+      noteEndpoint('details', res.ok);
+      if (res.ok) { answered = true; const data = await res.json().catch(() => null); out.psuMaxWatts = toWatts(data && data.EstimatedMaxPower); }
+    } catch (e) { /* plugin not installed */ }
+  }
+  if (answered) st.fails = 0;
+  else if (++st.fails >= 3) { st.disabledUntil = Date.now() + OME_POWER_RETRY_AFTER_MS; st.fails = 0; log.info(`OME power: no power endpoint answered for ${stateKey}; skipping power for ${Math.round(OME_POWER_RETRY_AFTER_MS / 60000)} min`); }
+  return out;
+}
+// Power numbers are filled in AFTER the device list is returned/cached (never inside the sync request), so a big
+// estate (e.g. 65+ servers) cannot push Sync past the browser's 30-second limit. The devices are the same objects
+// the snapshot cache holds, so the next page load/refresh sees the values; they are also saved to Asset Inventory.
+// Dell OME 4.8 does not report live watts, so for powered-on Dell servers the iDRAC itself is asked (Redfish Power,
+// PowerControl[0].PowerConsumedWatts) using the same REDFISH_CREDENTIALS list as the Multi-Vendor module (OFF by default - set MONITOR_IDRAC_POWER=on; OME's own Power call is the normal source). Care is taken
+// not to trip iDRAC's failed-login lockout: the credential that worked once is tried first everywhere, and a host
+// where every credential failed is left alone for 30 minutes. Enable with MONITOR_IDRAC_POWER=on.
+const IDRAC_POWER_ENABLED = String(process.env.MONITOR_IDRAC_POWER || 'off').toLowerCase() === 'on'; // opt-in: only useful when this server can reach the iDRACs
+const idracState = { winner: null, badUntil: {} };
+function idracCandidates() {
+  const raw = String(process.env.REDFISH_CREDENTIALS || '').split(',').map((x) => x.trim()).filter(Boolean).map((pair) => {
+    const p = pair.split(':');
+    return p.length >= 3 ? { vendor: p[0].toLowerCase(), username: p[1], password: p.slice(2).join(':') } : null;
+  }).filter(Boolean);
+  const dell = raw.filter((c) => c.vendor === 'dell' || c.vendor === 'any');
+  if (dell.length) return dell;
+  const u = process.env.REDFISH_DEFAULT_USERNAME;
+  return u ? [{ vendor: null, username: u, password: process.env.REDFISH_DEFAULT_PASSWORD || '' }] : [];
+}
+async function fetchIdracWatts(ip) {
+  if (!IDRAC_POWER_ENABLED || !ip) return null;
+  if ((idracState.badUntil[ip] || 0) > Date.now()) return null;
+  const cands = idracCandidates();
+  if (!cands.length) return null;
+  // Once one credential has worked, use ONLY that one on other hosts (a wrong guess counts toward iDRAC lockout);
+  // while none has worked yet, walk the candidate list.
+  const ordered = idracState.winner != null && cands[idracState.winner] ? [cands[idracState.winner]] : cands;
+  for (const c of ordered) {
+    try {
+      const res = await monitorFetch(`https://${ip}/redfish/v1/Chassis/System.Embedded.1/Power`, {
+        headers: { Accept: 'application/json', Authorization: 'Basic ' + Buffer.from(`${c.username}:${c.password}`).toString('base64') },
+      });
+      if (res.status === 401 || res.status === 403) { await new Promise((r) => setTimeout(r, 250 + Math.floor(Math.random() * 250))); continue; }
+      if (!res.ok) return null; // reachable but no Power resource: not a credential problem
+      idracState.winner = cands.indexOf(c);
+      const data = await res.json().catch(() => null);
+      const pc = data && Array.isArray(data.PowerControl) ? data.PowerControl[0] : null;
+      return toWatts(pc && pc.PowerConsumedWatts);
+    } catch (e) { return null; } // unreachable BMC
+  }
+  idracState.badUntil[ip] = Date.now() + 30 * 60 * 1000; // every credential rejected: stop asking this host for a while
+  return null;
+}
+const powerEnrichRunning = new Map();
+// A fresh sync builds new device objects; keep the last known power numbers on them until the background pass refreshes them.
+function carryOverPower(prevDevices, devices) {
+  if (!Array.isArray(prevDevices)) return;
+  const byId = new Map(prevDevices.map((d) => [d.id != null ? d.id : d.uri, d]));
+  for (const d of devices) {
+    const p = byId.get(d.id != null ? d.id : d.uri);
+    if (p) { if (d.powerWatts == null) d.powerWatts = p.powerWatts == null ? null : p.powerWatts; if (d.psuMaxWatts == null) d.psuMaxWatts = p.psuMaxWatts == null ? null : p.psuMaxWatts; }
+  }
+}
+// Fill in the last power numbers saved on Asset Inventory (matched by serial) so a freshly built snapshot - e.g. right
+// after a restart - already shows the last known values instead of blanks while the appliance is being asked again.
+async function seedPowerFromAssets(site, devices) {
+  if (!POWER_FETCH_ENABLED || !Array.isArray(devices) || !devices.length) return;
+  try {
+    const [rows] = await pool.query(
+      'SELECT UPPER(TRIM(serial_number)) AS sn, hw_power_watts AS w, hw_psu_max_watts AS mx FROM assets WHERE site = ? AND (hw_power_watts IS NOT NULL OR hw_psu_max_watts IS NOT NULL)', [site]);
+    const bySn = new Map(rows.map((r) => [r.sn, r]));
+    for (const d of devices) {
+      const r = d.serialNumber ? bySn.get(String(d.serialNumber).trim().toUpperCase()) : null;
+      if (!r) continue;
+      if (d.powerWatts == null && r.w != null) d.powerWatts = r.w;
+      if (d.psuMaxWatts == null && r.mx != null) d.psuMaxWatts = r.mx;
+    }
+  } catch (e) { /* column not there yet / DB busy: just no seed */ }
+}
+// Runs the per-device power lookups. Returns a promise the caller may wait on for a short budget (so the first
+// response already carries most numbers) while the rest finishes in the background without blocking the sync.
+function startPowerEnrichment(key, site, devices, fetchOne, source, prog) {
+  if (!POWER_FETCH_ENABLED) { if (prog) progressEnd(site, prog.zone, prog.vendor); return Promise.resolve(); }
+  if (powerEnrichRunning.has(key)) return powerEnrichRunning.get(key);
+  const p = (async () => {
+    try {
+      const isSrv = (d) => !(d.deviceType !== undefined && d.deviceType !== null && Number(d.deviceType) !== 1000);
+      const totalSrv = devices.filter(isSrv).length; let doneSrv = 0;
+      if (prog) progressSet(site, prog.zone, prog.vendor, 'power', 0, totalSrv);
+      await mapWithConcurrency(devices, POWER_FETCH_CONCURRENCY, async (d) => {
+        if (!isSrv(d)) return;
+        try {
+          const r = await fetchOne(d);
+          if (r.powerWatts != null) d.powerWatts = r.powerWatts;
+          if (r.psuMaxWatts != null) d.psuMaxWatts = r.psuMaxWatts;
+        } catch (e) { /* keep what we had */ }
+        if (d.powerState === 'Off') d.powerWatts = 0;
+        if (prog) progressSet(site, prog.zone, prog.vendor, 'power', ++doneSrv, totalSrv);
+      });
+      if (prog) progressSet(site, prog.zone, prog.vendor, 'saving');
+      await persistDevicePower(site, devices, source);
+    } catch (e) { log.warn(`Power enrichment failed for ${key}: ${e.message}`); }
+    finally { powerEnrichRunning.delete(key); if (prog) progressEnd(site, prog.zone, prog.vendor); }
+  })();
+  powerEnrichRunning.set(key, p);
+  return p;
+}
+const POWER_WAIT_BUDGET_MS = 8000;          // manual Sync / page load: reply quickly, finish the rest in the background
+const POWER_AUTOSYNC_WAIT_MS = 10 * 60 * 1000; // 30-min auto-sync: power readings are part of the same run - wait until they are read and saved
+const waitUpTo = (p, ms) => Promise.race([p, new Promise((r) => { setTimeout(r, ms).unref(); })]);
+// Writes the power numbers onto the matching Asset Inventory rows (matched by serial number within the site),
+// into their OWN columns - Inventory's serial/model/etc. are never touched. Only non-empty readings overwrite
+// (a transient failure keeps the last good value); a server reported Off is recorded as 0 W.
+async function persistDevicePower(site, devices, source) {
+  if (!POWER_FETCH_ENABLED || !Array.isArray(devices)) return;
+  for (const d of devices) {
+    if (!d || !d.serialNumber) continue;
+    const off = d.powerState === 'Off';
+    const watts = off ? 0 : d.powerWatts;
+    if ((watts === null || watts === undefined) && !d.psuMaxWatts) continue;
+    try {
+      await pool.query(
+        `UPDATE assets SET hw_power_watts = COALESCE(?, hw_power_watts), hw_psu_max_watts = COALESCE(?, hw_psu_max_watts),
+           hw_power_source = ?, hw_power_synced_at = NOW()
+         WHERE site = ? AND UPPER(TRIM(serial_number)) = UPPER(TRIM(?))`,
+        [watts === undefined ? null : watts, d.psuMaxWatts || null, source, site, d.serialNumber]
+      );
+    } catch (e) { log.warn(`Power persist failed for ${d.serialNumber}: ${e.message}`); }
+  }
+}
+
 async function fetchOmeDevicesRaw(site, zone) {
   const session = await getOmeToken(site, zone);
   if (!session) return null; // not configured for this zone
@@ -2588,7 +3108,7 @@ async function fetchOmeDevicesRaw(site, zone) {
 async function fetchOmeDevicesLight(site, zone) {
   return fetchOmeDevicesRaw(site, zone);
 }
-async function fetchOmeDevices(site, zone, forceRefresh = false) {
+async function fetchOmeDevices(site, zone, forceRefresh = false, waitForAllPower = false) {
   const key = snapshotKey('OME', site, zone);
   const cached = deviceSnapshotCache[key];
   if (!forceRefresh && cached && Date.now() - cached.fetchedAt < DEVICE_SNAPSHOT_TTL_MS) return cached.devices;
@@ -2604,16 +3124,27 @@ async function fetchOmeDevices(site, zone, forceRefresh = false) {
     const cachedAgain = deviceSnapshotCache[key];
     if (!forceRefresh && cachedAgain && Date.now() - cachedAgain.fetchedAt < DEVICE_SNAPSHOT_TTL_MS) return cachedAgain.devices;
 
-    const devices = await fetchOmeDevicesRaw(site, zone);
-    if (devices === null) return null;
+    progressBegin(site, zone, 'OME');
+    let devices;
+    try { devices = await fetchOmeDevicesRaw(site, zone); } catch (e) { progressEnd(site, zone, 'OME'); throw e; }
+    if (devices === null) { progressEnd(site, zone, 'OME'); return null; }
+    let fwDone = 0; progressSet(site, zone, 'OME', 'firmware', 0, devices.length);
     // Fetch every device's System ROM version — requested explicitly: the
     // Monitoring page should show the same firmware every device has on the
     // real OME dashboard, for the full device list, not a lazy subset.
     await mapWithConcurrency(devices, FIRMWARE_FETCH_CONCURRENCY, async (d) => {
       try { d.firmwareVersion = await fetchOmeSystemRom(site, zone, d.id); }
       catch (e) { d.firmwareVersion = null; } // one device's inventory call failing shouldn't break the whole list
+      progressSet(site, zone, 'OME', 'firmware', ++fwDone, devices.length);
     });
+    carryOverPower(deviceSnapshotCache[key] && deviceSnapshotCache[key].devices, devices);
+    await seedPowerFromAssets(site, devices);
     deviceSnapshotCache[key] = { devices, fetchedAt: Date.now() };
+    await waitUpTo(startPowerEnrichment(key, site, devices, async (d) => {
+      const p = await fetchOmePower(site, zone, d.id);
+      if (p.powerWatts == null && d.powerState === 'On' && d.ipAddress) { const w = await fetchIdracWatts(d.ipAddress); if (w != null) p.powerWatts = w; }
+      return p;
+    }, 'OME', { zone, vendor: 'OME' }), waitForAllPower ? POWER_AUTOSYNC_WAIT_MS : POWER_WAIT_BUDGET_MS);
     return devices;
   });
 }
@@ -2747,6 +3278,8 @@ function normalizeOneviewServer(s) {
     healthStatus: s.status || 'Unknown', // OK / Warning / Critical / Disabled / Unknown
     powerState: s.powerState || 'Unknown', // On / Off / Unknown
     firmwareVersion: null, // filled in below, per device, via fetchOneviewSystemRom — this is System ROM, not iLO's own firmware
+    powerWatts: null, // current draw in watts, from OneView's utilization metrics
+    psuMaxWatts: null, // calibrated maximum watts
   };
 }
 
@@ -2804,7 +3337,7 @@ async function fetchOneviewServersRaw(site, zone) {
 async function fetchOneviewServersLight(site, zone) {
   return fetchOneviewServersRaw(site, zone);
 }
-async function fetchOneviewServers(site, zone, forceRefresh = false) {
+async function fetchOneviewServers(site, zone, forceRefresh = false, waitForAllPower = false) {
   const key = snapshotKey('ONEVIEW', site, zone);
   const cached = deviceSnapshotCache[key];
   if (!forceRefresh && cached && Date.now() - cached.fetchedAt < DEVICE_SNAPSHOT_TTL_MS) return cached.devices;
@@ -2814,16 +3347,23 @@ async function fetchOneviewServers(site, zone, forceRefresh = false) {
     const cachedAgain = deviceSnapshotCache[key];
     if (!forceRefresh && cachedAgain && Date.now() - cachedAgain.fetchedAt < DEVICE_SNAPSHOT_TTL_MS) return cachedAgain.devices;
 
-    const devices = await fetchOneviewServersRaw(site, zone);
-    if (devices === null) return null;
+    progressBegin(site, zone, 'ONEVIEW');
+    let devices;
+    try { devices = await fetchOneviewServersRaw(site, zone); } catch (e) { progressEnd(site, zone, 'ONEVIEW'); throw e; }
+    if (devices === null) { progressEnd(site, zone, 'ONEVIEW'); return null; }
+    let fwDone = 0; progressSet(site, zone, 'ONEVIEW', 'firmware', 0, devices.length);
     // Same reasoning as OME above: fetch System ROM for every device so the
     // Monitoring page's firmware column matches the full estate, not a lazy
     // subset.
     await mapWithConcurrency(devices, FIRMWARE_FETCH_CONCURRENCY, async (d) => {
       try { d.firmwareVersion = await fetchOneviewSystemRom(site, zone, d.uri); }
       catch (e) { d.firmwareVersion = null; }
+      progressSet(site, zone, 'ONEVIEW', 'firmware', ++fwDone, devices.length);
     });
+    carryOverPower(deviceSnapshotCache[key] && deviceSnapshotCache[key].devices, devices);
+    await seedPowerFromAssets(site, devices);
     deviceSnapshotCache[key] = { devices, fetchedAt: Date.now() };
+    await waitUpTo(startPowerEnrichment(key, site, devices, (d) => fetchOneviewPower(site, zone, d.uri), 'ONEVIEW', { zone, vendor: 'ONEVIEW' }), waitForAllPower ? POWER_AUTOSYNC_WAIT_MS : POWER_WAIT_BUDGET_MS);
     return devices;
   });
 }
@@ -3082,6 +3622,17 @@ app.get('/api/monitoring/devices', authenticateToken, async (req, res) => {
   } catch (e) {
     sendErr(res, e);
   }
+});
+
+// Live progress of a zone's sync (manual Sync button or the 30-min auto-sync) - polled by the Monitoring page.
+app.get('/api/monitoring/sync-progress', authenticateToken, async (req, res) => {
+  try {
+    const { site, zone } = req.query;
+    if (!site || !zone) return res.status(400).json({ error: 'site and zone are required' });
+    const allowed = await getAllowedSitesForUser(req.user);
+    if (!allowed.includes(site)) return res.status(403).json({ error: 'Access denied for this site' });
+    res.json(getSyncProgress(String(site), String(zone)));
+  } catch (e) { sendErr(res, e); }
 });
 
 // ----------------------------------------------------------------------------
@@ -3525,6 +4076,9 @@ async function applyOneviewFirmware(site, zone, deviceUris, bundleUri, forceInst
 // ---- Persistent per-server firmware job records (table firmware_jobs) ----
 const FW_JOB_LIST_RUNNING_MS = 12 * 3600 * 1000; // a job still "Running" after this long is no longer listed
 const FW_JOB_LIST_DONE_MS = 2 * 3600 * 1000;     // finished jobs stay listed this long
+const FW_JOB_HISTORY_DAYS = 30;                  // job log kept (and viewable on the Firmware Jobs tab) for this many days
+const FW_JOB_HISTORY_MS = FW_JOB_HISTORY_DAYS * 24 * 3600 * 1000;
+let fwJobsLastPrune = 0;
 function fwJobAggregate(rows) {
   if (rows.some((r) => r.state === 'Running')) return 'Running';
   return rows.every((r) => r.state === 'Failed') ? 'Failed' : 'Completed';
@@ -3548,6 +4102,7 @@ async function persistFirmwareJobStatus(vendor, site, zone, jobRef, result) {
       }
       let state = d && d.status ? d.status : null;
       let percent = d && d.percent != null ? d.percent : null;
+      if (percent != null && state !== 'Completed' && row.percent != null) percent = Math.max(percent, Number(row.percent) || 0); // never move backwards while running
       const step = d && d.step ? d.step : null;
       const error = d && d.error ? d.error : null;
       if (!state && (result.status === 'Completed' || result.status === 'Failed')) { state = result.status; if (result.status === 'Completed') percent = 100; }
@@ -3595,12 +4150,18 @@ async function refreshTrackedFirmwareJobs(vendor, site, zone, deviceIds) {
 // A background pass reads each configured appliance's own task/job list, records any running firmware update it does not already
 // know (source = 'appliance'), and keeps the status of every running row fresh. These rows lock the server and show to all users.
 const FW_SCAN_INTERVAL_MS = Math.max(10000, Number(process.env.MONITOR_FW_SCAN_MS) || 30000);
+let fwNoiseCleaned = false;
 let fwJobsTickBusy = false;
 let fwJobsLastTick = 0;
 function fwSubmissionInFlight(vendor, site, zone) { const p = `${vendor}|${site}|${zone}|`; return Object.keys(deviceFirmwareJobs).some((k) => k.startsWith(p) && !deviceFirmwareJobs[k].jobRef); }
 async function scanOneviewExternalFirmware(site, zone) {
   const diag = { site, zone, vendor: 'oneview' };
   if (fwSubmissionInFlight('oneview', site, zone)) { diag.skipped = 'a DCIM submission is being recorded'; return { added: 0, diag }; }
+  if (!fwNoiseCleaned) {
+    fwNoiseCleaned = true;
+    // One-time clean-up: appliance-detected rows that were really housekeeping tasks (e.g. iLO "data collection") and never firmware.
+    try { await pool.query("DELETE FROM firmware_jobs WHERE source='appliance' AND vendor='oneview' AND CONCAT_WS(' ', job_name, baseline_label, step) REGEXP 'data collection|received and processed|inventory|telemetry|refresh' AND CONCAT_WS(' ', job_name, baseline_label, step) NOT REGEXP 'firmware|baseline|smart update|service pack|SPP'"); } catch (e) { /* best effort */ }
+  }
   const session = await getOneviewSession(site, zone);
   if (!session) { diag.skipped = 'not configured'; return { added: 0, diag }; }
   const hdrs = { Auth: session.sessionId, 'X-API-Version': String(session.apiVersion) };
@@ -3626,7 +4187,11 @@ async function scanOneviewExternalFirmware(site, zone) {
     return `${t.name || ''} ${t.taskStatus || ''} ${t.taskType || ''} ${(pu && (pu.statusUpdate || pu.message)) || ''}`;
   };
   const resUri = (t) => { const ar = t.associatedResource || {}; return typeof ar.resourceUri === 'string' ? ar.resourceUri : ''; };
-  const isFw = (t) => RUNNING.includes(t.taskState) && /^\/rest\/server-hardware\/[A-Za-z0-9_-]+$/.test(resUri(t)) && /firmware|baseline|smart update|service pack|\bSPP\b|\bupdat/i.test(textOf(t)) && !/power|refresh|collect|identify|\bled\b|reset|remote console/i.test(String(t.name || ''));
+  // Housekeeping tasks OneView runs on a server (iLO data collection, inventory refresh, telemetry ...) can contain the word
+  // "update" in their name or status text but are not firmware updates - they are ignored unless the text also names firmware.
+  const FW_STRONG = /firmware|baseline|smart update|service pack|\bSPP\b/i;
+  const FW_NOISE = /data collection|collect|received and processed|refresh|inventory|telemetry|utilization|health|alert/i;
+  const isFw = (t) => RUNNING.includes(t.taskState) && /^\/rest\/server-hardware\/[A-Za-z0-9_-]+$/.test(resUri(t)) && /firmware|baseline|smart update|service pack|\bSPP\b|\bupdat/i.test(textOf(t)) && !/power|refresh|collect|identify|\bled\b|reset|remote console/i.test(String(t.name || '')) && !(FW_NOISE.test(textOf(t)) && !FW_STRONG.test(textOf(t)));
   diag.running = tasks.filter((t) => t && RUNNING.includes(t.taskState)).length;
   diag.runningSample = tasks.filter((t) => t && RUNNING.includes(t.taskState)).slice(0, 10).map((t) => ({ name: t.name, taskState: t.taskState, taskStatus: t.taskStatus, taskType: t.taskType, owner: t.owner && (t.owner.name || t.owner), resource: t.associatedResource && { uri: t.associatedResource.resourceUri, name: t.associatedResource.resourceName, category: t.associatedResource.resourceCategory }, matched: isFw(t) }));
   let added = 0;
@@ -3716,13 +4281,14 @@ async function fwJobsTick(force) {
   if (!force && Date.now() - fwJobsLastTick < 8000) return;
   fwJobsTickBusy = true;
   try {
+    if (Date.now() - fwJobsLastPrune > 24 * 3600 * 1000) { fwJobsLastPrune = Date.now(); try { await pool.query('DELETE FROM firmware_jobs WHERE started_at < ?', [Date.now() - (FW_JOB_HISTORY_DAYS + 1) * 24 * 3600 * 1000]); } catch (e) { /* housekeeping only */ } }
     const [zoneRows] = await pool.query('SELECT DISTINCT site, zone_name AS zone FROM zones');
     for (const z of zoneRows) {
       if (getMonitorConfig('ONEVIEW', z.site, z.zone)) { try { await scanOneviewExternalFirmware(z.site, z.zone); } catch (e) { log.warn(`[firmware-jobs] OneView scan ${z.site}/${z.zone}: ${String(e.message).slice(0, 120)}`); } }
       if (getMonitorConfig('OME', z.site, z.zone)) { try { await scanOmeExternalFirmware(z.site, z.zone); } catch (e) { log.warn(`[firmware-jobs] OME scan ${z.site}/${z.zone}: ${String(e.message).slice(0, 120)}`); } }
     }
     // Keep every running row current, whoever started it and whether or not anyone has the page open.
-    const [running] = await pool.query("SELECT DISTINCT vendor, site, zone, job_ref, device_id FROM firmware_jobs WHERE state='Running' AND started_at > ? AND job_ref IS NOT NULL", [Date.now() - FW_JOB_LIST_RUNNING_MS]);
+    const [running] = await pool.query("SELECT DISTINCT vendor, site, zone, job_ref, device_id FROM firmware_jobs WHERE state='Running' AND started_at > ? AND job_ref IS NOT NULL", [Date.now() - FW_JOB_HISTORY_MS]);
     for (const g of running) {
       try {
         const result = g.vendor === 'ome' ? await getOmeJobStatus(g.site, g.zone, g.job_ref)
@@ -3749,7 +4315,7 @@ app.get('/api/monitoring/firmware/jobs/scan', authenticateToken, requireRole(['A
 app.get('/api/monitoring/firmware/jobs/active', authenticateToken, async (req, res) => {
   try {
     if (req.query.refresh === '1') fwJobsTick(false).catch(() => { });
-    const histHours = Math.min(72, Math.max(0, Number(req.query.history) || 0));
+    const histHours = Math.min(FW_JOB_HISTORY_DAYS * 24, Math.max(0, Number(req.query.history) || 0));
     const allowed = await getAllowedSitesForUser(req.user);
     if (!allowed.length) return res.json({ jobs: [] });
     const where = ['site IN (?)'];
@@ -3758,7 +4324,7 @@ app.get('/api/monitoring/firmware/jobs/active', authenticateToken, async (req, r
     if (req.query.zone) { where.push('zone=?'); params.push(String(req.query.zone)); }
     const now = Date.now();
     const [rows] = await pool.query(`SELECT * FROM firmware_jobs WHERE ${where.join(' AND ')} AND ((state='Running' AND started_at > ?) OR (state<>'Running' AND finished_at > ?)) ORDER BY started_at ASC, id ASC`,
-      [...params, now - FW_JOB_LIST_RUNNING_MS, now - Math.max(FW_JOB_LIST_DONE_MS, histHours * 3600 * 1000)]);
+      [...params, now - Math.max(FW_JOB_LIST_RUNNING_MS, histHours * 3600 * 1000), now - Math.max(FW_JOB_LIST_DONE_MS, histHours * 3600 * 1000)]);
     const groups = new Map();
     rows.forEach((r) => {
       const gk = `${r.vendor}|${r.site}|${r.zone}|${r.job_ref}|${r.started_at}`;
@@ -3915,6 +4481,23 @@ app.post('/api/monitoring/firmware/apply', authenticateToken, requireRole(['Admi
 });
 
 // ---- Job/task status polling.
+// Dell OME very often reports Progress = 0 for the whole firmware update (the real progress is only in the step log text), so an
+// estimate is derived from that log: start-up milestones first, then the state of every Lifecycle Controller job ("JID_...") it mentions.
+function omeEstimatePercentFromLog(text) {
+  const t = String(text || '');
+  if (!t.trim()) return null;
+  let base = 0;
+  [[/service tag is valid/i, 4], [/starting communication with the device/i, 8], [/system lockdown status/i, 10], [/remote lc services are ready/i, 14], [/attempting to (initiate|stage)|performidracupdate|staging/i, 18]].forEach(([re, v]) => { if (re.test(t)) base = Math.max(base, v); });
+  const score = { new: 8, scheduling: 12, scheduled: 15, downloading: 35, downloaded: 50, 'ready for reboot': 60, rebooting: 65, running: 75, installing: 80, completed: 100 };
+  const last = {};
+  const re = /job state for\s+(JID_\w+)\s+is\s+([A-Za-z ]+?)\s*(?:\r?\n|$|\.)/gi;
+  let m;
+  while ((m = re.exec(t))) last[m[1].toUpperCase()] = m[2].trim().toLowerCase();
+  const ids = Object.keys(last);
+  if (!ids.length) return base || null;
+  const avg = ids.reduce((a, id) => a + (score[last[id]] != null ? score[last[id]] : 20), 0) / ids.length;
+  return Math.min(90, Math.max(base, Math.round(20 + (75 * avg) / 100)));
+}
 async function getOmeJobStatus(site, zone, jobRef) {
   const session = await getOmeToken(site, zone);
   if (!session) throw new Error('Dell OME is not configured for this zone');
@@ -3939,7 +4522,9 @@ async function getOmeJobStatus(site, zone, jobRef) {
           const js = String((d.JobStatus && d.JobStatus.Name) || '');
           const st = /complete/i.test(js) ? 'Completed' : (/fail|error|abort|warn/i.test(js) && !/running|progress/i.test(js) ? 'Failed' : 'Running');
           const prog = parseInt(String(d.Progress == null ? '' : d.Progress).replace(/[^0-9]/g, ''), 10);
-          return { key: String(d.Key == null ? '' : d.Key), status: st, percent: st === 'Completed' ? 100 : (Number.isFinite(prog) ? Math.min(100, prog) : null), step: d.Value ? String(d.Value).slice(0, 800) : null };
+          const est = st === 'Running' ? omeEstimatePercentFromLog(d.Value) : null;
+          const reported = Number.isFinite(prog) ? Math.min(100, prog) : null;
+          return { key: String(d.Key == null ? '' : d.Key), status: st, percent: st === 'Completed' ? 100 : (reported == null && est == null ? null : Math.max(reported || 0, est || 0)), step: d.Value ? String(d.Value).slice(-4000) : null };
         });
       }
     }
@@ -4776,7 +5361,7 @@ async function runAutoSyncCycle() {
     autoSyncProgress = { processedZones: 0, totalZones: zoneRows.length };
     for (const z of zoneRows) {
       if (getMonitorConfig('OME', z.site, z.zone)) {
-        try { recordPowerSnapshot('OME', z.site, z.zone, await fetchOmeDevices(z.site, z.zone, true)); } catch (e) { log.warn(`Auto-sync: OME refresh failed for ${z.site}/${z.zone}:`, e.message); }
+        try { recordPowerSnapshot('OME', z.site, z.zone, await fetchOmeDevices(z.site, z.zone, true, true)); } catch (e) { log.warn(`Auto-sync: OME refresh failed for ${z.site}/${z.zone}:`, e.message); }
         // Active alerts (Critical/Warning) — piggybacks on this same 30-min
         // appliance call rather than polling separately. One vendor's alert
         // fetch failing doesn't touch the previous cached counts, so the
@@ -4785,7 +5370,7 @@ async function runAutoSyncCycle() {
         catch (e) { log.warn(`Auto-sync: OME alerts fetch failed for ${z.site}/${z.zone}:`, e.message); }
         await refreshFwCompliance('OME', z.site, z.zone);
       }if (getMonitorConfig('ONEVIEW', z.site, z.zone)) {
-        try { recordPowerSnapshot('ONEVIEW', z.site, z.zone, await fetchOneviewServers(z.site, z.zone, true)); } catch (e) { log.warn(`Auto-sync: OneView refresh failed for ${z.site}/${z.zone}:`, e.message); }
+        try { recordPowerSnapshot('ONEVIEW', z.site, z.zone, await fetchOneviewServers(z.site, z.zone, true, true)); } catch (e) { log.warn(`Auto-sync: OneView refresh failed for ${z.site}/${z.zone}:`, e.message); }
         try { alertSnapshotCache[snapshotKey('ONEVIEW', z.site, z.zone)] = { counts: await fetchOneviewAlertCounts(z.site, z.zone), fetchedAt: Date.now() }; }
         catch (e) { log.warn(`Auto-sync: OneView alerts fetch failed for ${z.site}/${z.zone}:`, e.message); }
         await refreshFwCompliance('ONEVIEW', z.site, z.zone);
@@ -4984,7 +5569,7 @@ app.get('/api/users/online-count', authenticateToken, async (req, res) => {
 
 app.get('/api/auth/me', authenticateToken, async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT id, username, name, role, location_access, status, must_change_password FROM users WHERE id = ?', [req.user.id]);
+    const [rows] = await pool.query('SELECT id, username, name, role, location_access, status, must_change_password, is_approver FROM users WHERE id = ?', [req.user.id]);
     const me = rows[0] || {}; const mc = Number(me.must_change_password); delete me.must_change_password;
     res.json(mc ? { ...me, mustChangePassword: true } : me);
   } catch (e) {
@@ -5022,7 +5607,7 @@ app.patch('/api/auth/change-password', authenticateToken, async (req, res) => {
 // ========== USERS ==========
 app.get('/api/users', authenticateToken, requireGlobalAdmin, async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT id, username, name, role, location_access, status, created_at, last_login_at, last_seen_at FROM users');
+    const [rows] = await pool.query('SELECT id, username, name, role, location_access, status, is_approver, created_at, last_login_at, last_seen_at FROM users');
     const now = Date.now();
     res.json(rows.map((r) => ({
       ...r,
@@ -5036,6 +5621,7 @@ app.get('/api/users', authenticateToken, requireGlobalAdmin, async (req, res) =>
 app.post('/api/users', authenticateToken, requireGlobalAdmin, async (req, res) => {
   try {
     const { username, password, name, role, location_access } = req.body;
+    const is_approver = (req.body && (req.body.is_approver === true || req.body.is_approver === 1 || req.body.is_approver === '1')) ? 1 : 0;
     if (!username || !String(username).trim() || !name || !String(name).trim()) return res.status(400).json({ error: 'Username and full name are required' });
     if (!['Admin', 'Operator', 'Viewer'].includes(role)) return res.status(400).json({ error: 'Role must be Admin, Operator or Viewer' });
     const validLocs = await getAllSiteNames();
@@ -5051,10 +5637,10 @@ app.post('/api/users', authenticateToken, requireGlobalAdmin, async (req, res) =
     }
     const hash = await bcrypt.hash(password, 10);
     const [result] = await pool.query(
-      'INSERT INTO users (username, password_hash, name, role, location_access, status) VALUES (?,?,?,?,?,?)',
-      [username, hash, name, role, location_access, 'Active']
+      'INSERT INTO users (username, password_hash, name, role, location_access, status, is_approver) VALUES (?,?,?,?,?,?,?)',
+      [username, hash, name, role, location_access, 'Active', is_approver]
     );
-    res.json({ id: result.insertId, username, name, role, location_access, status: 'Active' });
+    res.json({ id: result.insertId, username, name, role, location_access, status: 'Active', is_approver });
   } catch (e) {
     if (e.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Username already exists' });
     sendErr(res, e);
@@ -5065,6 +5651,7 @@ app.patch('/api/users/:id', authenticateToken, requireGlobalAdmin, async (req, r
   try {
     const id = String(req.params.id);
     const { name, role, location_access, status } = req.body || {};
+    const is_approver = (req.body && (req.body.is_approver === true || req.body.is_approver === 1 || req.body.is_approver === '1')) ? 1 : 0;
     if (!['Admin', 'Operator', 'Viewer'].includes(role)) return res.status(400).json({ error: 'Role must be Admin, Operator or Viewer' });
     if (!['Active', 'Inactive'].includes(status)) return res.status(400).json({ error: 'Status must be Active or Inactive' });
     if (!name || !String(name).trim()) return res.status(400).json({ error: 'Full name is required' });
@@ -5091,10 +5678,12 @@ app.patch('/api/users/:id', authenticateToken, requireGlobalAdmin, async (req, r
 
     // HARDENING: a disabled account, or a changed role / location, ends that user's sessions at once (cache entries dropped, stored session id cleared).
     const accessChanged = role !== current.role || location_access !== current.location_access || status !== current.status;
-    if (accessChanged) await pool.query('UPDATE users SET name=?, role=?, location_access=?, status=?, session_id=NULL, last_seen_at=NULL WHERE id=?', [String(name).trim(), role, location_access, status, id]);
-    else await pool.query('UPDATE users SET name=?, role=?, location_access=?, status=? WHERE id=?', [String(name).trim(), role, location_access, status, id]);
-    if (accessChanged) purgeAuthCacheForUser(id);
-    res.json({ success: true, id, name: String(name).trim(), role, location_access, status });
+    if (accessChanged) await pool.query('UPDATE users SET name=?, role=?, location_access=?, status=?, is_approver=?, session_id=NULL, last_seen_at=NULL WHERE id=?', [String(name).trim(), role, location_access, status, is_approver, id]);
+    else await pool.query('UPDATE users SET name=?, role=?, location_access=?, status=?, is_approver=? WHERE id=?', [String(name).trim(), role, location_access, status, is_approver, id]);
+    // Always purge, not just when accessChanged: is_approver can change even when role/location/status
+    // don't, and the cached row should reflect that right away rather than after AUTH_CACHE_TTL_MS.
+    purgeAuthCacheForUser(id);
+    res.json({ success: true, id, name: String(name).trim(), role, location_access, status, is_approver });
   } catch (e) {
     sendErr(res, e);
   }
@@ -5399,7 +5988,7 @@ app.patch('/api/assets/:id', authenticateToken, requireRole(['Admin','Operator']
 
 app.delete('/api/assets/:id', authenticateToken, requireRole(['Admin','Operator']), async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT site, serial_number FROM assets WHERE id = ?', [req.params.id]);
+    const [rows] = await pool.query('SELECT * FROM assets WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return res.status(404).json({ error: 'Asset not found' });
     await assertSiteAccess(req.user, rows[0].site);
     const [[{ movementCount }]] = await pool.query('SELECT COUNT(*) AS movementCount FROM asset_movements WHERE asset_id = ?', [req.params.id]);
@@ -5409,6 +5998,7 @@ app.delete('/api/assets/:id', authenticateToken, requireRole(['Admin','Operator'
       if (cnt > 0) return res.status(409).json({ error: `This asset still has ${cnt} open issue(s). Close or delete them in the Issue Tracker first.` });
     }
     await pool.query('DELETE FROM assets WHERE id = ?', [req.params.id]);
+    await auditLogDeleteWithSnapshot(req, 'ASSET_DELETE', 'asset', req.params.id, rows[0].site, rows[0]);
     res.json({ success: true });
   } catch (e) {
     sendErr(res, e);
@@ -5924,10 +6514,11 @@ app.patch('/api/rack-components/:id', authenticateToken, requireRole(['Admin','O
 
 app.delete('/api/rack-components/:id', authenticateToken, requireRole(['Admin','Operator']), async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT site FROM rack_components WHERE id = ?', [req.params.id]);
+    const [rows] = await pool.query('SELECT * FROM rack_components WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return res.status(404).json({ error: 'Rack component not found' });
     await assertSiteAccess(req.user, rows[0].site);
     await pool.query('DELETE FROM rack_components WHERE id = ?', [req.params.id]);
+    await auditLogDeleteWithSnapshot(req, 'RACK_COMPONENT_DELETE', 'rack_component', req.params.id, rows[0].site, rows[0]);
     res.json({ success: true });
   } catch (e) {
     sendErr(res, e);
@@ -7571,10 +8162,11 @@ app.patch('/api/activities/:id', authenticateToken, requireRole(['Admin','Operat
 
 app.delete('/api/activities/:id', authenticateToken, requireRole(['Admin','Operator']), async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT site FROM dc_activities WHERE id = ?', [req.params.id]);
+    const [rows] = await pool.query('SELECT * FROM dc_activities WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return res.status(404).json({ error: 'Activity not found' });
     await assertSiteAccess(req.user, rows[0].site);
     await pool.query('DELETE FROM dc_activities WHERE id = ?', [req.params.id]);
+    await auditLogDeleteWithSnapshot(req, 'DC_ACTIVITY_DELETE', 'dc_activity', req.params.id, rows[0].site, rows[0]);
     res.json({ success: true });
   } catch (e) {
     sendErr(res, e);
@@ -7583,14 +8175,25 @@ app.delete('/api/activities/:id', authenticateToken, requireRole(['Admin','Opera
 
 // ========== MATERIAL MOVEMENTS ==========
 const MOVEMENT_TYPES = ['Inward', 'Outward'];
+const MOVEMENT_STATUSES = ['Pending Approval', 'Approved', 'Rejected', 'Ticket Issued', 'Received at Site', 'Not Received', 'Outward Complete', 'Cancelled'];
+// Same lightweight history trail used by Visitor Access: appends a timestamped line to the
+// existing Remarks instead of overwriting it, so every step a movement goes through (approve,
+// then its final outcome) stays visible on the one record rather than needing an audit table.
+function appendMovementRemark(existingRemarks, label, note) {
+  const trimmed = String(note || '').trim();
+  if (!trimmed) return existingRemarks || null;
+  const line = `[${label} ${new Date().toISOString().slice(0, 19).replace('T', ' ')}] ${trimmed}`;
+  return existingRemarks ? `${existingRemarks}\n${line}` : line;
+}
 function movementRowToJson(r) {
   const toDateStr = (v) => dateOnlyStr(v);
   return {
-    id: r.id, movementType: r.movement_type, site: r.site,
+    id: r.id, ticketNo: r.ticket_no, movementType: r.movement_type, site: r.site,
     itemName: r.item_name, description: r.description, quantity: r.quantity, unit: r.unit,
     receiverName: r.receiver_name, senderName: r.sender_name,
     dcInvoiceNo: r.dc_invoice_no, hasDocument: !!r.dc_invoice_file, documentName: r.dc_invoice_original_name,
     movementDate: toDateStr(r.movement_date), remarks: r.remarks,
+    status: r.status, approverName: r.approver_name, approvedAt: r.approved_at, rejectReason: r.reject_reason,
     createdBy: r.created_by, createdAt: r.created_at,
   };
 }
@@ -7648,13 +8251,193 @@ app.post('/api/material-movements', authenticateToken, requireRole(['Admin', 'Op
     if (!allowed.includes(m.site)) return res.status(403).json({ error: 'Access denied for this site' });
     const id = genId('MAT');
     const movementDate = normalizeDateInput(m.movementDate) || localTodayStr();
+    // No ticket number yet - a material movement needs approval first (/approve below), then a
+    // separate Generate Ticket step (/generate-ticket), same workflow shape as Visitor Access.
     await pool.query(
-      `INSERT INTO material_movements (id, movement_type, site, item_name, description, quantity, unit, receiver_name, sender_name, dc_invoice_no, movement_date, remarks, created_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO material_movements (id, movement_type, site, item_name, description, quantity, unit, receiver_name, sender_name, dc_invoice_no, movement_date, remarks, created_by, status)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'Pending Approval')`,
       [id, m.movementType, m.site, m.itemName, m.description || null, Math.max(1, parseInt(m.quantity, 10) || 1), m.unit || null, m.receiverName || null, m.senderName || null, m.dcInvoiceNo || null, movementDate, m.remarks || null, user.name || user.username]
     );
     const [rows] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [id]);
-    res.json(movementRowToJson(rows[0]));
+    const json = movementRowToJson(rows[0]);
+    res.json(json);
+    setupRoutesModule.sendNotification({
+      subject: `[DCIM] Material Movement approval needed - ${esc(m.itemName)} (${esc(m.site)})`,
+      html: `<p>A new <b>${esc(m.movementType)}</b> material movement request is waiting for approval.</p>
+        <table cellpadding="6" style="border-collapse:collapse">
+          <tr><td><b>Site</b></td><td>${esc(m.site)}</td></tr>
+          <tr><td><b>Item</b></td><td>${esc(m.itemName)}</td></tr>
+          <tr><td><b>Quantity</b></td><td>${esc(json.quantity)} ${esc(m.unit || '')}</td></tr>
+          <tr><td><b>Movement Date</b></td><td>${esc(movementDate)}</td></tr>
+          <tr><td><b>Submitted By</b></td><td>${esc(user.name || user.username)}</td></tr>
+        </table>`,
+    }).catch(() => {});
+  } catch (e) {
+    sendErr(res, e);
+  }
+});
+
+// Approve/Reject: Admin, or any user flagged as an Approver for this record's site (see
+// requireApproverOrAdmin). Approving only moves the request to "Approved"; the ticket is
+// generated afterwards by a separate step (generate-ticket, below), then the physical-presence
+// step (Received at Site / Not Received / Outward Complete / Cancelled) closes it - same
+// workflow shape as Visitor Access.
+app.post('/api/material-movements/:id/approve', authenticateToken, requireApproverOrAdmin, async (req, res) => {
+  try {
+    const [existing] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [req.params.id]);
+    if (existing.length === 0) return res.status(404).json({ error: 'Material movement record not found' });
+    await assertSiteAccess(req.user, existing[0].site);
+    if (existing[0].status !== 'Pending Approval') return res.status(400).json({ error: `Only a "Pending Approval" request can be approved (this one is "${existing[0].status}")` });
+    const approverName = String((req.body && req.body.approverName) || req.user.name || req.user.username).trim();
+    await pool.query(`UPDATE material_movements SET status='Approved', approver_name=?, approved_at=NOW() WHERE id=?`, [approverName, req.params.id]);
+    const [rows] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [req.params.id]);
+    const json = movementRowToJson(rows[0]);
+    auditLog(req, 'MOVEMENT_APPROVE', { entity: 'material_movement', entityId: req.params.id, site: existing[0].site, details: { approverName } });
+    res.json(json);
+    setupRoutesModule.sendNotification({
+      subject: `[DCIM] Material Movement request APPROVED - ${esc(json.itemName)} (${esc(json.site)})`,
+      html: `<p>This ${esc(json.movementType)} material movement request has been approved by <b>${esc(approverName)}</b>. A ticket can now be generated.</p>
+        <table cellpadding="6" style="border-collapse:collapse">
+          <tr><td><b>Site</b></td><td>${esc(json.site)}</td></tr>
+          <tr><td><b>Item</b></td><td>${esc(json.itemName)}</td></tr>
+          <tr><td><b>Quantity</b></td><td>${esc(json.quantity)} ${esc(json.unit || '')}</td></tr>
+        </table>`,
+    }).catch(() => {});
+  } catch (e) {
+    sendErr(res, e);
+  }
+});
+
+// Generate the ticket for an Approved movement: INW<yymm><nn> for Inward, OUT<yymm><nn> for Outward.
+app.post('/api/material-movements/:id/generate-ticket', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+  let releaseTicketLock = null;
+  try {
+    const [existing] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [req.params.id]);
+    if (existing.length === 0) return res.status(404).json({ error: 'Material movement record not found' });
+    await assertSiteAccess(req.user, existing[0].site);
+    if (existing[0].status !== 'Approved') return res.status(400).json({ error: `A ticket can only be generated for an "Approved" request (this one is "${existing[0].status}")` });
+    releaseTicketLock = await acquireTicketLock();
+    const ticketNo = await generateTicketNoGeneric(existing[0].movement_type === 'Inward' ? 'INW' : 'OUT', 'material_movements');
+    await pool.query(`UPDATE material_movements SET status='Ticket Issued', ticket_no=? WHERE id=?`, [ticketNo, req.params.id]);
+    const [rows] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [req.params.id]);
+    const json = movementRowToJson(rows[0]);
+    auditLog(req, 'MOVEMENT_TICKET_ISSUED', { entity: 'material_movement', entityId: req.params.id, site: existing[0].site, ticket_no: ticketNo });
+    res.json(json);
+    setupRoutesModule.sendNotification({
+      subject: `[DCIM] Material Movement ticket ${ticketNo} issued - ${esc(json.itemName)} (${esc(json.site)})`,
+      html: `<p>A material movement ticket has been generated.</p>
+        <table cellpadding="6" style="border-collapse:collapse">
+          <tr><td><b>Ticket No</b></td><td>${esc(ticketNo)}</td></tr>
+          <tr><td><b>Site</b></td><td>${esc(json.site)}</td></tr>
+          <tr><td><b>Item</b></td><td>${esc(json.itemName)}</td></tr>
+          <tr><td><b>Quantity</b></td><td>${esc(json.quantity)} ${esc(json.unit || '')}</td></tr>
+        </table>`,
+    }).catch(() => {});
+  } catch (e) {
+    sendErr(res, e);
+  } finally {
+    if (releaseTicketLock) releaseTicketLock();
+  }
+});
+
+app.post('/api/material-movements/:id/reject', authenticateToken, requireApproverOrAdmin, async (req, res) => {
+  try {
+    const [existing] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [req.params.id]);
+    if (existing.length === 0) return res.status(404).json({ error: 'Material movement record not found' });
+    await assertSiteAccess(req.user, existing[0].site);
+    if (existing[0].status !== 'Pending Approval') return res.status(400).json({ error: `Only a "Pending Approval" request can be rejected (this one is "${existing[0].status}")` });
+    const approverName = String((req.body && req.body.approverName) || req.user.name || req.user.username).trim();
+    const reason = String((req.body && req.body.reason) || '').trim();
+    if (!reason) return res.status(400).json({ error: 'A reason is required to reject a material movement request.' });
+    await pool.query(`UPDATE material_movements SET status='Rejected', approver_name=?, approved_at=NOW(), reject_reason=? WHERE id=?`, [approverName, reason, req.params.id]);
+    const [rows] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [req.params.id]);
+    const json = movementRowToJson(rows[0]);
+    auditLog(req, 'MOVEMENT_REJECT', { entity: 'material_movement', entityId: req.params.id, site: existing[0].site, details: { approverName, reason } });
+    res.json(json);
+    setupRoutesModule.sendNotification({
+      subject: `[DCIM] Material Movement request REJECTED - ${esc(json.itemName)} (${esc(json.site)})`,
+      html: `<p>This material movement request has been rejected by <b>${esc(approverName)}</b>.</p><p><b>Reason:</b> ${esc(reason)}</p>
+        <table cellpadding="6" style="border-collapse:collapse">
+          <tr><td><b>Site</b></td><td>${esc(json.site)}</td></tr>
+          <tr><td><b>Item</b></td><td>${esc(json.itemName)}</td></tr>
+        </table>`,
+    }).catch(() => {});
+  } catch (e) {
+    sendErr(res, e);
+  }
+});
+
+// ---------- post-approval outcome: Received at Site / Not Received (Inward), Outward Complete / Cancelled (Outward) ----------
+// Same Admin/Operator gate as creating or editing a movement - this is an operational
+// ticket-closing step done by whoever physically handles the material, not an approval.
+app.post('/api/material-movements/:id/receive', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+  try {
+    const [existing] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [req.params.id]);
+    if (existing.length === 0) return res.status(404).json({ error: 'Material movement record not found' });
+    await assertSiteAccess(req.user, existing[0].site);
+    if (existing[0].movement_type !== 'Inward') return res.status(400).json({ error: 'Material Received at Site only applies to an Inward movement' });
+    if (existing[0].status !== 'Ticket Issued') return res.status(400).json({ error: `Only an "Ticket Issued" request can be marked Received at Site (this one is "${existing[0].status}")` });
+    const receiverName = String((req.body && req.body.receiverName) || existing[0].receiver_name || '').trim() || null;
+    const newRemarks = appendMovementRemark(existing[0].remarks, 'Received', req.body && req.body.remarks);
+    await pool.query(`UPDATE material_movements SET status='Received at Site', receiver_name=?, remarks=? WHERE id=?`, [receiverName, newRemarks, req.params.id]);
+    const [rows] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [req.params.id]);
+    const json = movementRowToJson(rows[0]);
+    auditLog(req, 'MOVEMENT_RECEIVED', { entity: 'material_movement', entityId: req.params.id, site: existing[0].site, details: { receiverName } });
+    res.json(json);
+  } catch (e) {
+    sendErr(res, e);
+  }
+});
+
+app.post('/api/material-movements/:id/not-received', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+  try {
+    const [existing] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [req.params.id]);
+    if (existing.length === 0) return res.status(404).json({ error: 'Material movement record not found' });
+    await assertSiteAccess(req.user, existing[0].site);
+    if (existing[0].movement_type !== 'Inward') return res.status(400).json({ error: 'Material Not Received only applies to an Inward movement' });
+    if (existing[0].status !== 'Ticket Issued') return res.status(400).json({ error: `Only an "Ticket Issued" request can be marked Not Received (this one is "${existing[0].status}")` });
+    const newRemarks = appendMovementRemark(existing[0].remarks, 'Not Received', req.body && req.body.remarks);
+    await pool.query(`UPDATE material_movements SET status='Not Received', remarks=? WHERE id=?`, [newRemarks, req.params.id]);
+    const [rows] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [req.params.id]);
+    const json = movementRowToJson(rows[0]);
+    auditLog(req, 'MOVEMENT_NOT_RECEIVED', { entity: 'material_movement', entityId: req.params.id, site: existing[0].site });
+    res.json(json);
+  } catch (e) {
+    sendErr(res, e);
+  }
+});
+
+app.post('/api/material-movements/:id/outward-complete', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+  try {
+    const [existing] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [req.params.id]);
+    if (existing.length === 0) return res.status(404).json({ error: 'Material movement record not found' });
+    await assertSiteAccess(req.user, existing[0].site);
+    if (existing[0].movement_type !== 'Outward') return res.status(400).json({ error: 'Material Outward Complete only applies to an Outward movement' });
+    if (existing[0].status !== 'Ticket Issued') return res.status(400).json({ error: `Only an "Ticket Issued" request can be marked Outward Complete (this one is "${existing[0].status}")` });
+    const newRemarks = appendMovementRemark(existing[0].remarks, 'Outward Complete', req.body && req.body.remarks);
+    await pool.query(`UPDATE material_movements SET status='Outward Complete', remarks=? WHERE id=?`, [newRemarks, req.params.id]);
+    const [rows] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [req.params.id]);
+    const json = movementRowToJson(rows[0]);
+    auditLog(req, 'MOVEMENT_OUTWARD_COMPLETE', { entity: 'material_movement', entityId: req.params.id, site: existing[0].site });
+    res.json(json);
+  } catch (e) {
+    sendErr(res, e);
+  }
+});
+
+app.post('/api/material-movements/:id/cancel', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+  try {
+    const [existing] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [req.params.id]);
+    if (existing.length === 0) return res.status(404).json({ error: 'Material movement record not found' });
+    await assertSiteAccess(req.user, existing[0].site);
+    if (existing[0].movement_type !== 'Outward') return res.status(400).json({ error: 'Cancelled only applies to an Outward movement' });
+    if (!['Approved', 'Ticket Issued'].includes(existing[0].status)) return res.status(400).json({ error: `Only an "Approved" or "Ticket Issued" request can be Cancelled (this one is "${existing[0].status}")` });
+    const newRemarks = appendMovementRemark(existing[0].remarks, 'Cancelled', req.body && req.body.remarks);
+    await pool.query(`UPDATE material_movements SET status='Cancelled', remarks=? WHERE id=?`, [newRemarks, req.params.id]);
+    const [rows] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [req.params.id]);
+    const json = movementRowToJson(rows[0]);
+    auditLog(req, 'MOVEMENT_CANCELLED', { entity: 'material_movement', entityId: req.params.id, site: existing[0].site });
+    res.json(json);
   } catch (e) {
     sendErr(res, e);
   }
@@ -7663,10 +8446,11 @@ app.post('/api/material-movements', authenticateToken, requireRole(['Admin', 'Op
 app.patch('/api/material-movements/:id', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
   try {
     const m = req.body;
-    const [existing] = await pool.query('SELECT id, site FROM material_movements WHERE id = ?', [req.params.id]);
+    const [existing] = await pool.query('SELECT id, site, status FROM material_movements WHERE id = ?', [req.params.id]);
     if (existing.length === 0) return res.status(404).json({ error: 'Material movement record not found' });
     await assertSiteAccess(req.user, existing[0].site);
     await assertSiteAccess(req.user, m.site);
+    if (existing[0].status !== 'Pending Approval') return res.status(400).json({ error: `Only a request still "Pending Approval" can be edited (this one is "${existing[0].status}")` });
     if (!m.movementType || !MOVEMENT_TYPES.includes(m.movementType)) return res.status(400).json({ error: 'Movement type must be Inward or Outward' });
     if (!m.itemName || !String(m.itemName).trim()) return res.status(400).json({ error: 'Item name is required' });
     const movementDate = normalizeDateInput(m.movementDate);
@@ -7683,13 +8467,16 @@ app.patch('/api/material-movements/:id', authenticateToken, requireRole(['Admin'
 
 app.delete('/api/material-movements/:id', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT dc_invoice_file, site FROM material_movements WHERE id = ?', [req.params.id]);
+    const [rows] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return res.status(404).json({ error: 'Material movement record not found' });
     await assertSiteAccess(req.user, rows[0].site);
     // Attachments live in their own table + files on disk - remove them with the record, not leave them orphaned forever.
+    // Note: only the main row is captured in the audit snapshot below, so a Restore
+    // brings the record back but not its attached files (those are gone from disk).
     const [docRows] = await pool.query('SELECT file_name FROM material_movement_documents WHERE movement_id = ?', [req.params.id]);
     await pool.query('DELETE FROM material_movement_documents WHERE movement_id = ?', [req.params.id]);
     await pool.query('DELETE FROM material_movements WHERE id = ?', [req.params.id]);
+    await auditLogDeleteWithSnapshot(req, 'MATERIAL_MOVEMENT_DELETE', 'material_movement', req.params.id, rows[0].site, rows[0]);
     docRows.forEach((d) => { if (d.file_name) fs.unlink(safeUploadPath(d.file_name), () => {}); });
     if (rows[0].dc_invoice_file) {
       const filePath = safeUploadPath(rows[0].dc_invoice_file);
@@ -7864,10 +8651,17 @@ app.get('/api/perf', authenticateToken, requireGlobalAdmin, (req, res) => {
     cache: { ttlMs: API_CACHE_TTL_MS, entries: apiCache.size, kb: Math.round(apiCacheBytes / 1024), hits: perfStats.cacheHits, misses: perfStats.cacheMisses, stores: perfStats.cacheStores },
     memory: memSamples.slice(-30), routes, recentSlow: perfStats.recentSlow.slice(-30).reverse() });
 });
-// Audit trail viewer (global Admin only; read-only). Filters: action, username, entity, status, from, to (ISO dates); paging: limit (max 500), offset.
-app.get('/api/audit-logs', authenticateToken, requireGlobalAdmin, async (req, res) => {
+// Audit trail viewer - every signed-in user (Settings > Activity Logs), scoped to their
+// own allowed site(s) exactly like every other list in this app (a Global Admin's
+// location_access of "All"/"Both" naturally sees every site, same as everywhere else).
+// Filters: action, username, entity, status, from, to (ISO dates); paging: limit (max 500), offset.
+// snapshot_data itself is never sent here (it can be large and most rows don't need it) -
+// only whether one exists, so the UI knows whether Restore is possible for that row.
+app.get('/api/audit-logs', authenticateToken, async (req, res) => {
   try {
     const q = req.query || {}; const where = []; const params = [];
+    const allowedSitesForLogs = await getAllowedSitesForUser(req.user);
+    await applySiteScope(allowedSitesForLogs, where, params);
     if (q.action) { where.push('action = ?'); params.push(String(q.action)); }
     if (q.username) { where.push('username = ?'); params.push(String(q.username)); }
     if (q.entity) { where.push('entity_type = ?'); params.push(String(q.entity)); }
@@ -7876,9 +8670,49 @@ app.get('/api/audit-logs', authenticateToken, requireGlobalAdmin, async (req, re
     if (q.to) { where.push('created_at <= ?'); params.push(new Date(q.to)); }
     const limit = Math.min(Math.max(parseInt(q.limit, 10) || 100, 1), 500); const offset = Math.max(parseInt(q.offset, 10) || 0, 0);
     const clause = where.length ? ' WHERE ' + where.join(' AND ') : '';
+    const cols = 'id, created_at, username, role, action, entity_type, entity_id, site, status, ip_address, details, (snapshot_data IS NOT NULL) AS has_snapshot';
     const [[{ total }]] = await pool.query(`SELECT COUNT(*) AS total FROM audit_logs${clause}`, params);
-    const [rows] = await pool.query(`SELECT * FROM audit_logs${clause} ORDER BY id DESC LIMIT ? OFFSET ?`, [...params, limit, offset]);
-    res.json({ total, limit, offset, rows });
+    const [rows] = await pool.query(`SELECT ${cols} FROM audit_logs${clause} ORDER BY id DESC LIMIT ? OFFSET ?`, [...params, limit, offset]);
+    res.json({ total, limit, offset, rows: rows.map(r => ({ ...r, has_snapshot: !!r.has_snapshot })) });
+  } catch (e) { sendErr(res, e); }
+});
+// Which entity types a deletion can be restored from (table name is never taken from
+// user input - only ever one of these fixed, whitelisted values). Anything deleted
+// before this feature existed, or an entity type not in this list, has no snapshot
+// and Restore simply won't be offered for it.
+const RESTORABLE_AUDIT_ENTITIES = {
+  visitor_request: 'visitor_requests',
+  asset: 'assets',
+  rack_component: 'rack_components',
+  material_movement: 'material_movements',
+  dc_activity: 'dc_activities',
+};
+// Restore a deleted record from its audit-log snapshot (Admin only, site-scoped like
+// everything else an Admin manages). Re-inserts the row exactly as it was, under its
+// original ID - if something already occupies that ID (e.g. it was already restored
+// once), this fails clearly rather than silently creating a duplicate.
+app.post('/api/audit-logs/:id/restore', authenticateToken, requireRole(['Admin']), async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT * FROM audit_logs WHERE id = ?', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Log entry not found' });
+    const logRow = rows[0];
+    if (!/_DELETE$/.test(logRow.action)) return res.status(400).json({ error: 'Only a deletion can be restored from the log.' });
+    const table = RESTORABLE_AUDIT_ENTITIES[logRow.entity_type];
+    if (!table) return res.status(400).json({ error: `Restore is not available for "${logRow.entity_type || 'this'}" records.` });
+    if (!logRow.snapshot_data) return res.status(400).json({ error: 'No snapshot was saved for this deletion (it may predate the Restore feature), so it cannot be restored.' });
+    if (logRow.site) await assertSiteAccess(req.user, logRow.site);
+    let snapshot;
+    try { snapshot = JSON.parse(logRow.snapshot_data); } catch (e) { return res.status(500).json({ error: 'The saved snapshot is corrupted and cannot be restored.' }); }
+    const cols = Object.keys(snapshot);
+    if (!cols.length) return res.status(500).json({ error: 'The saved snapshot is empty and cannot be restored.' });
+    try {
+      await pool.query(`INSERT INTO ${table} (${cols.map(c => '`' + c + '`').join(',')}) VALUES (${cols.map(() => '?').join(',')})`, cols.map(c => snapshot[c]));
+    } catch (e) {
+      if (e && e.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'This record already exists - it looks like it was already restored.' });
+      throw e;
+    }
+    auditLog(req, `${logRow.entity_type.toUpperCase()}_RESTORE`, { entity: logRow.entity_type, entityId: logRow.entity_id, site: logRow.site, details: { restoredFromLogId: logRow.id } });
+    res.json({ success: true });
   } catch (e) { sendErr(res, e); }
 });
 
@@ -7897,10 +8731,10 @@ const crypto = require('crypto'); // zlib is required once, near the top of the 
 // a restore). Encrypted credential values inside it only decrypt on a server with the same
 // JWT_SECRET they were encrypted under -- restoring to a different server still needs those
 // passwords re-entered via the wizard, exactly as Config Export/Import already documents.
-const BACKUP_TABLES = ['locations', 'rack_types', 'hardware_types', 'zones', 'racks', 'floor_plans', 'users', 'assets', 'rack_components', 'asset_movements', 'issues', 'dc_activities', 'material_movements', 'material_movement_documents', 'firmware_targets', 'firmware_model_targets', 'asset_connectivity', 'asset_hw_details', 'pdus', 'app_settings'];
+const BACKUP_TABLES = ['locations', 'rack_types', 'hardware_types', 'zones', 'racks', 'floor_plans', 'users', 'assets', 'rack_components', 'asset_movements', 'issues', 'dc_activities', 'material_movements', 'material_movement_documents', 'firmware_targets', 'firmware_model_targets', 'asset_connectivity', 'asset_hw_details', 'pdus', 'power_readings', 'app_settings', 'visitor_requests', 'visitor_access_documents'];
 // Tables that may legitimately not exist yet on a given install (pdus is created by lib/pdu-routes.js at startup). A missing one is simply left out of a backup
 // and left alone by a restore - never an error, and never turned into an empty list that would wipe data.
-const BACKUP_OPTIONAL_TABLES = new Set(['pdus']);
+const BACKUP_OPTIONAL_TABLES = new Set(['pdus', 'power_readings']);
 const isNoSuchTable = (e) => !!e && (e.code === 'ER_NO_SUCH_TABLE' || e.errno === 1146);
 const BACKUP_FORMAT = 'dc-dashboard-backup', BACKUP_VERSION = 1;
 const BACKUP_RETENTION_DAYS = Math.max(1, Number(process.env.BACKUP_RETENTION_DAYS) || 7); // configurable; default widened from the old hardcoded 3 to 7 per the packaging review
@@ -8044,6 +8878,62 @@ function startBackupScheduler() {
     }, Number(process.env.BACKUP_CATCHUP_DELAY_MS) || 20000);
   }
 }
+
+// ===== Monthly report email (2nd of every month, server local time) =====
+// A lean, server-generated summary - counts per site for the previous
+// calendar month across Hardware Issues, Material Movements, Visitor Access,
+// and DC Activities - mailed to the same notification recipients configured
+// in Settings -> Setup -> Integrations. Separate from the richer in-browser
+// "Data Center Report" (which still only downloads/emails on demand, since
+// nobody is looking at a browser when this one fires automatically).
+const MONTHLY_REPORT_DAY = 2, MONTHLY_REPORT_HOUR = 9; // 09:00 on the 2nd, server local time
+async function buildMonthlyReportHtml(monthStart, monthEnd) {
+  const label = monthStart.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const [issueRows] = await pool.query(`SELECT site, COUNT(*) AS cnt FROM issues WHERE reported_date >= ? AND reported_date < ? GROUP BY site`, [monthStart, monthEnd]);
+  const [movementRows] = await pool.query(`SELECT site, movement_type, COUNT(*) AS cnt FROM material_movements WHERE movement_date >= ? AND movement_date < ? GROUP BY site, movement_type`, [monthStart, monthEnd]);
+  const [visitorRows] = await pool.query(`SELECT site, status, COUNT(*) AS cnt FROM visitor_requests WHERE created_at >= ? AND created_at < ? GROUP BY site, status`, [monthStart, monthEnd]);
+  const [activityRows] = await pool.query(`SELECT site, COUNT(*) AS cnt FROM dc_activities WHERE start_date >= ? AND start_date < ? GROUP BY site`, [monthStart, monthEnd]);
+  const sites = Array.from(new Set([...issueRows, ...movementRows, ...visitorRows, ...activityRows].map((r) => r.site))).sort();
+  if (sites.length === 0) return `<p>No activity recorded for ${esc(label)}.</p>`;
+  const rows = sites.map((site) => {
+    const issues = issueRows.filter((r) => r.site === site).reduce((a, r) => a + r.cnt, 0);
+    const inward = movementRows.filter((r) => r.site === site && r.movement_type === 'Inward').reduce((a, r) => a + r.cnt, 0);
+    const outward = movementRows.filter((r) => r.site === site && r.movement_type === 'Outward').reduce((a, r) => a + r.cnt, 0);
+    const visitors = visitorRows.filter((r) => r.site === site).reduce((a, r) => a + r.cnt, 0);
+    const activities = activityRows.filter((r) => r.site === site).reduce((a, r) => a + r.cnt, 0);
+    return `<tr><td>${esc(site)}</td><td align="center">${issues}</td><td align="center">${inward}</td><td align="center">${outward}</td><td align="center">${visitors}</td><td align="center">${activities}</td></tr>`;
+  }).join('');
+  return `<p>Summary of activity for <b>${esc(label)}</b>:</p>
+    <table cellpadding="8" style="border-collapse:collapse;border:1px solid #ccc">
+      <tr style="background:#f1f5f9"><th>Site</th><th>Issues Reported</th><th>Material Inward</th><th>Material Outward</th><th>Visitor Requests</th><th>DC Activities</th></tr>
+      ${rows}
+    </table>`;
+}
+async function sendMonthlyReportEmail() {
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const monthEnd = new Date(now.getFullYear(), now.getMonth(), 1);
+  const html = await buildMonthlyReportHtml(monthStart, monthEnd);
+  const label = monthStart.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const result = await setupRoutesModule.sendNotification({ subject: `[DCIM] Monthly Activity Report - ${label}`, html });
+  if (result.sent) log.info(`[monthly-report] sent for ${label}`);
+  else log.info(`[monthly-report] not sent for ${label}: ${result.reason}`);
+}
+function nextMonthlyReportAt(from = new Date()) {
+  const t = new Date(from.getFullYear(), from.getMonth(), MONTHLY_REPORT_DAY, MONTHLY_REPORT_HOUR, 0, 0, 0);
+  if (t <= from) t.setMonth(t.getMonth() + 1);
+  return t;
+}
+let monthlyReportTimer = null;
+function scheduleMonthlyReport() {
+  if (monthlyReportTimer) clearTimeout(monthlyReportTimer);
+  const at = nextMonthlyReportAt(new Date(Date.now() + 1000));
+  monthlyReportTimer = setTimeout(async () => {
+    try { await sendMonthlyReportEmail(); } catch (e) { log.error('[monthly-report] scheduler error:', e.message); }
+    scheduleMonthlyReport();
+  }, Math.min(Math.max(at.getTime() - Date.now(), 1000), 2147483000));
+}
+function startMonthlyReportScheduler() { scheduleMonthlyReport(); }
 
 // ---- reading + checking a backup file (nothing is changed here) ----
 function parseBackupBuffer(buf) {
@@ -8548,6 +9438,53 @@ async function ensurePowerSnapshotLoaded() {
     if (raw && !Object.keys(powerSnapshot).length) { const p = JSON.parse(raw); if (p && typeof p === 'object') Object.assign(powerSnapshot, p); }
   } catch (e) { /* no snapshot yet */ }
 }
+// Server Power Consumption (main dashboard module): current draw and PSU capacity per location and zone, plus each
+// location's top 10 servers by draw. Pure database read of the numbers the 30-min auto-sync / Sync button save on
+// Asset Inventory (OME / OneView first; the Redfish reading is the fallback for a server neither appliance reports).
+// A server's capacity is ONE PSU's rating (the second PSU is redundancy), so utilisation = draw / that rating.
+app.get('/api/monitoring/server-power-consumption', authenticateToken, async (req, res) => {
+  try {
+    const allowed = await getAllowedSitesForUser(req.user);
+    if (!allowed.length) return res.json({ sites: [], anyData: false, lastRunAt: lastAutoSyncAt ? lastAutoSyncAt.getTime() : null });
+    const [rows] = await pool.query(
+      `SELECT id, site, zone, rack_no, device_name, serial_number, manufacturer, model, hardware_type,
+              hw_power_watts, hw_psu_max_watts, hw_power_source, hw_power_synced_at, redfish_power_watts
+         FROM assets
+        WHERE site IN (?) AND (lifecycle_status IS NULL OR lifecycle_status = 'Active')
+          AND (hw_power_watts IS NOT NULL OR hw_psu_max_watts IS NOT NULL OR redfish_power_watts IS NOT NULL)`, [allowed]);
+    const statusOf = (pct) => (pct == null ? null : pct >= 85 ? 'Critical' : pct >= 70 ? 'High' : 'Normal');
+    const bySite = new Map(allowed.map((st) => [st, { site: st, loadWatts: 0, capacityWatts: 0, loadWithCapWatts: 0, serversMonitored: 0, serversReporting: 0, serversOn: 0, asOf: null, zonesMap: new Map(), servers: [] }]));
+    for (const r of rows) {
+      const loc = bySite.get(r.site); if (!loc) continue;
+      const fromAppliance = r.hw_power_watts !== null && r.hw_power_watts !== undefined;
+      const watts = fromAppliance ? Number(r.hw_power_watts) : (r.redfish_power_watts != null ? Number(r.redfish_power_watts) : null);
+      const max = r.hw_psu_max_watts ? Number(r.hw_psu_max_watts) : null;
+      const source = fromAppliance ? (r.hw_power_source || 'Appliance') : (watts != null ? 'Redfish' : (r.hw_power_source || null));
+      loc.serversMonitored++;
+      const z = loc.zonesMap.get(r.zone || '-') || { zone: r.zone || '-', loadWatts: 0, capacityWatts: 0, loadWithCapWatts: 0, servers: 0, reporting: 0, on: 0 };
+      loc.zonesMap.set(r.zone || '-', z); z.servers++;
+      if (watts != null) {
+        loc.serversReporting++; z.reporting++; loc.loadWatts += watts; z.loadWatts += watts;
+        if (watts > 0) { loc.serversOn++; z.on++; }
+      }
+      if (max) { loc.capacityWatts += max; z.capacityWatts += max; if (watts != null) { loc.loadWithCapWatts += watts; z.loadWithCapWatts += watts; } }
+      if (r.hw_power_synced_at) { const t = new Date(r.hw_power_synced_at).getTime(); if (!loc.asOf || t < loc.asOf) loc.asOf = t; }
+      if (watts != null) {
+        const pct = max && watts != null ? Math.round((watts / max) * 100) : null;
+        loc.servers.push({ id: r.id, name: r.device_name || r.serial_number || r.id, serial: r.serial_number, zone: r.zone, rack: r.rack_no, make: r.manufacturer || null, model: r.model || null, source, watts, maxWatts: max, pct, status: watts === 0 ? 'Off' : statusOf(pct) });
+      }
+    }
+    const pctOf = (load, cap) => (cap > 0 ? Math.round((load / cap) * 100) : null);
+    const sites = [...bySite.values()].filter((l) => l.serversMonitored > 0).map((l) => ({
+      site: l.site, loadWatts: l.loadWatts, capacityWatts: l.capacityWatts, pct: pctOf(l.loadWithCapWatts, l.capacityWatts),
+      serversMonitored: l.serversMonitored, serversReporting: l.serversReporting, serversOn: l.serversOn, asOf: l.asOf,
+      zones: [...l.zonesMap.values()].sort((a, b) => String(a.zone).localeCompare(String(b.zone), undefined, { numeric: true })).map((z) => ({ zone: z.zone, loadWatts: z.loadWatts, capacityWatts: z.capacityWatts, pct: pctOf(z.loadWithCapWatts, z.capacityWatts), servers: z.servers, reporting: z.reporting, on: z.on })),
+      top: l.servers.sort((a, b) => b.watts - a.watts).slice(0, 10),
+    }));
+    res.json({ sites, anyData: sites.length > 0, lastRunAt: lastAutoSyncAt ? lastAutoSyncAt.getTime() : null, intervalMs: AUTO_SYNC_INTERVAL_MS });
+  } catch (e) { sendErr(res, e); }
+});
+
 app.get('/api/monitoring/power-summary', authenticateToken, async (req, res) => {
   try {
     await ensurePowerSnapshotLoaded();
@@ -8583,28 +9520,49 @@ app.get('/api/monitoring/power-summary', authenticateToken, async (req, res) => 
 
 
 // Firmware Compliance (dashboard module): a pure cache reader of what OME / OneView reported during the last 30-minute auto-sync.
+async function buildFwCompliancePayload(user) {
+  await ensureFwComplianceLoaded();
+  const allowed = await getAllowedSitesForUser(user);
+  const [zoneRows] = await pool.query('SELECT DISTINCT site, zone_name AS zone FROM zones WHERE site IN (?)', [allowed.length ? allowed : ['__none__']]);
+  const rows = [], zones = [];
+  zoneRows.forEach((z) => {
+    ['OME', 'ONEVIEW'].forEach((vk) => {
+      if (!getMonitorConfig(vk, z.site, z.zone)) return;
+      const snap = fwComplianceCache[snapshotKey(vk, z.site, z.zone)];
+      zones.push({ vendor: vk, site: z.site, zone: z.zone, reported: !!snap, fetchedAt: snap ? snap.fetchedAt : null, count: snap ? snap.items.length : 0 });
+      if (snap) snap.items.forEach((it) => rows.push({ vendor: vk, site: z.site, zone: z.zone, ...it, fetchedAt: snap.fetchedAt }));
+    });
+  });
+  return { rows, zones, lastRunAt: lastAutoSyncAt ? lastAutoSyncAt.getTime() : null, intervalMs: AUTO_SYNC_INTERVAL_MS, running: autoSyncRunning };
+}
 app.get('/api/monitoring/firmware-compliance', authenticateToken, async (req, res) => {
+  try { res.json(await buildFwCompliancePayload(req.user)); } catch (e) { sendErr(res, e); }
+});
+// Manual "Sync" on the dashboard's Firmware Compliance card: rebuilds the firmware + device-status snapshot of every zone
+// the user can see from the LATEST device data already cached by the appliance syncs (Monitoring Sync / 30-min auto-sync).
+// It never calls Dell OME / HPE OneView itself, so it is instant and adds no appliance load.
+app.post('/api/monitoring/firmware-compliance/sync', authenticateToken, async (req, res) => {
   try {
     await ensureFwComplianceLoaded();
     const allowed = await getAllowedSitesForUser(req.user);
     const [zoneRows] = await pool.query('SELECT DISTINCT site, zone_name AS zone FROM zones WHERE site IN (?)', [allowed.length ? allowed : ['__none__']]);
-    const rows = [], zones = [];
-    zoneRows.forEach((z) => {
-      ['OME', 'ONEVIEW'].forEach((vk) => {
-        if (!getMonitorConfig(vk, z.site, z.zone)) return;
-        const snap = fwComplianceCache[snapshotKey(vk, z.site, z.zone)];
-        zones.push({ vendor: vk, site: z.site, zone: z.zone, reported: !!snap, fetchedAt: snap ? snap.fetchedAt : null, count: snap ? snap.items.length : 0 });
-        if (snap) snap.items.forEach((it) => rows.push({ vendor: vk, site: z.site, zone: z.zone, ...it, fetchedAt: snap.fetchedAt }));
-      });
-    });
-    res.json({ rows, zones, lastRunAt: lastAutoSyncAt ? lastAutoSyncAt.getTime() : null, intervalMs: AUTO_SYNC_INTERVAL_MS, running: autoSyncRunning });
+    let updated = 0, noCache = 0;
+    for (const z of zoneRows) {
+      for (const vk of ['OME', 'ONEVIEW']) {
+        if (!getMonitorConfig(vk, z.site, z.zone)) continue;
+        if (!getCachedDevicesOnly(vk, z.site, z.zone)) { noCache++; continue; }
+        await refreshFwCompliance(vk, z.site, z.zone);
+        updated++;
+      }
+    }
+    res.json({ updated, noCache, at: Date.now(), data: await buildFwCompliancePayload(req.user) });
   } catch (e) { sendErr(res, e); }
 });
 
 // ===== Location-scoped export (any signed-in user) =====
 // A user restricted to one location can save a copy of THEIR location's data. It never contains the users table (no password hashes),
 // other locations' data or the backup settings, and it cannot be used to restore (only a full Admin backup can).
-const SCOPED_TABLES = [['locations', 'name'], ['zones', 'site'], ['racks', 'site'], ['floor_plans', 'site'], ['assets', 'site'], ['rack_components', 'site'], ['asset_connectivity', 'site'], ['asset_hw_details', 'site'], ['issues', 'site'], ['dc_activities', 'site'], ['material_movements', 'site'], ['hardware_types', null], ['rack_types', null]];
+const SCOPED_TABLES = [['locations', 'name'], ['zones', 'site'], ['racks', 'site'], ['floor_plans', 'site'], ['assets', 'site'], ['rack_components', 'site'], ['asset_connectivity', 'site'], ['asset_hw_details', 'site'], ['issues', 'site'], ['dc_activities', 'site'], ['material_movements', 'site'], ['visitor_requests', 'site'], ['hardware_types', null], ['rack_types', null]];
 async function buildScopedExport(sites, by) {
   const conn = await pool.getConnection(); const tables = {};
   try {
@@ -8758,6 +9716,16 @@ const redfishRoutesModule = require('./lib/redfish-routes')(app, {
   authenticateToken, requireRole, getAllowedSitesForUser, applySiteScope, assertSiteAccess,
   genId, auditLog, monitorFetch,
 });
+const REDFISH_SYNC_INTERVAL_MS = Math.max(60000, Number(process.env.REDFISH_SYNC_INTERVAL_MS) || 15 * 60 * 1000); // 15 min default, same cadence as PDU polling
+const visitorRoutesModule = require('./lib/visitor-routes')(app, {
+  pool: livePool, fs, path, multer, log, httpErr, sendErr, esc,
+  authenticateToken, requireRole, requireApproverOrAdmin, getAllowedSitesForUser, applySiteScope, assertSiteAccess, getAllSiteNames,
+  genId, auditLog, auditLogDeleteWithSnapshot, acquireTicketLock, generateTicketNoGeneric,
+  normalizeDateInput, dateOnlyStr,
+  uploadNameProblem, sanitizeUploadName, uploadError, verifyUploadedFiles,
+  sendNotification: (...args) => setupRoutesModule.sendNotification(...args),
+  webappDir: __dirname,
+});
 
 // Serve frontend (SPA fallback) — compatible with Express 4 and Express 5.
 app.use((req, res, next) => {
@@ -8841,6 +9809,7 @@ async function startServer() {
       await initDB();
       await setupRoutesModule.applyIntegrationEnv();
       await pduRoutesModule.ensureSchema();
+      await visitorRoutesModule.ensureSchema();
     }
     license.flushIntegrityEvents();   // audit rows queued before the database was ready
     // 10-day free trial + auto-lock (see lib/license.js). Only when licensing is enforced.
@@ -8886,6 +9855,10 @@ async function startServer() {
       }, 1500).unref();
       if (String(process.env.MONITOR_FW_SCAN || 'on').toLowerCase() !== 'off') { setTimeout(() => fwJobsTick(true).catch(() => { }), 20000).unref(); setInterval(() => fwJobsTick(true).catch(() => { }), FW_SCAN_INTERVAL_MS).unref(); }
       if (String(process.env.PDU_POLL || 'on').toLowerCase() !== 'off') { setTimeout(() => pduRoutesModule.pollAllPdus().catch((e) => log.warn('[pdu] poll skipped: ' + e.message)), 25000).unref(); setInterval(() => pduRoutesModule.pollAllPdus().catch((e) => log.warn('[pdu] poll skipped: ' + e.message)), PDU_POLL_INTERVAL_MS).unref(); }
+      // Redfish auto-sync: re-polls already-configured devices in the background so the Multi-
+      // Vendor (Redfish) page's health/power/alerts stay current without anyone having it open.
+      // Set REDFISH_AUTO_SYNC=off in .env to disable; REDFISH_SYNC_INTERVAL_MS to change the cadence.
+      if (String(process.env.REDFISH_AUTO_SYNC || 'on').toLowerCase() !== 'off') { setTimeout(() => redfishRoutesModule.pollAllRedfish().catch((e) => log.warn('[redfish] auto-sync skipped: ' + e.message)), 35000).unref(); setInterval(() => redfishRoutesModule.pollAllRedfish().catch((e) => log.warn('[redfish] auto-sync skipped: ' + e.message)), REDFISH_SYNC_INTERVAL_MS).unref(); }
       auditLog(null, 'SERVER_START', { username: 'system', entity: 'server', details: { version: APP_VERSION, port: Number(PORT), node: process.version } });
       console.log(`\n========================================`);
       log.info(`  Data Center API Server Ready`);
@@ -8899,6 +9872,7 @@ async function startServer() {
       log.info(`Login video (media/login-bg.mp4): ${require('fs').existsSync(path.join(__dirname, 'media', 'login-bg.mp4')) ? '✓ Found' : '✗ NOT FOUND - put the media folder next to server.js (login page will show the animated fallback)'}`);
       log.info(`Serving from folder: ${__dirname}`);
       startBackupScheduler();
+      startMonthlyReportScheduler();
       backupConfig().then((c) => log.info(`Auto backup: ${c.enabled ? 'ON' : 'OFF'} - daily at ${BACKUP_TIME} (server time), keeps the last ${c.retentionDays} days -> ${c.dir}`)).catch(() => {});
       console.log(`========================================\n`);
     });

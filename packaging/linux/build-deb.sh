@@ -47,6 +47,8 @@ rm -rf "$STAGE/usr/share/dcim/webapp/.env" \
 mkdir -p "$STAGE/usr/share/dcim/webapp/uploads" \
          "$STAGE/usr/share/dcim/webapp/backups" \
          "$STAGE/usr/share/dcim/webapp/logs"
+. "$REPO_ROOT/packaging/tools/prune-customer-payload.sh"
+prune_customer_payload "$STAGE/usr/share/dcim/webapp"
 
 if [ -x "$SCRIPT_DIR/runtime/node/bin/node" ]; then
   mkdir -p "$STAGE/usr/share/dcim/runtime"

@@ -33,6 +33,8 @@ rm -f "$PAYLOAD"/webapp/tools/license-*.js "$PAYLOAD/webapp/tools/Run-License-Ge
       "$PAYLOAD/webapp/tools/Build-License-Generator-Exe.bat" "$PAYLOAD/webapp/tools/sea-config.json" "$PAYLOAD/webapp/tools/sea-prep.blob" \
       "$PAYLOAD"/webapp/tools/dcim-license-generator-v2*.exe; rm -rf "$PAYLOAD/webapp/license.lic" "$PAYLOAD/webapp/.trial-state" "$PAYLOAD/webapp/.license-clock" "$PAYLOAD/webapp/.env" "$PAYLOAD/webapp/uploads" "$PAYLOAD/webapp/backups" "$PAYLOAD/webapp/logs"
 mkdir -p "$PAYLOAD/webapp/uploads" "$PAYLOAD/webapp/backups" "$PAYLOAD/webapp/logs"
+. "$REPO_ROOT/packaging/tools/prune-customer-payload.sh"
+prune_customer_payload "$PAYLOAD/webapp"
 
 # Signed integrity manifest + build gate: FAILS the build on licence tools / signing material / private keys.
 # Bytenode defaults on only when a bundled runtime was actually staged (system-Node builds have no exact

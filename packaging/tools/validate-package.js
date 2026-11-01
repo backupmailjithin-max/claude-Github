@@ -38,6 +38,14 @@ const FORBIDDEN_NAMES = [
   [/^id_(rsa|dsa|ecdsa|ed25519)$/, 'ssh private key'],
   [/\.(p12|pfx|jks|keystore)$/i, 'key store'],
 ];
+// Customer payload hygiene: seed/demo utilities, build helpers and internal diagnostics never ship (commercial release H2).
+const FORBIDDEN_CUSTOMER_NAMES = [
+  [/^seed-(pdu-)?demo-data\.js$/i, 'demo/seed utility'],
+  [/^cleanup-obsolete\.sh$/i, 'internal operational script'],
+  [/^build-min\.js$/i, 'developer build helper'],
+  [/^probe-ome-power\.js$/i, 'internal diagnostic tool'],
+  [/\.test\.js$/i, 'developer test'],
+];
 const KEY_BEGIN = /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/g;
 // A real key has a long base64 body after the header; documentation that merely shows the BEGIN/END lines
 // (e.g. dotenv's README) has none. Body = text up to the END line (max 8 KB), minus whitespace / literal "\n" / "...".
@@ -69,6 +77,8 @@ function excludedBy(rules, relPosix, name) {
 const problems = [];
 const info = [];
 let scanned = 0, contentScanned = 0;
+const rootIsWebapp = fs.existsSync(path.join(root, 'lib', 'integrity.js'));
+const CUSTOMER_DIRS = rootIsWebapp ? /^(tools|tests|docs)\//i : /(^|\/)webapp\/(tools|tests|docs)\//i;
 function walk(dir, rel, rules, thirdParty) {
   let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
   for (const d of ents) {
@@ -78,8 +88,10 @@ function walk(dir, rel, rules, thirdParty) {
     if (d.isDirectory()) { walk(full, relp, rules, thirdParty || (!rel && THIRD_PARTY.has(d.name))); continue; }
     if (!d.isFile()) continue;
     scanned++;
+    if (!thirdParty && CUSTOMER_DIRS.test(relp)) { problems.push(`${relp}: developer/vendor folder content must not ship in a customer package`); continue; }
     for (const [re, why] of FORBIDDEN_NAMES) if (re.test(d.name)) { problems.push(`${relp}: ${why}`); break; }
     if (thirdParty) continue;
+    if (!relp.split('/').includes('node_modules')) for (const [re, why] of FORBIDDEN_CUSTOMER_NAMES) if (re.test(d.name)) { problems.push(`${relp}: ${why}`); break; }
     let st; try { st = fs.statSync(full); } catch (e) { continue; }
     if (st.size > 2 * 1024 * 1024) continue;
     let buf; try { buf = fs.readFileSync(full); } catch (e) { continue; }

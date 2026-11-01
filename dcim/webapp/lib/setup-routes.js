@@ -11,13 +11,14 @@ const crypto = require('crypto');
 const os = require('os');
 const { execFile } = require('child_process');
 const mysql = require('mysql2/promise');
-const { testSmtp } = require('./smtp-client');
+const { testSmtp, sendMail } = require('./smtp-client');
 const { buildZip } = require('./zip-writer');
 
 const ORG_KEYS = ['companyName', 'appName', 'department', 'orgUnit', 'footerText', 'supportEmail', 'supportContact', 'logoPath', 'faviconPath'];
 const ORG_EDITABLE_KEYS = ['companyName', 'appName', 'department', 'orgUnit', 'footerText', 'supportEmail', 'supportContact'];
 const MONITORING_SETTING_KEY = 'integrations.monitoring';
 const SMTP_SETTING_KEY = 'integrations.smtp';
+const NOTIFY_RECIPIENTS_KEY = 'integrations.notifyRecipients';
 const SETUP_COMPLETE_KEY = 'setup.completedAt';
 
 const DEFAULT_HARDWARE_TYPES = ['Dell Server', 'HPE Server', 'Storage', 'Switch', 'Firewall', 'Load Balancer', 'HSM', 'PDU', 'ATS', 'Others'];
@@ -305,6 +306,27 @@ module.exports = function registerSetupRoutes(app, deps) {
     try { return JSON.parse(raw); } catch (e) { return null; }
   }
 
+  async function readNotifyRecipients() {
+    const raw = await getSetting(NOTIFY_RECIPIENTS_KEY, '[]');
+    try { const a = JSON.parse(raw); return Array.isArray(a) ? a : []; } catch (e) { return []; }
+  }
+  // Notification framework: mails `html` to every saved notification recipient (or to `to`, when given) through the saved SMTP
+  // settings. Never throws - callers fire-and-forget; the outcome is { sent, reason }.
+  async function sendNotification({ subject, html, to } = {}) {
+    try {
+      const smtp = await readSmtpSettings();
+      if (!smtp || !smtp.host) return { sent: false, reason: 'SMTP is not configured' };
+      const list = to ? [].concat(to) : (await readNotifyRecipients()).map((r) => r && r.email);
+      const addrs = [...new Set(list.map((x) => String(x || '').trim()).filter((x) => /^[^\s@<>]+@[^\s@<>]+$/.test(x)))];
+      if (!addrs.length) return { sent: false, reason: 'no notification recipients configured' };
+      const r = await sendMail({ host: smtp.host, port: smtp.port, secure: smtp.secure, user: smtp.user, pass: decryptSecret(JWT_SECRET, smtp.passEnc), fromAddress: smtp.fromAddress || smtp.user, toAddresses: addrs, subject, html });
+      return { sent: true, accepted: r.accepted };
+    } catch (e) {
+      log.warn('[notify] email not sent: ' + e.message);
+      return { sent: false, reason: e.message };
+    }
+  }
+
   // Applies saved (encrypted) integration settings into process.env, in the
   // exact OME_<SITE>_<ZONE>_HOST/_USER/_PASS shape the existing monitoring
   // code already reads, so nothing else in server.js has to change. A value
@@ -328,6 +350,7 @@ module.exports = function registerSetupRoutes(app, deps) {
       res.json({
         monitoring: entries,
         smtp: smtp ? { host: smtp.host, port: smtp.port, secure: smtp.secure, user: smtp.user, fromAddress: smtp.fromAddress, hasPassword: !!smtp.passEnc } : null,
+        notifyRecipients: await readNotifyRecipients(),
       });
     } catch (e) { sendErr(res, e); }
   });
@@ -357,6 +380,13 @@ module.exports = function registerSetupRoutes(app, deps) {
           const passEnc = s.password ? encryptSecret(JWT_SECRET, s.password) : (prior ? prior.passEnc : undefined);
           await setSetting(SMTP_SETTING_KEY, JSON.stringify({ host: String(s.host), port: Number(s.port), secure: !!s.secure, user: s.user || '', fromAddress: s.fromAddress || s.user || '', passEnc }));
         }
+      }
+      if (body.notifyRecipients !== undefined) {
+        if (!Array.isArray(body.notifyRecipients) || body.notifyRecipients.length > 100) throw httpErr(400, 'notifyRecipients must be a list of up to 100 entries');
+        const seen = new Set();
+        const clean = body.notifyRecipients.map((r) => ({ name: String((r && r.name) || '').trim().slice(0, 100), email: String((r && r.email) || '').trim().slice(0, 200) }))
+          .filter((r) => { if (!/^[^\s@<>]+@[^\s@<>]+$/.test(r.email)) throw httpErr(400, `"${r.email}" is not a valid email address`); const k = r.email.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+        await setSetting(NOTIFY_RECIPIENTS_KEY, JSON.stringify(clean));
       }
       await applyIntegrationEnv();
       res.json({ success: true });
@@ -793,5 +823,5 @@ module.exports = function registerSetupRoutes(app, deps) {
 
   // Not called here: `pool` isn't connected yet at require/register time.
   // The caller invokes applyIntegrationEnv() once the database is up.
-  return { applyIntegrationEnv };
+  return { applyIntegrationEnv, sendNotification };
 };
