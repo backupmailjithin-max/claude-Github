@@ -29,6 +29,7 @@ Plan about 15 minutes. The application is unavailable for about 2 minutes while 
     - renames the old folder to `/home/webapp.before-<time>`,
     - installs the new files,
     - copies your `.env`, `uploads`, `backups` and `logs` across,
+    - sets the folder owner to the service user, creates a login secret if none is set, and (if nginx is in front) makes it forward `/branding` so the logo shows,
     - starts the service and waits for the health check,
     - puts back the **Airtel logo** and the footer **Internal Official Use Only · Built in-house by DCOPS Team** (only fills values that are empty).
 11. It must end with `PASS`. If it ends with `FAIL`, run the rollback command it prints.
