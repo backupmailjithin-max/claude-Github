@@ -37,6 +37,8 @@ echo "$KEEP" > "$OLD/.cutover-previous"
 echo "[6/7] Starting service"; eval "$START_CMD"
 echo "[7/7] Health check"
 for i in $(seq 1 45); do if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
+  echo "Restoring the Airtel logo and DCOPS footer (only fills empty values)"
+  if [ -f "$HERE/branding/seed-branding.sh" ]; then "$HERE/branding/seed-branding.sh" "$OLD" || echo "      (branding step failed - the app is running; set branding in the setup wizard)"; fi
   echo "PASS: $(curl -fsS "$HEALTH_URL")"; echo "Old version kept at: $KEEP"
   echo "If anything is wrong:  sudo SERVICE=$SERVICE ./rollback.sh $OLD"; exit 0; fi; sleep 2; done
 echo "FAIL: the new version did not become healthy. Run:  sudo SERVICE=$SERVICE ./rollback.sh $OLD" >&2; exit 2

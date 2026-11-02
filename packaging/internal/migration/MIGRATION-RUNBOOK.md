@@ -29,12 +29,13 @@ Plan about 15 minutes. The application is unavailable for about 2 minutes while 
     - renames the old folder to `/home/webapp.before-<time>`,
     - installs the new files,
     - copies your `.env`, `uploads`, `backups` and `logs` across,
-    - starts the service and waits for the health check.
+    - starts the service and waits for the health check,
+    - puts back the **Airtel logo** and the footer **Internal Official Use Only · Built in-house by DCOPS Team** (only fills values that are empty).
 11. It must end with `PASS`. If it ends with `FAIL`, run the rollback command it prints.
 
 ## Check (5 minutes)
 12. In the browser press **Ctrl+F5**, then sign in.
-13. Open: Dashboard, Asset Inventory (count should match yesterday), DC Capacity, Monitoring, Power Capacity, Issue Tracker, Material Movements, Visitor Access, Settings.
+13. Open: Dashboard, Asset Inventory (count should match yesterday), DC Capacity, Monitoring, Power Capacity, Issue Tracker, Material Movements, Settings. The Airtel logo shows at the top and on the sign-in page, and the DCOPS footer shows at the bottom. **Visitor Access is not in the menu: Approval flow and Visitor Access are switched off by default** (see below).
 14. Settings → Users: your users are all there. Settings → License: reads "Licensing not configured".
 15. Settings → Backup & Restore: take a backup. Settings → Notifications: send a test email (set the mail server there if needed).
 16. If you use Dell OME or HPE OneView: open Monitoring and press Sync once. Re-enter REDFISH settings in `.env` only if you use Multi-Vendor (Redfish).
@@ -47,3 +48,12 @@ The old folder returns. The database needs no change: the new version only adds 
 - Keep `/home/webapp.before-<time>` and the `.sql.gz` file for a week, then delete them yourself.
 - The new folder is clean: the old `server6.js` to `server12.js`, `app-compiled19.js` to `27.js`, `index1.html` to `index5.html` copies stay only in the old folder.
 - The first start creates these tables by itself: asset_connectivity, asset_hw_details, audit_logs, firmware_jobs, pdus, power_readings, visitor_requests, visitor_access_documents.
+
+## Approval flow and Visitor Access (off by default)
+- These two are **hidden completely** (not greyed out) until an Administrator switches them on: Visitor Access page, Approve / Reject / Generate Ticket steps, the Approver option on users, and approval emails.
+- To switch on: Settings → **Features** → tick **Approval flow and Visitor Access**. They then show for everyone straight away (users press F5). Untick to hide them again; nothing is deleted.
+- While off, a new Material Movement is recorded and gets its ticket (INW / OUT number) immediately. While on, it waits for approval first.
+- Requests that were already "Pending Approval" when you switch off stay as they are and wait until you switch on again.
+
+## If the logo or footer is ever missing (for example after restoring a backup)
+`cd /tmp/dcim-migration/branding && sudo ./seed-branding.sh /home/webapp`  (safe to repeat; it never overwrites branding you set yourself).

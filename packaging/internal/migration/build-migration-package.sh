@@ -16,6 +16,7 @@ test -d node_modules/net-snmp && test -d ocr/vendor/node_modules && test -f lib/
 if find . \( -name 'license-keygen*' -o -name 'license-issue*' -o -name 'license-generator*' -o -name 'seed-*' -o -name '*.pem' \) -not -path './node_modules/*' | grep -q .; then echo "ERROR: vendor file in tree" >&2; exit 1; fi
 cp -a "$W/dcim/webapp" "$W/pkg/webapp"; cd "$REPO"
 cp packaging/internal/migration/cutover.sh packaging/internal/migration/rollback.sh packaging/internal/migration/README.txt "$W/pkg/"; chmod +x "$W/pkg/"*.sh
+mkdir -p "$W/pkg/branding"; cp packaging/internal/branding/logo.png packaging/internal/branding/seed-branding.sh "$W/pkg/branding/"; chmod +x "$W/pkg/branding/seed-branding.sh"
 [ -f packaging/internal/migration/MIGRATION-RUNBOOK.md ] && cp packaging/internal/migration/MIGRATION-RUNBOOK.md "$W/pkg/"
 echo "version $V commit $S" > "$W/pkg/VERSION.txt"; (cd "$W/pkg" && find . -type f ! -name SHA256SUMS | sed 's|^\./||' | sort | xargs sha256sum > SHA256SUMS)
 mkdir -p "$OUT"; Z="$OUT/Internal-Migration-Package-$V-$S.zip"; rm -f "$Z"; (cd "$W/pkg" && zip -qr "$Z" .); echo "built $Z ($(du -h "$Z" | cut -f1))"

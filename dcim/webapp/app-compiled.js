@@ -11761,7 +11761,32 @@ function ActivityLogsPanel({ isAdmin }) {
                 React.createElement("button", { onClick: () => setPage((p) => Math.min(pageCount - 1, p + 1)), disabled: page >= pageCount - 1, className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "6px 12px" } }, "Next"))),
         openFilter && React.createElement(ValueListFilterPopup, { column: openFilter, currentFilter: columnFilters[openFilter.key], optionRows: optionRowsForColumn(openFilter.key), onApply: (value) => setColumnFilters((prev) => ({ ...prev, [openFilter.key]: value })), onClose: () => setOpenFilter(null) }));
 }
-function SettingsPage({ users, onRefresh, locations, currentUser, isAdmin, isGlobalAdmin, onChangePassword }) {
+let APPROVAL_ACCESS = false; // mirrors the App's approvalAccess state for the Users screens
+function FeaturesPanel({ onChanged }) {
+    const [on, setOn] = useState(null);
+    const [msg, setMsg] = useState("");
+    useEffect(() => { apiFetch('/setup/features').then((d) => setOn(!!d.approvalAccessEnabled)).catch((e) => setMsg(e.message || "Could not load")); }, []);
+    async function toggle(next) {
+        setMsg("");
+        try {
+            const d = await apiFetch('/setup/features', { method: 'PUT', body: JSON.stringify({ approvalAccessEnabled: next }) });
+            setOn(!!d.approvalAccessEnabled);
+            if (onChanged) onChanged(!!d.approvalAccessEnabled);
+            setMsg(next ? "Enabled. Approval flow and Visitor Access are now visible to everyone." : "Disabled. Approval flow and Visitor Access are now hidden.");
+        }
+        catch (e) { setMsg(e.message || "Could not save"); }
+    }
+    return React.createElement("div", { className: "neu-card", "data-features-panel": "1", style: { padding: 22, maxWidth: 720 } },
+        React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617" } }, "Features"),
+        React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", marginTop: 4, marginBottom: 18 } }, "Optional modules that are switched off until you need them."),
+        React.createElement("label", { style: { display: "flex", alignItems: "flex-start", gap: 12, cursor: on === null ? "default" : "pointer" } },
+            React.createElement("input", { type: "checkbox", "data-feature-toggle": "approvalAccess", checked: !!on, disabled: on === null, onChange: (e) => toggle(e.target.checked), style: { width: 18, height: 18, marginTop: 2, accentColor: "#6366F1" } }),
+            React.createElement("span", null,
+                React.createElement("span", { style: { display: "block", fontFamily: "Inter", fontSize: 14, fontWeight: 700, color: "#0F172A" } }, "Approval flow and Visitor Access"),
+                React.createElement("span", { style: { display: "block", fontFamily: "Inter", fontSize: 12, color: "#64748B", marginTop: 3, lineHeight: 1.5 } }, "When off (default): the Visitor Access page, the approval steps for Material Movements and the Approver option for users are hidden, and new Material Movements get their ticket straight away. When on: they are shown to everyone and new Material Movements wait for approval first."))),
+        msg && React.createElement("div", { "data-features-msg": "1", style: { marginTop: 14, fontFamily: "Inter", fontSize: 12.5, color: "#4F46E5" } }, msg));
+}
+function SettingsPage({ users, onRefresh, locations, currentUser, isAdmin, isGlobalAdmin, onChangePassword, onFeaturesChanged }) {
     const [section, setSection] = useState(isGlobalAdmin ? "users" : "account");
     const pill = (key, label) => React.createElement("button", { key: key, "data-settings-tab": key, onClick: () => setSection(key), className: `tab-pill ${section === key ? "active" : ""}`, style: { fontSize: 12.5 } }, label);
     return React.createElement("div", { "data-settings-page": "1" },
@@ -11774,6 +11799,7 @@ function SettingsPage({ users, onRefresh, locations, currentUser, isAdmin, isGlo
                 pill("users", "Users"),
                 pill("backup", "Backup & Restore"),
                 pill("notifications", "Notifications"),
+                pill("features", "Features"),
                 pill("logs", "Activity Logs"),
                 pill("license", "License")) : React.createElement(React.Fragment, null,
                 pill("account", "My account"),
@@ -11782,6 +11808,7 @@ function SettingsPage({ users, onRefresh, locations, currentUser, isAdmin, isGlo
         isGlobalAdmin && section === "users" && React.createElement(UserManagement, { users: users, onRefresh: onRefresh, canAdmin: true, locations: locations }),
         isGlobalAdmin && section === "backup" && React.createElement(BackupRestorePanel, null),
         isGlobalAdmin && section === "notifications" && React.createElement(NotificationSettingsPanel, null),
+        isGlobalAdmin && section === "features" && React.createElement(FeaturesPanel, { onChanged: onFeaturesChanged }),
         isGlobalAdmin && section === "license" && React.createElement(LicensePanel, null),
         section === "account" && React.createElement(MyAccountPanel, { currentUser: currentUser, onChangePassword: onChangePassword }),
         !isGlobalAdmin && section === "export" && React.createElement(ScopedBackupPanel, { currentUser: currentUser }),
@@ -11845,7 +11872,7 @@ function UserEditModal({ user, locations, onClose, onSaved }) {
                     React.createElement(ThemedSelect, { value: form.status, onChange: (e) => set("status", e.target.value), className: "neu-input" },
                         React.createElement("option", null, "Active"),
                         React.createElement("option", null, "Inactive"))),
-                React.createElement(Field, { label: "Approver", style: { gridColumn: "1 / -1" } },
+                APPROVAL_ACCESS && React.createElement(Field, { label: "Approver", style: { gridColumn: "1 / -1" } },
                     React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, fontFamily: "Inter", fontSize: 12.5, color: "#475569", cursor: "pointer" } },
                         React.createElement("input", { type: "checkbox", checked: form.is_approver, onChange: (e) => set("is_approver", e.target.checked), style: { width: 15, height: 15, accentColor: "#6366F1", cursor: "pointer" } }),
                         "Can approve requests (Visitor Access, Material Movement) for their own sites"))),
@@ -11894,7 +11921,7 @@ function UserManagement({ users, onRefresh, canAdmin, locations }) {
         { key: "location_access", label: "Location Access" }, { key: "status", label: "Status" },
         { key: "_online", label: "Online", format: (v, row) => row.isOnline ? "Online" : "Offline" },
         { key: "created_at", label: "Created", format: (v) => v ? new Date(v).toLocaleDateString() : "" }
-    ];
+    ].filter((c) => APPROVAL_ACCESS || c.key !== "is_approver");
     const [columnFilters, setColumnFilters] = useState(() => makeEmptyListColumnFilters(USER_COLUMNS));
     const [openFilter, setOpenFilter] = useState(null);
     const filteredUsers = (users || []).filter((row) => USER_COLUMNS.every((col) => listColumnFilterMatches(columnFilters[col.key], col, row)));
@@ -11924,7 +11951,7 @@ function UserManagement({ users, onRefresh, canAdmin, locations }) {
                     React.createElement("td", { style: { padding: "11px 14px", borderBottom: "0.5px solid rgba(163,177,198,0.25)", fontFamily: "Inter", fontSize: 12, color: "#1E293B" } }, u.name),
                     React.createElement("td", { style: { padding: "11px 14px", borderBottom: "0.5px solid rgba(163,177,198,0.25)" } },
                         React.createElement("span", { className: "neu-badge", style: { color: roleColor[u.role] || "#475569", background: (roleColor[u.role] || "#475569") + "12" } }, u.role)),
-                    React.createElement("td", { style: { padding: "11px 14px", borderBottom: "0.5px solid rgba(163,177,198,0.25)" } },
+                    APPROVAL_ACCESS && React.createElement("td", { style: { padding: "11px 14px", borderBottom: "0.5px solid rgba(163,177,198,0.25)" } },
                         Number(u.is_approver) ? React.createElement("span", { className: "neu-badge", style: { color: "#4F46E5", background: "rgba(79,70,229,0.08)" } }, "Yes") : React.createElement("span", { style: { fontFamily: "Inter", fontSize: 12, color: "#94A3B8" } }, "No")),
                     React.createElement("td", { style: { padding: "11px 14px", borderBottom: "0.5px solid rgba(163,177,198,0.25)", fontFamily: "Inter", fontSize: 12, color: "#475569" } }, u.location_access),
                     React.createElement("td", { style: { padding: "11px 14px", borderBottom: "0.5px solid rgba(163,177,198,0.25)" } },
@@ -11966,7 +11993,7 @@ function UserManagement({ users, onRefresh, canAdmin, locations }) {
                             locationNames.map((n) => React.createElement("option", { key: n, value: n },
                                 n,
                                 " only")))),
-                    React.createElement(Field, { label: "Approver", style: { gridColumn: "1 / -1" } },
+                    APPROVAL_ACCESS && React.createElement(Field, { label: "Approver", style: { gridColumn: "1 / -1" } },
                         React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, fontFamily: "Inter", fontSize: 12.5, color: "#475569", cursor: "pointer" } },
                             React.createElement("input", { type: "checkbox", checked: form.is_approver, onChange: (e) => set("is_approver", e.target.checked), style: { width: 15, height: 15, accentColor: "#6366F1", cursor: "pointer" } }),
                             "Can approve requests (Visitor Access, Material Movement) for their own sites"))),
@@ -15471,8 +15498,12 @@ function DataCenterDashboard() {
     const [orgBrand, setOrgBrand] = useState({ companyName: "DCIM Dashboard", appName: "DCIM Dashboard", logoUrl: "", footerText: "" });
     useEffect(() => {
         fetch('/api/setup/status').then(r => r.ok ? r.json() : null).then(s => { if (s)
-            setOrgBrand({ companyName: s.companyName || "DCIM Dashboard", appName: s.appName || "DCIM Dashboard", logoUrl: s.logoUrl || "", footerText: s.footerText || "" }); }).catch(() => { });
+            { setOrgBrand({ companyName: s.companyName || "DCIM Dashboard", appName: s.appName || "DCIM Dashboard", logoUrl: s.logoUrl || "", footerText: s.footerText || "" }); setApprovalAccess(!!s.approvalAccessEnabled); } }).catch(() => { });
     }, []);
+    // Approval flow + Visitor Access are optional modules (Settings -> Features). Off by default:
+    // while off they are removed from the UI entirely, not greyed out.
+    const [approvalAccess, setApprovalAccess] = useState(false);
+    APPROVAL_ACCESS = approvalAccess;
     const [auth, setAuth] = useState(() => { const user = getUser(); return user ? { user, loading: false } : null; });
     const [loginError, setLoginError] = useState(() => { try {
         const n = localStorage.getItem('dc_notice');
@@ -15604,7 +15635,7 @@ function DataCenterDashboard() {
     const currentUser = auth && auth.user;
     const isAdmin = currentUser && currentUser.role === "Admin";
     const isOperator = currentUser && currentUser.role === "Operator" || isAdmin;
-    const canApprove = isAdmin || !!(currentUser && Number(currentUser.is_approver)); // Admin always; any user an Admin flagged "Approver" can approve for their own sites
+    const canApprove = approvalAccess && (isAdmin || !!(currentUser && Number(currentUser.is_approver))); // Admin always; any user an Admin flagged "Approver" can approve for their own sites
     const canEdit = isOperator;
     // Resolve access before any hook references it.
     const allowedSites = getAllowedSites(currentUser, locations);
@@ -15688,6 +15719,12 @@ function DataCenterDashboard() {
     }, [assets, allowedSites.join("|"), assetSearch, assetSiteFilter, assetHwFilter, assetZoneFilter, assetRackTypeFilter, assetColFilters, assetZoom, assetPageSize]);
     async function loadAll(silent) {
         const loadSequence = ++loadSequenceRef.current;
+        let approvalAccessNow = approvalAccess;
+        try {
+            const fr = await fetch('/api/setup/status', { cache: 'no-store' });
+            if (fr.ok) { approvalAccessNow = !!(await fr.json()).approvalAccessEnabled; setApprovalAccess(approvalAccessNow); }
+        }
+        catch (e) { }
         if (!silent) {
             setLoading(true);
             setApiError("");
@@ -15699,7 +15736,7 @@ function DataCenterDashboard() {
             ['users', () => isGlobalAdmin ? api.getUsers() : Promise.resolve([])],
             ['activities', () => api.getActivities()],
             ['movements', () => api.getMaterialMovements()],
-            ['visitorRequests', () => api.getVisitorRequests()],
+            ['visitorRequests', () => approvalAccessNow ? api.getVisitorRequests() : Promise.resolve([])],
             ['zones', () => api.getZones()],
             ['racks', () => api.getRacks()],
             ['locations', () => api.getLocations()],
@@ -16921,7 +16958,7 @@ function DataCenterDashboard() {
                     React.createElement(Lock, { s: 16, c: "#5D7394" })),
                 React.createElement("button", { onClick: handleLogout, className: "neu-icon-btn", title: "Sign out" },
                     React.createElement(LogOut, { s: 16, c: "#5D7394" })))),
-        React.createElement("div", { className: "neu-pressed dcim-nav", style: { display: "inline-flex", gap: 6, marginBottom: 28, padding: "6px", borderRadius: 50 } }, [{ key: "dashboard", label: "Dashboard" }, { key: "inventory", label: "Asset Inventory" }, { key: "capacity", label: "DC Capacity" }, { key: "monitoring", label: "Monitoring" }, { key: "pdu", label: "Power Capacity" }, { key: "issues", label: "Issue Tracker" }, { key: "activities", label: "DC Activity" }, { key: "movements", label: "Material Movements" }, { key: "visitors", label: "Visitor Access" }, { key: "settings", label: "Settings" }].map((t) => (React.createElement("button", { key: t.key, onClick: () => setTab(t.key), className: `tab-pill ${tab === t.key ? "active" : ""}` }, t.label, t.key === "monitoring" && fwRunning > 0 && React.createElement("span", { title: fwRunning + " firmware update(s) running", style: { marginLeft: 7, padding: "1px 7px", borderRadius: 999, background: "#D97706", color: "#fff", fontSize: 10, fontWeight: 800 } }, fwRunning))))),
+        React.createElement("div", { className: "neu-pressed dcim-nav", style: { display: "inline-flex", gap: 6, marginBottom: 28, padding: "6px", borderRadius: 50 } }, [{ key: "dashboard", label: "Dashboard" }, { key: "inventory", label: "Asset Inventory" }, { key: "capacity", label: "DC Capacity" }, { key: "monitoring", label: "Monitoring" }, { key: "pdu", label: "Power Capacity" }, { key: "issues", label: "Issue Tracker" }, { key: "activities", label: "DC Activity" }, { key: "movements", label: "Material Movements" }, { key: "visitors", label: "Visitor Access" }, { key: "settings", label: "Settings" }].filter((t) => t.key !== "visitors" || approvalAccess).map((t) => (React.createElement("button", { key: t.key, onClick: () => setTab(t.key), className: `tab-pill ${tab === t.key ? "active" : ""}` }, t.label, t.key === "monitoring" && fwRunning > 0 && React.createElement("span", { title: fwRunning + " firmware update(s) running", style: { marginLeft: 7, padding: "1px 7px", borderRadius: 999, background: "#D97706", color: "#fff", fontSize: 10, fontWeight: 800 } }, fwRunning))))),
         apiError && React.createElement("div", { className: "neu-card anim-in d1", style: { background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)", padding: "14px 18px", marginBottom: 20, color: "#DC2626", fontFamily: "Inter", fontSize: 13 } },
             "API Error: ",
             apiError,
@@ -17608,7 +17645,7 @@ function DataCenterDashboard() {
             React.createElement(MaterialMovements, { movements: siteRestrictedMovements, allowedSites: allowedSites, canEdit: canEdit, isAdmin: isAdmin, canApprove: canApprove, onEdit: (m) => setEditingMovement(m), onDelete: deleteMovement, onApprove: approveMovement, onReject: rejectMovement, onGenerateTicket: generateMovementTicket, onReceive: receiveMovement, onNotReceived: notReceivedMovement, onOutwardComplete: outwardCompleteMovement, onCancel: cancelMovement, selectedIds: selectedMovementIds, onSelectId: (id, checked) => setSelectedMovementIds(prev => { const n = new Set(prev); checked ? n.add(id) : n.delete(id); return n; }), onSelectAll: (checked, ids) => setSelectedMovementIds(prev => { const n = new Set(prev); ids.forEach(id => checked ? n.add(id) : n.delete(id)); return n; }), onDeleteSelected: deleteSelectedMovements, onClearSelection: () => setSelectedMovementIds(new Set()), onDownload: downloadMovementDocument, onExportExcel: handleExportMovementsXlsx, onExportCSV: handleExportMovementsCsv, onImport: handleImportMovements, importError: importError, importProgress: importProgress, importErrorDetails: importErrorDetails }),
             movementModalOpen && React.createElement(RecordMovementModal, { onClose: () => setMovementModalOpen(false), onSave: createMovement, assets: siteRestrictedAssets, zones: siteRestrictedZones, onDownload: downloadMovementDocument, onRemoveDocument: removeMovementDocument, onDownloadDoc: downloadMovementDocumentById, onRemoveDoc: removeMovementDocumentById }),
             editingMovement && React.createElement(RecordMovementModal, { initial: editingMovement, onClose: () => setEditingMovement(null), onSave: (f, files, ocrMeta) => updateMovement({ ...editingMovement, ...f }, files, ocrMeta), assets: siteRestrictedAssets, zones: siteRestrictedZones, onDownload: downloadMovementDocument, onRemoveDocument: removeMovementDocument, onDownloadDoc: downloadMovementDocumentById, onRemoveDoc: removeMovementDocumentById })),
-        !loading && tab === "visitors" && React.createElement(React.Fragment, null,
+        !loading && approvalAccess && tab === "visitors" && React.createElement(React.Fragment, null,
             React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 } },
                 React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
                     React.createElement("span", { className: "module-title-icon", style: { background: "linear-gradient(145deg,#E0E7FF,#A5B4FC)", color: "#4F46E5" } },
@@ -17625,7 +17662,7 @@ function DataCenterDashboard() {
             visitorModalOpen && React.createElement(VisitorRequestModal, { onClose: () => setVisitorModalOpen(false), onSave: createVisitorRequest }),
             multiVisitorModalOpen && React.createElement(MultiVisitorEntryModal, { onClose: () => setMultiVisitorModalOpen(false), onSubmit: createVisitorRequestsBulk }),
             editingVisitor && React.createElement(VisitorRequestModal, { initial: editingVisitor, onClose: () => setEditingVisitor(null), onSave: (f) => updateVisitorRequest({ ...editingVisitor, ...f }) })),
-        !loading && tab === "settings" && React.createElement(SettingsPage, { users: users, onRefresh: loadAll, locations: locations, currentUser: currentUser, isAdmin: !!isAdmin, isGlobalAdmin: isGlobalAdmin, onChangePassword: () => setPwdModalOpen(true) }),
+        !loading && tab === "settings" && React.createElement(SettingsPage, { users: users, onRefresh: loadAll, locations: locations, currentUser: currentUser, isAdmin: !!isAdmin, isGlobalAdmin: isGlobalAdmin, onFeaturesChanged: setApprovalAccess, onChangePassword: () => setPwdModalOpen(true) }),
         pwdModalOpen && React.createElement(PasswordChangeModal, { onClose: () => setPwdModalOpen(false), isAdmin: false, targetUser: null }),
         reportOpen && React.createElement(ReportModal, { assets: filteredAssets, issues: siteRestrictedIssues, activities: siteRestrictedActivities, movements: siteRestrictedMovements, onClose: () => setReportOpen(false) }),
         summaryModalOpen && React.createElement(OverallSummaryModal, { assets: siteRestrictedAssets, rackComponents: siteRestrictedRackComponents, issues: siteRestrictedIssues, activities: siteRestrictedActivities, movements: siteRestrictedMovements, racks: siteRestrictedRacks, zones: siteRestrictedZones, allowedSites: allowedSites, pduSummary: pduSummary, onClose: () => setSummaryModalOpen(false) }),

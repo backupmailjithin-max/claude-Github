@@ -8239,6 +8239,17 @@ app.get('/api/material-movements', authenticateToken, async (req, res) => {
   }
 });
 
+// Approval flow + Visitor Access are optional modules, OFF unless an Admin enables them
+// (Settings -> Features, stored as features.approvalAccess). While off the routes answer 404.
+async function approvalAccessGate(req, res, next) {
+  try {
+    if (await setupRoutesModule.isApprovalAccessEnabled()) return next();
+    return res.status(404).json({ error: 'This feature is not enabled. An Administrator can enable it in Settings.' });
+  } catch (e) { return sendErr(res, e); }
+}
+app.use('/api/visitor-requests', approvalAccessGate);
+app.post(/^\/api\/material-movements\/[^/]+\/(approve|reject|generate-ticket)$/, approvalAccessGate);
+
 app.post('/api/material-movements', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
   try {
     const m = req.body;
@@ -8251,17 +8262,29 @@ app.post('/api/material-movements', authenticateToken, requireRole(['Admin', 'Op
     if (!allowed.includes(m.site)) return res.status(403).json({ error: 'Access denied for this site' });
     const id = genId('MAT');
     const movementDate = normalizeDateInput(m.movementDate) || localTodayStr();
-    // No ticket number yet - a material movement needs approval first (/approve below), then a
-    // separate Generate Ticket step (/generate-ticket), same workflow shape as Visitor Access.
+    // Approval enabled: no ticket number yet - the request needs approval first (/approve below),
+    // then a separate Generate Ticket step (/generate-ticket), same shape as Visitor Access.
+    // Approval disabled (default): the movement is recorded straight away and its ticket is issued
+    // immediately, so the rest of the lifecycle (Received at Site etc.) works without approvers.
+    const approvalOn = await setupRoutesModule.isApprovalAccessEnabled();
+    let releaseLock = null;
+    let autoTicketNo = null;
+    try {
+      // The ticket lock must cover number generation AND the insert, or two requests could get the same number.
+      if (!approvalOn) {
+        releaseLock = await acquireTicketLock();
+        autoTicketNo = await generateTicketNoGeneric(m.movementType === 'Inward' ? 'INW' : 'OUT', 'material_movements');
+      }
     await pool.query(
-      `INSERT INTO material_movements (id, movement_type, site, item_name, description, quantity, unit, receiver_name, sender_name, dc_invoice_no, movement_date, remarks, created_by, status)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'Pending Approval')`,
-      [id, m.movementType, m.site, m.itemName, m.description || null, Math.max(1, parseInt(m.quantity, 10) || 1), m.unit || null, m.receiverName || null, m.senderName || null, m.dcInvoiceNo || null, movementDate, m.remarks || null, user.name || user.username]
+      `INSERT INTO material_movements (id, movement_type, site, item_name, description, quantity, unit, receiver_name, sender_name, dc_invoice_no, movement_date, remarks, created_by, status, ticket_no)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [id, m.movementType, m.site, m.itemName, m.description || null, Math.max(1, parseInt(m.quantity, 10) || 1), m.unit || null, m.receiverName || null, m.senderName || null, m.dcInvoiceNo || null, movementDate, m.remarks || null, user.name || user.username, approvalOn ? 'Pending Approval' : 'Ticket Issued', autoTicketNo]
     );
+    } finally { if (releaseLock) releaseLock(); }
     const [rows] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [id]);
     const json = movementRowToJson(rows[0]);
     res.json(json);
-    setupRoutesModule.sendNotification({
+    if (approvalOn) setupRoutesModule.sendNotification({
       subject: `[DCIM] Material Movement approval needed - ${esc(m.itemName)} (${esc(m.site)})`,
       html: `<p>A new <b>${esc(m.movementType)}</b> material movement request is waiting for approval.</p>
         <table cellpadding="6" style="border-collapse:collapse">

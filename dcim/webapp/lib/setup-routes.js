@@ -20,6 +20,7 @@ const MONITORING_SETTING_KEY = 'integrations.monitoring';
 const SMTP_SETTING_KEY = 'integrations.smtp';
 const NOTIFY_RECIPIENTS_KEY = 'integrations.notifyRecipients';
 const SETUP_COMPLETE_KEY = 'setup.completedAt';
+const APPROVAL_ACCESS_KEY = 'features.approvalAccess';
 
 const DEFAULT_HARDWARE_TYPES = ['Dell Server', 'HPE Server', 'Storage', 'Switch', 'Firewall', 'Load Balancer', 'HSM', 'PDU', 'ATS', 'Others'];
 const DEFAULT_RACK_TYPES = ['Compute', 'Storage', 'Network', 'Backup', 'Management', 'Custom'];
@@ -82,7 +83,26 @@ module.exports = function registerSetupRoutes(app, deps) {
         logoUrl: org.logoPath || '',
         faviconUrl: org.faviconPath || '',
         footerText: org.footerText || '',
+        approvalAccessEnabled: await isApprovalAccessEnabled(),
       });
+    } catch (e) { sendErr(res, e); }
+  });
+
+  // ---------- optional modules: Approval flow + Visitor Access ----------
+  // OFF by default. When off, the Visitor Access page, the approval steps for Material
+  // Movements and the "Approver" user flag are hidden in the UI, and the matching API routes
+  // answer 404 (see approvalAccessGate in server.js). An Admin turns them on here.
+  async function isApprovalAccessEnabled() {
+    return (await getSetting(APPROVAL_ACCESS_KEY, '0')) === '1';
+  }
+  app.get('/api/setup/features', authenticateToken, async (req, res) => {
+    try { res.json({ approvalAccessEnabled: await isApprovalAccessEnabled() }); } catch (e) { sendErr(res, e); }
+  });
+  app.put('/api/setup/features', authenticateToken, requireGlobalAdmin, async (req, res) => {
+    try {
+      const on = !!(req.body && req.body.approvalAccessEnabled);
+      await setSetting(APPROVAL_ACCESS_KEY, on ? '1' : '0');
+      res.json({ approvalAccessEnabled: on });
     } catch (e) { sendErr(res, e); }
   });
 
@@ -823,5 +843,5 @@ module.exports = function registerSetupRoutes(app, deps) {
 
   // Not called here: `pool` isn't connected yet at require/register time.
   // The caller invokes applyIntegrationEnv() once the database is up.
-  return { applyIntegrationEnv, sendNotification };
+  return { applyIntegrationEnv, sendNotification, isApprovalAccessEnabled };
 };
