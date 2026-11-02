@@ -95,7 +95,7 @@ module.exports = function registerSetupRoutes(app, deps) {
   async function isApprovalAccessEnabled() {
     return (await getSetting(APPROVAL_ACCESS_KEY, '0')) === '1';
   }
-  app.get('/api/setup/features', authenticateToken, async (req, res) => {
+  app.get('/api/setup/features', authenticateToken, requireGlobalAdmin, async (req, res) => {
     try { res.json({ approvalAccessEnabled: await isApprovalAccessEnabled() }); } catch (e) { sendErr(res, e); }
   });
   app.put('/api/setup/features', authenticateToken, requireGlobalAdmin, async (req, res) => {
