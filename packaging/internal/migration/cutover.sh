@@ -14,7 +14,7 @@ NEWSRC="$HERE/webapp"; TS="$(date +%Y%m%d-%H%M%S)"; KEEP="${OLD}.before-${TS}"
 [ -f "$OLD/server.js" ] && [ -f "$OLD/.env" ] || { echo "ERROR: $OLD does not look like the live webapp (server.js or .env missing)." >&2; exit 1; }
 [ -f "$NEWSRC/server.js" ] || { echo "ERROR: new files not found at $NEWSRC (unzip the package next to this script)." >&2; exit 1; }
 [ -d "$OLD/lib" ] && [ -f "$OLD/lib/visitor-routes.js" ] && { echo "ERROR: $OLD already has the new library folder - it looks migrated. Use apply-update.sh for small updates." >&2; exit 1; }
-envval(){ grep -E "^$1=" "$OLD/.env" | tail -1 | cut -d= -f2- | sed 's/^["'\'']//; s/["'\'']$//'; }
+envval(){ { grep -E "^$1=" "$OLD/.env" || true; } | tail -1 | cut -d= -f2- | sed 's/^["'\'']//; s/["'\'']$//'; }
 
 echo "[1/7] Database backup (before anything changes)"
 if [ "${SKIP_DB_DUMP:-0}" != "1" ]; then
