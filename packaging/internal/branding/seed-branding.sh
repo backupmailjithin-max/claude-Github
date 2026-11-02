@@ -11,10 +11,11 @@ mkdir -p "$APP/uploads/branding"
 ls "$APP"/uploads/branding/logo.* >/dev/null 2>&1 || cp "$HERE/logo.png" "$APP/uploads/branding/logo.png"
 chown -R --reference="$APP" "$APP/uploads/branding" 2>/dev/null || true
 FOOT="Internal Official Use Only · Built in-house by DCOPS Team"
-SQL="INSERT IGNORE INTO app_settings (k,v) VALUES ('org.logoPath','/branding/logo.png'),('org.footerText','$FOOT'),('org.companyName','Airtel'),('org.appName','DCIM Dashboard');
+SQL="INSERT IGNORE INTO app_settings (k,v) VALUES ('org.logoPath','/branding/logo.png'),('org.footerText','$FOOT'),('org.companyName','Airtel'),('org.appName','Datacenter Operation B2B');
 UPDATE app_settings SET v='/branding/logo.png' WHERE k='org.logoPath' AND (v IS NULL OR v='');
 UPDATE app_settings SET v='$FOOT' WHERE k='org.footerText' AND (v IS NULL OR v='');
-UPDATE app_settings SET v='Airtel' WHERE k='org.companyName' AND (v IS NULL OR v='');"
+UPDATE app_settings SET v='Airtel' WHERE k='org.companyName' AND (v IS NULL OR v='');
+UPDATE app_settings SET v='Datacenter Operation B2B' WHERE k='org.appName' AND (v IS NULL OR v='' OR v='DCIM Dashboard');"
 DBH="$(envval DB_HOST)"; MYSQL_PWD="$(envval DB_PASSWORD)" $MYSQL -h "${DBH:-localhost}" ${DBO:+-P "$DBO"} -u "$(envval DB_USER)" --default-character-set=utf8mb4 "$DBN" -e "$SQL" 2>&1 \
   && echo "Branding in place: Airtel logo + Internal Official Use Only footer." \
   || { echo "WARNING: could not write the branding settings. Set them in the setup wizard instead (Organization and Branding)." >&2; exit 3; }
