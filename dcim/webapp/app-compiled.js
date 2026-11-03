@@ -11978,6 +11978,13 @@ function OperationsPanel() {
         opsH("div", { className: "neu-pressed", style: { display: "inline-flex", gap: 6, padding: 5, borderRadius: 40, marginBottom: 16, flexWrap: "wrap" } }, pill("health", "Health"), pill("backup", "Backup copy"), pill("security", "Security & TLS"), pill("sync", "Scheduled H/W sync"), pill("qr", "QR labels")),
         sec === "health" && opsH(OpsHealthSection), sec === "backup" && opsH(OpsBackupCopySection), sec === "security" && opsH(OpsSecuritySection), sec === "sync" && opsH(OpsHwSyncSection), sec === "qr" && opsH(OpsQrSection));
 }
+function DqAcceptCell({ row, classes, onAccept }) {
+    const [cls, setCls] = useState(row.category || "");
+    return opsH("span", { style: { display: "inline-flex", gap: 6, alignItems: "center" } },
+        opsH(ThemedSelect, { value: cls, onChange: (e) => setCls(e.target.value), className: "neu-input", "aria-label": "Class for " + row.raw, style: { width: "auto", fontSize: 11.5, padding: "5px 8px" } },
+            opsH("option", { value: "" }, "Choose class\u2026"), classes.map((c) => opsH("option", { key: c, value: c }, c))),
+        opsH("button", { className: "neu-btn-secondary", disabled: !cls, style: { fontSize: 11, padding: "4px 10px" }, onClick: () => onAccept(row.raw, cls) }, "Accept"));
+}
 /* ---- Data Quality ---- */
 function DataQualityPanel({ isGlobalAdmin }) {
     const [site, setSite] = useState("all");
@@ -12027,7 +12034,7 @@ function DataQualityPanel({ isGlobalAdmin }) {
             opsH(OpsTable, { rows, cols, empty: "No assets match.", pageSize: 100 })) : opsH("div", { style: { color: "#64748B" } }, L.err || "Loading…")),
         d && opsCard("Hardware type catalog", "Suggested standard class for every hardware type spelling found. \"Accept\" only records the spelling as standard here (global administrators); assets are never edited.",
             opsH(OpsTable, { rows: d.hwTypes, statusKey: null, cols: [{ key: "raw", label: "Hardware type in inventory" }, { key: "count", label: "Assets" }, { key: "category", label: "Suggested class", render: (r) => r.category || "— none" }, { key: "standard", label: "Status", text: (r) => r.standard ? "Standard" : "Not in catalog", render: (r) => r.standard ? opsBadge("PASS") : opsBadge("WARNING") },
-                { key: "act", label: "", text: () => "", render: (r) => (!r.standard && r.category && isGlobalAdmin) ? opsH("button", { className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px" }, onClick: () => accept(r.raw, r.category) }, "Accept as " + r.category) : "" }] })));
+                { key: "act", label: "", text: () => "", render: (r) => (!r.standard && isGlobalAdmin) ? opsH(DqAcceptCell, { row: r, classes: d.catalog.categories, onAccept: accept }) : "" }] })));
 }
 /* ---- Saved views (asset inventory toolbar, optional) ---- */
 function SavedViewsBar({ getState, applyState }) {
