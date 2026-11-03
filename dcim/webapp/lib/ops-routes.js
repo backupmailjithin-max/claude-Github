@@ -191,14 +191,14 @@ module.exports = function registerOpsRoutes(app, deps) {
   app.get('/api/ops/security', authenticateToken, requireGlobalAdmin, wrap(async (req, res) => { res.json(await securityChecks()); }));
 
   // ============ P2.5-2.7  Data quality ============
-  const CATEGORIES = ['Server', 'Storage', 'Network', 'Firewall', 'Backup Appliance', 'PDU'];
+  const CATEGORIES = ['Server', 'Storage', 'Network', 'Firewall', 'Backup Appliance', 'Security Appliance', 'PDU'];
   const CAT_RULES = [
-    ['Backup Appliance', /backup|data\s*domain|\bdd\d/i], ['PDU', /\bpdu\b|power\s*distribution/i], ['Firewall', /firewall|fortigate|palo\s*alto|checkpoint|\basa\b/i],
+    ['Backup Appliance', /backup|data\s*domain|\bdd\d/i], ['PDU', /\bpdu\b|power\s*distribution/i], ['Firewall', /firewall|fortigate|palo\s*alto|checkpoint|\basa\b/i], ['Security Appliance', /security|\bhsm\b|\bdlp\b|utimaco|trellix/i],
     ['Server', /^(?!.*(storage|switch|network|firewall|\bsan\b)).*server/i],   // before Network so vendor-prefixed names such as "Aristra DELLServer" stay Servers
     ['Network', /switch|router|network|nexus|\baci\b|leaf|spine|load\s*balancer|\bf5\b|aristra|arista/i], ['Storage', /storage|\bsan\b|\bnas\b|netapp|powerstore|unity|3par|array|\bsan\s*switch/i], ['Server', /server|blade|chassis|node/i],
   ];
   // accepted spellings out of the box; the admin can accept more (they are then no longer flagged)
-  const DEFAULT_ACCEPTED = { Server: ['Server', 'DellServer', 'HPServer', 'Dell Server', 'HPE Server'], Storage: ['Storage'], Network: ['Network', 'Switch'], Firewall: ['Firewall'], 'Backup Appliance': ['Backup Appliance'], PDU: ['PDU'] };
+  const DEFAULT_ACCEPTED = { Server: ['Server', 'DellServer', 'HPServer', 'Dell Server', 'HPE Server'], Storage: ['Storage'], Network: ['Network', 'Switch'], Firewall: ['Firewall'], 'Backup Appliance': ['Backup Appliance'], 'Security Appliance': ['Security Appliance'], PDU: ['PDU'] };
   const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
   function categoryOf(raw) { const t = String(raw || ''); for (const [c, re] of CAT_RULES) if (re.test(t)) return c; return null; }
   async function loadCatalog() {
