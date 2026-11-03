@@ -8188,7 +8188,7 @@ function FloatingHScroll({ wrapRef }) {
     };
     if (!state.visible)
         return null;
-    return ReactDOM.createPortal(React.createElement("div", { style: { position: "fixed", left: state.left, width: state.width, bottom: (typeof document !== "undefined" && document.querySelector(".dcim-official-use-footer")) ? 30 : 0, zIndex: 60, background: "rgba(255,255,255,0.97)", borderTop: "1px solid #E2E8F0", boxShadow: "0 -4px 10px rgba(15,23,42,0.1)", display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", boxSizing: "border-box" } },
+    return ReactDOM.createPortal(React.createElement("div", { style: { position: "fixed", left: state.left, width: state.width, bottom: (typeof document !== "undefined" && document.querySelector(".dcim-official-use-footer")) ? 46 : 0, zIndex: 60, background: "rgba(255,255,255,0.97)", borderTop: "1px solid #E2E8F0", boxShadow: "0 -4px 10px rgba(15,23,42,0.1)", display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", boxSizing: "border-box" } },
         React.createElement("button", { onClick: () => scrollByAmount(-240), style: FLOATING_HSCROLL_ARROW_BTN_STYLE, title: "Scroll left", "aria-label": "Scroll table left" }, "‹"),
         React.createElement("div", { onPointerDown: onTrackPointerDown, style: { position: "relative", flex: 1, height: 10, borderRadius: 6, background: "#E2E8F0", cursor: "pointer" } },
             React.createElement("div", { style: { position: "absolute", top: 0, left: thumbLeft, width: thumbWidth, height: 10, borderRadius: 6, background: "#64748B" } })),
