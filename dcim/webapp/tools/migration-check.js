@@ -97,6 +97,15 @@ function parseEnvFile(file) {
     try { const a = await dns.lookup(h); add('DNS', h, 'PASS', `resolves to ${a.address}`); } catch (e) { add('DNS', h, 'FAIL', `does not resolve (${e.code})`); }
   }
 
+  // ---- SMTP / OME / OneView reachability (TCP connect only - nothing is sent or signed in) ----
+  const net = require('net');
+  const tcp = (host, prt) => new Promise((resolve) => { const sk = net.connect({ host, port: prt, timeout: 4000 }, () => { sk.destroy(); resolve(''); }); sk.on('error', (e) => resolve(e.code || e.message)); sk.on('timeout', () => { sk.destroy(); resolve('timeout'); }); });
+  const targets = [];
+  for (const [k, v] of Object.entries(all)) { const mm = /^(OME|ONEVIEW)_.+_HOST$/.exec(k); if (mm && v) { try { const u = new URL(/^https?:\/\//.test(v) ? v : `https://${v}`); targets.push([mm[1] === 'OME' ? 'OME' : 'OneView', u.hostname, Number(u.port) || 443]); } catch (e) { /* ignore */ } } }
+  if (all.SMTP_HOST) targets.push(['SMTP', all.SMTP_HOST, Number(all.SMTP_PORT) || 25]);
+  if (!targets.length) add('SMTP', 'SMTP / OME / OneView', 'WARNING', 'none found in .env (they may be saved in the database - the app health page checks those)');
+  for (const [lab, host, prt] of targets) { const er = await tcp(host, prt); add(lab, `${host}:${prt}`, er ? 'FAIL' : 'PASS', er ? `cannot connect (${er})` : 'port reachable'); }
+
   // ---- Nginx ----
   if (NGINX) {
     let txt = ''; try { txt = fs.readFileSync(NGINX, 'utf8'); } catch (e) { add('Nginx', 'config file', 'FAIL', `${NGINX} cannot be read (${e.code})`); }

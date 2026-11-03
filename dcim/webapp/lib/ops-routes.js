@@ -208,7 +208,7 @@ module.exports = function registerOpsRoutes(app, deps) {
   const DEVICE_NAME_FLAGS = [/no\s*connectivity/i, /not\s*in\s*(ome|one\s*view|oneview)/i, /unknown\s*device/i, /^\s*(n\/?a|none|null|tbd|unknown|-+)\s*$/i, /not\s*(found|available|applicable)/i];
   const ISSUES = [
     ['missingManufacturer', 'Missing Manufacturer'], ['missingSerial', 'Missing Serial Number'], ['missingHwDetails', 'Missing H/W Details'], ['missingConnectivity', 'Missing Connectivity'],
-    ['missingPdu', 'Missing PDU Mapping'], ['missingLocation', 'Missing Location'], ['missingRack', 'Missing Rack'], ['hwTypeNonStandard', 'Hardware Type not standard'], ['deviceNameStatusText', 'Device Name holds status text'],
+    ['missingPdu', 'Missing PDU Mapping'], ['missingLocation', 'Missing Location'], ['missingZone', 'Missing Zone'], ['missingRack', 'Missing Rack Mapping'], ['hwTypeNonStandard', 'Invalid Hardware Type'], ['deviceNameStatusText', 'Device Name Issues'],
   ];
 
   async function buildDataQuality(user, siteFilter) {
@@ -238,7 +238,8 @@ module.exports = function registerOpsRoutes(app, deps) {
       bump('deviceNameStatusText');
       bump('missingManufacturer'); if (!String(a.manufacturer || '').trim()) issues.push('missingManufacturer');
       bump('missingSerial'); if (!serial) issues.push('missingSerial');
-      bump('missingLocation'); if (!String(a.site || '').trim() || !String(a.zone || '').trim()) issues.push('missingLocation');
+      bump('missingLocation'); if (!String(a.site || '').trim()) issues.push('missingLocation');
+      bump('missingZone'); if (!String(a.zone || '').trim()) issues.push('missingZone');
       bump('missingRack'); if (!String(a.rack_no || '').trim()) issues.push('missingRack');
       if (isServer && serial) { bump('missingConnectivity'); if (!connSet.has(key(serial))) issues.push('missingConnectivity'); }
       if (isServer && serial && prov && /^[A-Za-z0-9_.-]{3,64}$/.test(serial)) { bump('missingHwDetails'); if (!hwSet.has(key(serial))) issues.push('missingHwDetails'); }
@@ -308,7 +309,7 @@ module.exports = function registerOpsRoutes(app, deps) {
       return result;
     } finally { hwSyncRunning = null; }
   }
-  app.get('/api/ops/hw-sync', authenticateToken, requireGlobalAdmin, wrap(async (req, res) => { res.json({ config: await hwSyncCfg(), last: await jget(HWSYNC_LAST, null), history: await jget(HWSYNC_HIST, []), running: hwSyncRunning }); }));
+  app.get('/api/ops/hw-sync', authenticateToken, requireGlobalAdmin, wrap(async (req, res) => { const cfg = await hwSyncCfg(); res.json({ config: cfg, last: await jget(HWSYNC_LAST, null), history: await jget(HWSYNC_HIST, []), running: hwSyncRunning, nextRun: nextHwSyncRun(cfg) }); }));
   app.put('/api/ops/hw-sync', authenticateToken, requireGlobalAdmin, wrap(async (req, res) => {
     const b = req.body || {}; const next = { mode: ['daily', 'weekly'].includes(b.mode) ? b.mode : 'disabled', time: /^\d{2}:\d{2}$/.test(b.time || '') ? b.time : '02:30', weekday: Number.isInteger(b.weekday) ? b.weekday : 0, site: b.site || 'all' };
     await jset(HWSYNC_KEY, next); auditLog(req, 'HWSYNC_SCHEDULE', { entity: 'hw-sync', details: next }); res.json({ config: await hwSyncCfg() });
@@ -318,6 +319,12 @@ module.exports = function registerOpsRoutes(app, deps) {
     runScheduledHwSync('manual-run', req.user.username).catch((e) => log.warn('[hw-sync] run failed: ' + e.message));
     res.json({ started: true });
   }));
+  function nextHwSyncRun(cfg) {
+    if (cfg.mode === 'disabled') return null;
+    const [h, m] = cfg.time.split(':').map(Number); const now = new Date();
+    for (let i = 0; i < 8; i++) { const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i, h, m, 0); if (d > now && (cfg.mode === 'daily' || d.getDay() === cfg.weekday)) return d.toISOString(); }
+    return null;
+  }
   async function hwSyncTick() {
     try {
       const cfg = await hwSyncCfg(); if (cfg.mode === 'disabled' || hwSyncRunning) return;

@@ -1,27 +1,29 @@
-# DCIM Internal Edition – Safe Improvement Program (2026-11-03)
+# DCIM Internal Edition – Safe Improvement Program (2026-11-03) – FINAL (approved scope)
 
 Principle: additive, optional, off by default. No existing route, table, setting, screen or workflow is changed. New server code lives in `lib/tls-config.js`, `lib/ops-routes.js` (routes under `/api/ops/*`) and `tools/migration-check.js`. Only three small hooks touch existing files: `monitorFetch` / `smtp-client` pick their TLS options from `tls-config` (identical result while the feature is off), `runBackupJob` calls an optional, exception-proof copy step after a successful backup, and `server.js` registers the module and its timers. New settings are stored in `app_settings` (`ops.*`, `backup.replica*`, `dq.*`, `user.views.*`) – no schema change.
 
-Status legend: **Built + tested** = server side done and tested here; **UI pending** = screen waits for your approval of the preview; **Report only** = as you specified.
+Status: every approved item is built and tested. Not approved (documentation only): LDAP / AD / SSO (section 8), refactor / build / TypeScript / UI-rewrite roadmap (section 9), accessibility review (section 10).
+
+**Where the new screens are (existing screens untouched):** Settings → **Operations** (Global Admin: Health, Backup copy, Security & TLS, Scheduled H/W sync, QR labels) and Settings → **Data Quality** (every user, limited to their own locations). Two small optional controls were added to existing screens and change nothing until used: a *Saved views* bar in the Asset Inventory filter row, and a *Scan asset label* field in the Record Movement form that only fills the existing Item name field. The client bundle diff against the previous build has **0 removed lines** (additions only).
 
 ## 1. Improvement Assessment Report (all 15 items)
 
 | # | Feature | Status |
 |---|---|---|
 | 1 | Strict TLS with internal CA (`ENABLE_STRICT_TLS`) | Built + tested (env-driven, no UI needed) |
-| 2 | Backup replication (SMB/NFS via mounted path, secondary path) | Built + tested; UI pending |
-| 3 | Secrets / security health check | Built + tested; UI pending |
+| 2 | Backup replication (SMB/NFS via mounted path, secondary path) | Built + tested + screen |
+| 3 | Secrets / security health check | Built + tested + screen |
 | 4 | LDAP / AD / SSO | Report only (section 8) |
-| 5 | Hardware Type catalog | Built + tested; UI pending |
-| 6 | Device Name status-text flag | Built + tested; UI pending |
-| 7 | Data Quality page + Excel/PDF export | API built + tested; UI pending (export uses the app's existing Excel/PDF libraries) |
-| 8 | Scheduled H/W sync | Built + tested; UI pending |
+| 5 | Hardware Type catalog | Built + tested + screen |
+| 6 | Device Name status-text flag | Built + tested + screen |
+| 7 | Data Quality page + Excel/PDF export | Built + tested + screen |
+| 8 | Scheduled H/W sync | Built + tested + screen |
 | 9 | Migration Health Checker | Built + tested (standalone tool) |
-| 10 | Operational Health dashboard | Built + tested; UI pending |
-| 11 | Large inventory optimisation | Partly already in place; opt-in paged API built + tested |
+| 10 | Operational Health dashboard | Built + tested + screen |
+| 11 | Large inventory optimisation | Opt-in paged API built + tested (existing screens keep `/api/assets`) |
 | 12 | Code maintainability | Report only (section 9) |
-| 13 | Saved Views | API built + tested; UI pending |
-| 14 | QR / barcode | API built + tested; label/scan UI pending |
+| 13 | Saved Views | Built + tested + screen |
+| 14 | QR / barcode | Built + tested + screen |
 | 15 | Accessibility review | Report only (section 10) |
 
 ### Per-feature detail
@@ -48,7 +50,7 @@ Status legend: **Built + tested** = server side done and tested here; **UI pendi
 
 ## 2. Implementation Plan
 1. Done: server modules, hooks, tests (this build).
-2. After your approval of the preview: add Settings → Operations (Health, Backup copy, Security, TLS, Scheduled sync), a Data Quality tab, the Saved Views control and QR labels to `app-compiled.js` (+ min rebuild) with filter and sort on every table.
+2. Done: Settings → Operations and Data Quality, Saved views bar, Scan field, QR labels (offline QR library `libs/qrcode.min.js`), minified bundle rebuilt, filter and sort on every new table.
 3. Changed-files update package (apply/rollback scripts) → test on `/opt/dcim-next` → production when you approve.
 4. Optional: enable features one at a time (replication → scheduled sync → strict TLS last).
 
@@ -89,5 +91,20 @@ Current state: `server.js` ≈ 10k lines, `app-compiled.js` ≈ 17.5k lines hand
 ## 10. P5.15 Accessibility review – remediation report (no redesign)
 Measured from the code: 36 `aria-label`s, no `role=` attributes, 5 `tabIndex`, 15 `onKeyDown` handlers in the bundle; viewport meta present; responsive breakpoints at 640–1180 px; `prefers-reduced-motion` honoured (5 rules). Findings: (1) **Contrast** – the faint text colour `#94a3b8` on white is about 2.6:1 (AA needs 4.5:1) and is used for hints/column headers; `#64748b` (4.8:1) passes. Fix: use `#64748b` for text, keep `#94a3b8` for decoration only. (2) **Keyboard** – clickable cards/rows built from `div` need `tabIndex=0`, `role="button"` and Enter/Space handling; modals should trap focus and close on Esc. (3) **Screen readers** – no landmark roles; add `role="navigation"/"main"`, `aria-current` on the active tab, `aria-live` for toast messages, `scope` on table headers. (4) **Small screens** – wide tables rely on horizontal scroll with the floating scrollbar; confirm tap targets ≥ 44 px on tablets. (5) **Focus ring** – 25 `outline` rules in the bundle; verify none is `outline:none` without a replacement. Effort: about 1 day for items 1–3 with no visual redesign (colour value + attributes only).
 
+## Operations Dashboard design
+Settings → Operations, pill row: Health · Backup copy · Security & TLS · Scheduled H/W sync · QR labels. Health shows an overall PASS/WARNING/FAIL badge, a filterable and sortable check table (Disk, Backup, Backup copy, SMTP, Dell OME, HPE OneView, PDU, Database, API, Scheduled H/W sync), a "Run live OME / OneView sign-in test" button, and the optional e-mail switch (off by default, at most one e-mail per hour, sent to the existing notification recipients). Same card, pill, input and button styling as the existing Settings pages.
+
+## Data Quality Dashboard design
+Settings → Data Quality: ten clickable tiles (Missing Manufacturer, Serial Number, Hardware Details, Connectivity, PDU Mapping, Location, Zone, Rack Mapping; Invalid Hardware Type; Device Name Issues), each showing "n of N checked". Below: location filter, issue filter, "hide devices whose name already says why" box, Export Excel, Export PDF, a filterable/sortable table with colour-coded issue chips and a suggestion column. A second card lists the hardware-type catalog (Server, Storage, Network, Firewall, Backup Appliance, PDU) with the suggested class for each spelling; global administrators can "Accept" a spelling (stored in `dq.hwTypeCatalog`). Assets are never edited.
+
+## Saved Views design
+A compact bar in the Asset Inventory filter row: *Saved views* drop-down, *Save view*, *★ Make default*, *Delete view*. A view stores search, location, hardware type, zone, rack type, lifecycle and column filters; the default view is applied when the inventory opens. Per user, up to 30 views, stored in `user.views.<id>`. Users who never save a view see no difference.
+
+## QR Label design
+Label 62 × 26 mm: QR (22 mm) on the left; title (device name / rack / location), serial, and "site / zone / rack U" on the right. Payloads `DCIM:A:<serial>`, `DCIM:R:<site>|<zone>|<rack>`, `DCIM:L:<site>`. Settings → Operations → QR labels: type, location and text filter, 24-label preview, "Print labels" (up to 600 per print job). A scanner that types like a keyboard can be used in the Scan field of Record Movement or any search box (plain serials and asset tags also work).
+
+## Future Architecture Roadmap
+Covered in sections 8 (directory sign-in) and 9 (contract tests first, route extraction one group per release, client bundle split with a build step that still emits `app-compiled.js`, then optional TypeScript checking, UI rewrite not recommended). No code was written for these.
+
 ## Test evidence (this build)
-`npm test`: 12/12 pass. API run (live MySQL): TLS status/probe, security, data quality, catalog accept, backup copy (success, bad path rejected, failure recorded and shown on health without breaking the backup), scheduled-sync run, health (normal + live), paged assets with ETag/304 and SQL-injection input, saved views, QR labels/resolve, unauthenticated access rejected, existing `/api/assets` unchanged. Strict-TLS matrix against a real internal-CA HTTPS server: off → both servers accepted; strict+CA → CA-signed accepted, self-signed rejected; bad CA file → falls back to relaxed; relaxed host → accepted; works with `NODE_TLS_REJECT_UNAUTHORIZED=0` set.
+`npm test`: 16/16 pass (4 new TLS tests). Browser test (Playwright, real server + MySQL): Operations (all 5 sections), Data Quality (tiles, filter, sort, Excel download, PDF download), Saved views (save, shown in list), existing tabs Dashboard / Monitoring / Material Movements / DC Activity still open, scan field fills Item name from a serial; no JavaScript errors (only the pre-existing missing-logo 404 of the empty test database). Earlier feature tests (approval/visitor toggle) re-run: all pass. API run (live MySQL): TLS status/probe, security, data quality, catalog accept, backup copy (success, bad path rejected, failure recorded and shown on health without breaking the backup), scheduled-sync run, health (normal + live), paged assets with ETag/304 and SQL-injection input, saved views, QR labels/resolve, unauthenticated access rejected, existing `/api/assets` unchanged. Strict-TLS matrix against a real internal-CA HTTPS server: off → both servers accepted; strict+CA → CA-signed accepted, self-signed rejected; bad CA file → falls back to relaxed; relaxed host → accepted; works with `NODE_TLS_REJECT_UNAUTHORIZED=0` set.

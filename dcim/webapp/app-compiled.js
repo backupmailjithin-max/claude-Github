@@ -3096,6 +3096,7 @@ function RecordMovementModal({ onClose, onSave, initial, zones, onDownload, onRe
             React.createElement("div", { style: { marginBottom: 14 } },
                 React.createElement(Field, { label: "Site" },
                     React.createElement(ThemedSelect, { value: form.site, onChange: (e) => set("site", e.target.value), className: "neu-input" }, getAllowedSites(getUser()).map((s) => React.createElement("option", { key: s, value: s }, s))))),
+            React.createElement(ScanLookup, { onFill: (t) => set("itemName", t) }),
             React.createElement(Field, { label: "Item name", style: { marginBottom: 14 } },
                 React.createElement("input", { value: form.itemName, onChange: (e) => set("itemName", e.target.value), className: "neu-input", placeholder: "e.g. 32GB DDR5 RDIMM, replacement PSU\u2026" })),
             React.createElement(Field, { label: "Description", style: { marginBottom: 14 } },
@@ -11786,6 +11787,281 @@ function FeaturesPanel({ onChanged }) {
                 React.createElement("span", { style: { display: "block", fontFamily: "Inter", fontSize: 12, color: "#64748B", marginTop: 3, lineHeight: 1.5 } }, "When off (default): the Visitor Access page, the approval steps for Material Movements and the Approver option for users are hidden, and new Material Movements get their ticket straight away. When on: they are shown to everyone and new Material Movements wait for approval first."))),
         msg && React.createElement("div", { "data-features-msg": "1", style: { marginTop: 14, fontFamily: "Inter", fontSize: 12.5, color: "#4F46E5" } }, msg));
 }
+/* ===== Operations, Data Quality, Saved Views, Scan lookup (optional, additive; nothing here runs unless opened) ===== */
+const OPS_COL = { PASS: "#059669", WARNING: "#EA7A0C", FAIL: "#DC2626" };
+const opsH = React.createElement;
+function opsBadge(st) {
+    const c = OPS_COL[st] || "#64748B";
+    return opsH("span", { style: { display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 800, fontSize: 11, color: c } },
+        opsH("span", { style: { width: 8, height: 8, borderRadius: "50%", background: c, boxShadow: "0 0 0 3px " + c + "33" } }), st);
+}
+function opsCard(title, sub, children, extra) {
+    return opsH("div", { className: "neu-card", style: Object.assign({ padding: 22, marginBottom: 18 }, extra || {}) },
+        opsH("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#17345D" } }, title),
+        sub && opsH("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", marginTop: 4 } }, sub),
+        opsH("div", { style: { marginTop: 14 } }, children));
+}
+const opsTh = { textAlign: "left", fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.6, color: "#64748B", padding: "8px 8px", cursor: "pointer", whiteSpace: "nowrap", userSelect: "none" };
+const opsTd = { padding: "9px 8px", fontSize: 12.5, borderTop: "1px solid rgba(148,163,184,.18)", verticalAlign: "top", color: "#334155" };
+function opsText(c, r) { return c.text ? c.text(r) : (r[c.key] != null ? String(r[c.key]) : ""); }
+/* Filterable, sortable table used by every new list. cols: [{key,label,render?,text?}] */
+function OpsTable({ cols, rows, statusKey, empty, pageSize }) {
+    const [q, setQ] = useState("");
+    const [st, setSt] = useState("all");
+    const [sort, setSort] = useState({ k: null, d: 1 });
+    const [limit, setLimit] = useState(pageSize || 100);
+    const statuses = statusKey ? Array.from(new Set(rows.map((r) => r[statusKey]).filter(Boolean))) : [];
+    const ql = q.trim().toLowerCase();
+    let list = rows.filter((r) => (st === "all" || r[statusKey] === st) && (!ql || cols.some((c) => opsText(c, r).toLowerCase().includes(ql))));
+    if (sort.k) {
+        const c = cols.find((x) => x.key === sort.k);
+        list = list.slice().sort((a, b) => {
+            const x = opsText(c, a), y = opsText(c, b);
+            const nx = Number(x), ny = Number(y);
+            const cmp = (x !== "" && y !== "" && isFinite(nx) && isFinite(ny)) ? nx - ny : x.localeCompare(y, undefined, { numeric: true });
+            return cmp * sort.d;
+        });
+    }
+    const shown = list.slice(0, limit);
+    return opsH("div", null,
+        opsH("div", { style: { display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 8 } },
+            opsH("input", { value: q, onChange: (e) => setQ(e.target.value), placeholder: "Filter…", className: "neu-input", "aria-label": "Filter rows", style: { width: 220, fontSize: 12.5 } }),
+            statusKey && opsH(ThemedSelect, { value: st, onChange: (e) => setSt(e.target.value), className: "neu-input", style: { width: "auto", fontSize: 12.5 } },
+                opsH("option", { value: "all" }, "All statuses"), statuses.map((s) => opsH("option", { key: s, value: s }, s))),
+            opsH("span", { style: { fontSize: 11.5, color: "#64748B" } }, list.length + " of " + rows.length)),
+        opsH("div", { style: { overflowX: "auto" } },
+            opsH("table", { style: { width: "100%", borderCollapse: "collapse" } },
+                opsH("thead", null, opsH("tr", null, cols.map((c) => opsH("th", { key: c.key, style: opsTh, tabIndex: 0, role: "button", "aria-label": "Sort by " + c.label,
+                    onClick: () => setSort((s) => ({ k: c.key, d: s.k === c.key ? -s.d : 1 })),
+                    onKeyDown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSort((s) => ({ k: c.key, d: s.k === c.key ? -s.d : 1 })); } } },
+                    c.label, sort.k === c.key ? (sort.d > 0 ? " ▲" : " ▼") : " ⇅")))),
+                opsH("tbody", null, shown.map((r, i) => opsH("tr", { key: i }, cols.map((c) => opsH("td", { key: c.key, style: opsTd }, c.render ? c.render(r) : (r[c.key] != null ? String(r[c.key]) : "")))))
+                    .concat(shown.length ? [] : [opsH("tr", { key: "e" }, opsH("td", { colSpan: cols.length, style: Object.assign({}, opsTd, { color: "#64748B" }) }, empty || "Nothing to show."))])))),
+        list.length > limit && opsH("button", { className: "neu-btn-secondary", style: { marginTop: 10, fontSize: 12 }, onClick: () => setLimit(limit + 200) }, "Show more (" + (list.length - limit) + " left)"));
+}
+function useOpsLoad(path, deps) {
+    const [data, setData] = useState(null);
+    const [err, setErr] = useState("");
+    const [busy, setBusy] = useState(false);
+    const reload = (p) => { setBusy(true); setErr(""); return apiFetch(p || path).then((d) => { setData(d); setBusy(false); return d; }).catch((e) => { setErr(e.message || "Could not load"); setBusy(false); }); };
+    useEffect(() => { reload(); }, deps || []);
+    return { data, err, busy, reload, setData };
+}
+const opsBtn = (label, onClick, primary, disabled) => opsH("button", { className: primary ? "neu-btn-primary" : "neu-btn-secondary", onClick, disabled: !!disabled, style: { fontSize: 12.5, padding: "8px 16px" } }, label);
+const opsLabel = (t, child) => opsH("label", { style: { display: "flex", flexDirection: "column", gap: 4, fontSize: 11.5, color: "#64748B", fontWeight: 700 } }, t, child);
+const opsCheck = (checked, onChange, text) => opsH("label", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#0F172A", fontWeight: 600 } }, opsH("input", { type: "checkbox", checked: !!checked, onChange: (e) => onChange(e.target.checked), style: { width: 17, height: 17 } }), text);
+
+/* ---- Health ---- */
+function OpsHealthSection() {
+    const L = useOpsLoad("/ops/health");
+    const S = useOpsLoad("/ops/health-settings");
+    const [msg, setMsg] = useState("");
+    async function setNotify(v) { try { await apiFetch("/ops/health-settings", { method: "PUT", body: JSON.stringify({ notify: v }) }); S.reload(); setMsg(v ? "E-mail alerts on (at most one per hour)." : "E-mail alerts off."); } catch (e) { setMsg(e.message); } }
+    const d = L.data;
+    return opsCard("Operational health", "Disk, backup, backup copy, SMTP, Dell OME, HPE OneView, PDU, database, API and scheduled H/W sync. Read-only.", opsH("div", null,
+        opsH("div", { style: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 } },
+            d && opsBadge(d.overall), d && opsH("span", { style: { fontSize: 11.5, color: "#64748B" } }, "checked " + new Date(d.checkedAt).toLocaleTimeString() + (d.live ? " (live sign-in test)" : "")),
+            opsBtn(L.busy ? "Checking…" : "Refresh", () => L.reload("/ops/health"), false, L.busy),
+            opsBtn("Run live OME / OneView sign-in test", () => L.reload("/ops/health?live=1"), false, L.busy)),
+        L.err && opsH("div", { style: { color: "#B91C1C", fontSize: 12.5 } }, L.err),
+        d && opsH(OpsTable, { rows: d.checks, statusKey: "status", cols: [{ key: "name", label: "Check" }, { key: "status", label: "Status", render: (r) => opsBadge(r.status) }, { key: "detail", label: "Detail" }] }),
+        S.data && opsH("div", { style: { marginTop: 14 } }, opsCheck(S.data.notify, setNotify, "E-mail me when a check fails (uses the notification recipients; off by default; at most one e-mail per hour)")),
+        msg && opsH("div", { style: { marginTop: 8, fontSize: 12.5, color: "#4F46E5" } }, msg)));
+}
+/* ---- Backup copy ---- */
+function OpsBackupCopySection() {
+    const L = useOpsLoad("/ops/backup-replica");
+    const [f, setF] = useState(null);
+    const [msg, setMsg] = useState("");
+    useEffect(() => { if (L.data && !f) setF(Object.assign({}, L.data.config)); }, [L.data]);
+    const act = async (label, fn) => { setMsg(label + "…"); try { const r = await fn(); setMsg(r || "Done."); L.reload(); } catch (e) { setMsg(e.message || "Failed"); } };
+    const d = L.data;
+    return opsCard("Backup copy (replication)", "After each successful backup, also copy it to a mounted SMB / NFS share or a second folder. Off by default; the normal backup is never affected.", d && f ? opsH("div", null,
+        opsCheck(f.enabled, (v) => setF(Object.assign({}, f, { enabled: v })), "Copy every new backup"),
+        opsH("div", { style: { display: "flex", gap: 14, flexWrap: "wrap", margin: "12px 0" } },
+            opsLabel("Folder (mounted share or second disk)", opsH("input", { className: "neu-input", style: { width: 360, fontFamily: "'JetBrains Mono'", fontSize: 12.5 }, value: f.path, placeholder: "/mnt/backup-share/dcim", onChange: (e) => setF(Object.assign({}, f, { path: e.target.value })) })),
+            opsLabel("Keep copies (days)", opsH("input", { type: "number", min: 1, className: "neu-input", style: { width: 110 }, value: f.keepDays, onChange: (e) => setF(Object.assign({}, f, { keepDays: Number(e.target.value) })) }))),
+        opsCheck(f.notify, (v) => setF(Object.assign({}, f, { notify: v })), "E-mail when a copy fails (max one per day)"),
+        opsH("div", { style: { display: "flex", gap: 10, flexWrap: "wrap", margin: "14px 0" } },
+            opsBtn("Save", () => act("Saving", async () => { await apiFetch("/ops/backup-replica", { method: "PUT", body: JSON.stringify(f) }); return "Saved."; }), true),
+            opsBtn("Test folder", () => act("Testing", async () => { const r = await apiFetch("/ops/backup-replica/test", { method: "POST", body: JSON.stringify({ path: f.path }) }); return "Folder is writable (" + r.kind + (r.fsType ? ", " + r.fsType : "") + ")." + (r.sameDiskAsPrimary ? " Warning: this is the same disk as the main backups." : ""); })),
+            opsBtn("Copy latest backup now", () => act("Copying", async () => { const r = await apiFetch("/ops/backup-replica/run", { method: "POST", body: "{}" }); return r.ok ? "Copied " + r.file : "Copy failed: " + r.error; }))),
+        msg && opsH("div", { style: { fontSize: 12.5, color: "#4F46E5", marginBottom: 8 } }, msg),
+        opsH("div", { style: { fontSize: 12.5, color: "#334155" } }, "Main backup folder: ", opsH("b", { style: { fontFamily: "'JetBrains Mono'" } }, d.primaryDir)),
+        d.last && opsH("div", { style: { marginTop: 8, fontSize: 12.5 } }, "Last copy: ", opsBadge(d.last.ok ? "PASS" : "FAIL"), " ", new Date(d.last.at).toLocaleString(), " – ", d.last.ok ? (d.last.file + " → " + d.last.dir + " (" + d.last.kind + ")") : d.last.error),
+        opsH("div", { style: { marginTop: 10, fontSize: 11.5, color: "#64748B", lineHeight: 1.5 } }, d.help)) : opsH("div", { style: { color: "#64748B" } }, L.err || "Loading…"));
+}
+/* ---- Security & TLS ---- */
+function OpsSecuritySection() {
+    const S = useOpsLoad("/ops/security");
+    const T = useOpsLoad("/ops/tls");
+    const [probe, setProbe] = useState(null);
+    const [busy, setBusy] = useState(false);
+    async function runProbe() { setBusy(true); try { setProbe(await apiFetch("/ops/tls/probe", { method: "POST", body: "{}", timeoutMs: 120000 })); } catch (e) { setProbe({ error: e.message }); } setBusy(false); }
+    const t = T.data;
+    return opsH(React.Fragment, null,
+        opsCard("Security health check", "Read-only. Nothing is changed automatically – the fix is shown for you to apply.", S.data ? opsH("div", null,
+            opsH("div", { style: { marginBottom: 10 } }, opsBadge(S.data.overall), opsH("span", { style: { marginLeft: 10 } }, opsBtn("Re-check", () => S.reload(), false, S.busy))),
+            opsH(OpsTable, { rows: S.data.checks, statusKey: "status", cols: [{ key: "name", label: "Check" }, { key: "status", label: "Status", render: (r) => opsBadge(r.status) }, { key: "detail", label: "Detail" }, { key: "fix", label: "Suggested fix", render: (r) => r.fix ? opsH("code", { style: { fontSize: 11.5 } }, r.fix) : "" }] })) : opsH("div", { style: { color: "#64748B" } }, S.err || "Loading…")),
+        opsCard("TLS certificate verification", "Optional strict mode with your internal CA. Set in the server's .env: ENABLE_STRICT_TLS=true, INTERNAL_CA_FILE=/path/ca.pem, TLS_RELAXED_HOSTS=host1,host2 – then restart. Today's behaviour continues while it is off.", t ? opsH("div", null,
+            opsH("div", { style: { fontSize: 13, marginBottom: 8 } }, "Mode: ", opsH("b", null, t.mode), t.caFile ? " · CA file: " + t.caFile + " (" + t.caLoaded + " certificate(s))" : "", t.caError ? " · CA problem: " + t.caError : ""),
+            opsBtn(busy ? "Testing…" : "Test which appliances would pass strict verification", runProbe, false, busy),
+            probe && probe.error && opsH("div", { style: { color: "#B91C1C", marginTop: 8 } }, probe.error),
+            probe && probe.results && opsH("div", { style: { marginTop: 12 } }, opsH("div", { style: { fontSize: 12.5, marginBottom: 6 } }, probe.strictOk + " of " + probe.total + " would pass. " + probe.note),
+                opsH(OpsTable, { rows: probe.results.map((r) => Object.assign({}, r, { verdict: !r.reachable ? "FAIL" : r.strictOk ? "PASS" : "WARNING" })), statusKey: "verdict", cols: [{ key: "label", label: "Type" }, { key: "host", label: "Host" }, { key: "port", label: "Port" }, { key: "verdict", label: "Strict TLS", render: (r) => opsBadge(r.verdict) }, { key: "reason", label: "Reason", render: (r) => r.reason || (r.reachable ? "verified" : "") }] }))) : opsH("div", { style: { color: "#64748B" } }, "Loading…")));
+}
+/* ---- Scheduled H/W sync ---- */
+function OpsHwSyncSection() {
+    const L = useOpsLoad("/ops/hw-sync");
+    const [f, setF] = useState(null);
+    const [msg, setMsg] = useState("");
+    useEffect(() => { if (L.data && !f) setF(Object.assign({}, L.data.config)); }, [L.data]);
+    useEffect(() => { if (!(L.data && L.data.running)) return; const t = setTimeout(() => L.reload(), 4000); return () => clearTimeout(t); }, [L.data]);
+    const d = L.data;
+    const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    async function save() { try { await apiFetch("/ops/hw-sync", { method: "PUT", body: JSON.stringify(f) }); setMsg("Saved."); L.reload(); } catch (e) { setMsg(e.message); } }
+    async function runNow() { try { await apiFetch("/ops/hw-sync/run", { method: "POST", body: "{}" }); setMsg("Started."); setTimeout(() => L.reload(), 1500); } catch (e) { setMsg(e.message); } }
+    const last = d && d.last;
+    return opsCard("Scheduled hardware sync", "Uses the same Dell OME / HPE OneView pull as the \"Sync H/W details\" button, which stays exactly as it is. Disabled by default; at most 3 servers at a time; never two runs together.", d && f ? opsH("div", null,
+        opsH("div", { style: { display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-end" } },
+            opsLabel("Mode", opsH(ThemedSelect, { value: f.mode, onChange: (e) => setF(Object.assign({}, f, { mode: e.target.value })), className: "neu-input", style: { width: 150 } }, opsH("option", { value: "disabled" }, "Disabled"), opsH("option", { value: "daily" }, "Daily"), opsH("option", { value: "weekly" }, "Weekly"))),
+            opsLabel("Time (server time)", opsH("input", { type: "time", className: "neu-input", value: f.time, onChange: (e) => setF(Object.assign({}, f, { time: e.target.value })) })),
+            f.mode === "weekly" && opsLabel("Day", opsH(ThemedSelect, { value: f.weekday, onChange: (e) => setF(Object.assign({}, f, { weekday: Number(e.target.value) })), className: "neu-input", style: { width: 150 } }, days.map((n, i) => opsH("option", { key: i, value: i }, n)))),
+            opsLabel("Location", opsH(ThemedSelect, { value: f.site, onChange: (e) => setF(Object.assign({}, f, { site: e.target.value })), className: "neu-input", style: { width: 160 } }, opsH("option", { value: "all" }, "All locations"), getAllowedSites(getUser()).map((s) => opsH("option", { key: s, value: s }, s)))),
+            opsBtn("Save", save, true), opsBtn(d.running ? "Running " + d.running.done + "/" + d.running.total : "Run now", runNow, false, !!d.running)),
+        msg && opsH("div", { style: { fontSize: 12.5, color: "#4F46E5", marginTop: 8 } }, msg),
+        opsH("div", { style: { display: "flex", gap: 22, flexWrap: "wrap", margin: "16px 0 8px", fontSize: 13 } },
+            opsH("span", null, "Next run: ", opsH("b", null, d.nextRun ? new Date(d.nextRun).toLocaleString() : "— (disabled)")),
+            opsH("span", null, "Last run: ", opsH("b", null, last ? new Date(last.finishedAt).toLocaleString() : "never")),
+            last && opsH("span", null, "Success: ", opsH("b", { style: { color: "#059669" } }, last.success)),
+            last && opsH("span", null, "Failed: ", opsH("b", { style: { color: last.failed ? "#DC2626" : "#059669" } }, last.failed)),
+            last && opsH("span", null, "Skipped (appliance not configured): ", opsH("b", null, last.skipped))),
+        last && last.failures && last.failures.length > 0 && opsH(OpsTable, { rows: last.failures.map((x) => Object.assign({}, x, { kind: x.skipped ? "Skipped" : "Failed" })), statusKey: "kind", cols: [{ key: "kind", label: "Result" }, { key: "site", label: "Location" }, { key: "zone", label: "Zone" }, { key: "serial", label: "Serial" }, { key: "deviceName", label: "Device name" }, { key: "error", label: "Reason" }] })) : opsH("div", { style: { color: "#64748B" } }, L.err || "Loading…"));
+}
+/* ---- QR labels ---- */
+function OpsQrSection() {
+    const [type, setType] = useState("asset");
+    const [site, setSite] = useState("all");
+    const [data, setData] = useState(null);
+    const [err, setErr] = useState("");
+    const [q, setQ] = useState("");
+    const [libOk, setLibOk] = useState(typeof window.qrcode === "function");
+    useEffect(() => { if (libOk) return; const s = document.createElement("script"); s.src = "./libs/qrcode.min.js?v=1"; s.onload = () => setLibOk(typeof window.qrcode === "function"); s.onerror = () => setErr("QR library (libs/qrcode.min.js) is missing from this installation."); document.head.appendChild(s); }, []);
+    useEffect(() => { setData(null); setErr(""); apiFetch("/ops/qr/labels?type=" + type + "&site=" + encodeURIComponent(site)).then(setData).catch((e) => setErr(e.message)); }, [type, site]);
+    const ql = q.trim().toLowerCase();
+    const labels = data ? data.labels.filter((l) => !ql || (l.title + " " + l.line2 + " " + l.line3 + " " + l.code).toLowerCase().includes(ql)) : [];
+    const svgFor = (code) => { const qr = window.qrcode(0, "M"); qr.addData(code); qr.make(); return qr.createSvgTag({ cellSize: 3, margin: 0, scalable: true }); };
+    function printLabels() {
+        const w = window.open("", "_blank"); if (!w) { setErr("The browser blocked the print window - allow pop-ups for this site."); return; }
+        const esc = (s) => String(s == null ? "" : s).replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
+        w.document.write("<html><head><title>QR labels</title><style>body{font-family:Arial,sans-serif;margin:8mm}.g{display:flex;flex-wrap:wrap;gap:4mm}.l{width:62mm;height:26mm;border:1px solid #000;display:flex;align-items:center;gap:3mm;padding:2mm;page-break-inside:avoid}.l svg{width:22mm;height:22mm;flex:none}.t{font-size:9pt;font-weight:bold;word-break:break-all}.s{font-size:7.5pt;word-break:break-all}</style></head><body><div class='g'>" +
+            labels.slice(0, 600).map((l) => "<div class='l'>" + svgFor(l.code) + "<div><div class='t'>" + esc(l.title) + "</div><div class='s'>" + esc(l.line2) + "</div><div class='s'>" + esc(l.line3) + "</div></div></div>").join("") + "</div><script>window.onload=function(){window.print()}<\/script></body></html>");
+        w.document.close();
+    }
+    return opsCard("QR / barcode labels", "Labels for assets, racks and locations. A USB barcode/QR scanner works like a keyboard – scan into the search boxes or the \"Scan asset label\" field in Material Movements. No camera needed.", opsH("div", null,
+        opsH("div", { style: { display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", marginBottom: 12 } },
+            opsH(ThemedSelect, { value: type, onChange: (e) => setType(e.target.value), className: "neu-input", style: { width: "auto", fontSize: 12.5 } }, opsH("option", { value: "asset" }, "Asset labels"), opsH("option", { value: "rack" }, "Rack labels"), opsH("option", { value: "location" }, "Location labels")),
+            opsH(ThemedSelect, { value: site, onChange: (e) => setSite(e.target.value), className: "neu-input", style: { width: "auto", fontSize: 12.5 } }, opsH("option", { value: "all" }, "All locations"), getAllowedSites(getUser()).map((s) => opsH("option", { key: s, value: s }, s))),
+            opsH("input", { className: "neu-input", value: q, onChange: (e) => setQ(e.target.value), placeholder: "Filter labels…", "aria-label": "Filter labels", style: { width: 220, fontSize: 12.5 } }),
+            opsH("span", { style: { fontSize: 11.5, color: "#64748B" } }, labels.length + " label(s)" + (labels.length > 600 ? " (print is limited to the first 600 – filter first)" : "")),
+            opsBtn("Print labels", printLabels, true, !libOk || !labels.length)),
+        err && opsH("div", { style: { color: "#B91C1C", fontSize: 12.5 } }, err),
+        opsH("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(250px,1fr))", gap: 10 } }, libOk ? labels.slice(0, 24).map((l, i) => opsH("div", { key: i, style: { display: "flex", gap: 10, alignItems: "center", padding: 10, borderRadius: 12, background: "#F8FAFC", border: "1px solid #E2E8F0" } },
+            opsH("div", { style: { width: 64, height: 64, flex: "none" }, dangerouslySetInnerHTML: { __html: svgFor(l.code) } }),
+            opsH("div", { style: { minWidth: 0 } }, opsH("div", { style: { fontWeight: 800, fontSize: 12.5, color: "#17345D", wordBreak: "break-all" } }, l.title), opsH("div", { style: { fontFamily: "'JetBrains Mono'", fontSize: 10.5, color: "#475569", wordBreak: "break-all" } }, l.code), opsH("div", { style: { fontSize: 10.5, color: "#64748B" } }, l.line3)))) : null),
+        labels.length > 24 && opsH("div", { style: { fontSize: 11.5, color: "#64748B", marginTop: 8 } }, "Preview shows the first 24; \"Print labels\" prints every label that matches the filter.")));
+}
+function OperationsPanel() {
+    const [sec, setSec] = useState("health");
+    const pill = (k, l) => opsH("button", { key: k, "data-ops-tab": k, onClick: () => setSec(k), className: "tab-pill " + (sec === k ? "active" : ""), style: { fontSize: 12 } }, l);
+    return opsH("div", { "data-ops-panel": "1" },
+        opsH("div", { className: "neu-pressed", style: { display: "inline-flex", gap: 6, padding: 5, borderRadius: 40, marginBottom: 16, flexWrap: "wrap" } }, pill("health", "Health"), pill("backup", "Backup copy"), pill("security", "Security & TLS"), pill("sync", "Scheduled H/W sync"), pill("qr", "QR labels")),
+        sec === "health" && opsH(OpsHealthSection), sec === "backup" && opsH(OpsBackupCopySection), sec === "security" && opsH(OpsSecuritySection), sec === "sync" && opsH(OpsHwSyncSection), sec === "qr" && opsH(OpsQrSection));
+}
+/* ---- Data Quality ---- */
+function DataQualityPanel({ isGlobalAdmin }) {
+    const [site, setSite] = useState("all");
+    const [issue, setIssue] = useState("all");
+    const [hide, setHide] = useState(false);
+    const L = useOpsLoad("/ops/data-quality?site=all");
+    const [msg, setMsg] = useState("");
+    const first = useRef(true);
+    useEffect(() => { if (first.current) { first.current = false; return; } L.reload("/ops/data-quality?site=" + encodeURIComponent(site)); }, [site]);
+    const d = L.data;
+    const label = (k) => { const s = d && d.summary.find((x) => x.key === k); return s ? s.label : k; };
+    const rows = d ? d.rows.filter((r) => (issue === "all" || r.issues.includes(issue)) && (!hide || !r.deviceNameFlagged)) : [];
+    const cols = [{ key: "site", label: "Location" }, { key: "zone", label: "Zone" }, { key: "rackNo", label: "Rack" }, { key: "position", label: "U" }, { key: "hardwareType", label: "Hardware type" }, { key: "manufacturer", label: "Manufacturer" }, { key: "serialNumber", label: "Serial" }, { key: "deviceName", label: "Device name" },
+        { key: "issues", label: "Issues", text: (r) => r.issues.map(label).join(", "), render: (r) => opsH("span", null, r.issues.map((k) => opsH("span", { key: k, style: { display: "inline-block", margin: "0 4px 4px 0", padding: "2px 8px", borderRadius: 8, fontSize: 10.5, fontWeight: 700, background: k === "deviceNameStatusText" || k === "hwTypeNonStandard" ? "#FFF1DC" : "#FDE8E8", color: k === "deviceNameStatusText" || k === "hwTypeNonStandard" ? "#B45309" : "#B91C1C" } }, label(k)))) },
+        { key: "suggestion", label: "Suggestion" }];
+    const exportCols = cols.map((c) => ({ key: c.key, label: c.label, format: c.key === "issues" ? ((v, r) => r.issues.map(label).join(", ")) : undefined }));
+    const stamp = new Date().toISOString().slice(0, 10);
+    async function pdf() {
+        setMsg("Building PDF…");
+        try {
+            await window.__loadLib("jspdf");
+            const doc = new window.jspdf.jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+            const widths = [24, 14, 14, 10, 34, 28, 34, 44, 62, 0];
+            let y = 14; const head = () => { doc.setFontSize(13); doc.text("Data Quality report – " + (site === "all" ? "all locations" : site) + " – " + stamp, 10, 10); doc.setFontSize(8); };
+            head(); doc.setFontSize(8);
+            const line = (vals, bold) => { let x = 10; doc.setFont(undefined, bold ? "bold" : "normal"); vals.forEach((v, i) => { const w = widths[i] || 40; if (i < 9) doc.text(String(v == null ? "" : v).slice(0, Math.floor(w / 1.7)), x, y); x += w; }); y += 5; };
+            line(["Location", "Zone", "Rack", "U", "Hardware type", "Manufacturer", "Serial", "Device name", "Issues"], true);
+            rows.slice(0, 1500).forEach((r) => { if (y > 196) { doc.addPage(); y = 14; head(); line(["Location", "Zone", "Rack", "U", "Hardware type", "Manufacturer", "Serial", "Device name", "Issues"], true); } line([r.site, r.zone, r.rackNo, r.position, r.hardwareType, r.manufacturer, r.serialNumber, r.deviceName, r.issues.map(label).join(", ")], false); });
+            doc.save("data-quality-" + stamp + ".pdf"); setMsg(rows.length > 1500 ? "PDF holds the first 1500 rows – use Excel for the full list." : "PDF saved.");
+        } catch (e) { setMsg(e.message); }
+    }
+    async function accept(raw, category) { try { await apiFetch("/ops/hw-type-catalog", { method: "PUT", body: JSON.stringify({ raw, category }) }); L.reload("/ops/data-quality?site=" + encodeURIComponent(site)); setMsg("Recorded \"" + raw + "\" as " + category + ". Asset records were not changed."); } catch (e) { setMsg(e.message); } }
+    return opsH("div", { "data-dq-panel": "1" },
+        opsCard("Data Quality", "Read-only report on gaps in the inventory. Nothing here edits an asset or blocks a save.", d ? opsH("div", null,
+            opsH("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(170px,1fr))", gap: 10 } }, d.summary.map((s) => opsH("button", { key: s.key, onClick: () => setIssue(issue === s.key ? "all" : s.key), "aria-pressed": issue === s.key, style: { textAlign: "left", border: issue === s.key ? "2px solid #3157EE" : "2px solid transparent", borderRadius: 16, padding: 12, background: "#F4F7FC", cursor: "pointer" } },
+                opsH("div", { style: { fontSize: 10, fontWeight: 800, color: "#64748B", textTransform: "uppercase" } }, s.label),
+                opsH("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 24, fontWeight: 800, color: s.count ? "#17345D" : "#059669" } }, s.count),
+                opsH("div", { style: { fontSize: 10, color: "#64748B" } }, "of " + s.applicable + " checked")))),
+            opsH("div", { style: { display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", margin: "16px 0 8px" } },
+                opsH(ThemedSelect, { value: site, onChange: (e) => setSite(e.target.value), className: "neu-input", style: { width: "auto", fontSize: 12.5 } }, opsH("option", { value: "all" }, "All locations"), getAllowedSites(getUser()).map((s) => opsH("option", { key: s, value: s }, s))),
+                opsH(ThemedSelect, { value: issue, onChange: (e) => setIssue(e.target.value), className: "neu-input", style: { width: "auto", fontSize: 12.5 } }, opsH("option", { value: "all" }, "All issues"), d.summary.map((s) => opsH("option", { key: s.key, value: s.key }, s.label))),
+                opsCheck(hide, setHide, "Hide devices whose name already says why (\"No Connectivity…\")"),
+                opsH("span", { style: { flex: 1 } }),
+                opsBtn("Export Excel", () => exportToExcel(rows, exportCols, "data-quality-" + stamp + ".xlsx")), opsBtn("Export PDF", pdf)),
+            msg && opsH("div", { style: { fontSize: 12.5, color: "#4F46E5", marginBottom: 6 } }, msg),
+            opsH("div", { style: { fontSize: 11.5, color: "#64748B", marginBottom: 6 } }, d.notes.missingPdu + " " + d.notes.deviceNameStatusText),
+            opsH(OpsTable, { rows, cols, empty: "No assets match.", pageSize: 100 })) : opsH("div", { style: { color: "#64748B" } }, L.err || "Loading…")),
+        d && opsCard("Hardware type catalog", "Suggested standard class for every hardware type spelling found. \"Accept\" only records the spelling as standard here (global administrators); assets are never edited.",
+            opsH(OpsTable, { rows: d.hwTypes, statusKey: null, cols: [{ key: "raw", label: "Hardware type in inventory" }, { key: "count", label: "Assets" }, { key: "category", label: "Suggested class", render: (r) => r.category || "— none" }, { key: "standard", label: "Status", text: (r) => r.standard ? "Standard" : "Not in catalog", render: (r) => r.standard ? opsBadge("PASS") : opsBadge("WARNING") },
+                { key: "act", label: "", text: () => "", render: (r) => (!r.standard && r.category && isGlobalAdmin) ? opsH("button", { className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px" }, onClick: () => accept(r.raw, r.category) }, "Accept as " + r.category) : "" }] })));
+}
+/* ---- Saved views (asset inventory toolbar, optional) ---- */
+function SavedViewsBar({ getState, applyState }) {
+    const [st, setSt] = useState({ views: [], defaultId: null });
+    const [sel, setSel] = useState("");
+    const [msg, setMsg] = useState("");
+    const appliedDefault = useRef(false);
+    useEffect(() => { apiFetch("/ops/views?screen=assets").then((d) => { setSt(d); if (d.defaultId && !appliedDefault.current) { appliedDefault.current = true; const v = d.views.find((x) => x.id === d.defaultId); if (v) { setSel(v.id); applyState(v.filters || {}); } } }).catch(() => { }); }, []);
+    const persist = async (views, defaultId) => { try { const d = await apiFetch("/ops/views", { method: "PUT", body: JSON.stringify({ screen: "assets", views, defaultId }) }); setSt(d); return d; } catch (e) { setMsg(e.message); } };
+    const cur = st.views.find((v) => v.id === sel);
+    async function saveNew() { const name = (window.prompt ? window.prompt("Name for this view (filters and search as they are now):", cur ? cur.name : "") : "") || ""; if (!name.trim()) return; const id = "v" + Date.now().toString(36); const existing = st.views.find((v) => v.name === name.trim()); const views = existing ? st.views.map((v) => v.id === existing.id ? Object.assign({}, v, { filters: getState() }) : v) : st.views.concat([{ id, name: name.trim(), filters: getState(), columns: null, sort: null }]); const d = await persist(views, st.defaultId); if (d) { setSel(existing ? existing.id : id); setMsg("Saved."); } }
+    if (!st.views.length && !sel) { /* still show the Save button so the feature is discoverable */ }
+    return opsH("div", { "data-saved-views": "1", style: { display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
+        opsH(ThemedSelect, { value: sel, onChange: (e) => { setSel(e.target.value); const v = st.views.find((x) => x.id === e.target.value); if (v) applyState(v.filters || {}); }, className: "neu-input", "aria-label": "Saved views", style: { width: "auto", fontSize: 13, padding: "10px 12px" } },
+            opsH("option", { value: "" }, st.views.length ? "Saved views…" : "No saved views"), st.views.map((v) => opsH("option", { key: v.id, value: v.id }, (v.id === st.defaultId ? "★ " : "") + v.name))),
+        opsH("button", { className: "neu-btn-secondary", onClick: saveNew, title: "Save the current filters as a view", style: { fontSize: 12 } }, "Save view"),
+        cur && opsH("button", { className: "neu-btn-secondary", style: { fontSize: 12 }, onClick: () => persist(st.views, st.defaultId === cur.id ? null : cur.id) }, st.defaultId === cur.id ? "Remove default" : "★ Make default"),
+        cur && opsH("button", { className: "neu-btn-secondary", style: { fontSize: 12 }, onClick: async () => { await persist(st.views.filter((v) => v.id !== cur.id), st.defaultId === cur.id ? null : st.defaultId); setSel(""); } }, "Delete view"),
+        msg && opsH("span", { style: { fontSize: 11.5, color: "#4F46E5" } }, msg));
+}
+/* ---- Scan lookup (fills an existing field only) ---- */
+function ScanLookup({ onFill }) {
+    const [v, setV] = useState("");
+    const [msg, setMsg] = useState("");
+    async function go() {
+        const code = v.trim(); if (!code) return;
+        try { const r = await apiFetch("/ops/qr/resolve?code=" + encodeURIComponent(code)); const a = r.asset; if (r.type === "asset" && a) { onFill((a.model || a.hardwareType || "Asset") + " (S/N " + a.serialNumber + ")"); setMsg("Found: " + (a.deviceName || a.model || a.serialNumber)); setV(""); } else setMsg("That label is a " + r.type + " label – scan an asset label."); }
+        catch (e) { setMsg(e.message || "Not found"); }
+    }
+    return opsH("div", { style: { marginBottom: 14 } }, opsH(Field, { label: "Scan asset label (optional – fills Item name)" },
+        opsH("input", { className: "neu-input", value: v, onChange: (e) => setV(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } }, placeholder: "Scan or type a serial / asset tag, then press Enter", "aria-label": "Scan asset label", style: { fontFamily: "'JetBrains Mono'" } })),
+        msg && opsH("div", { style: { fontSize: 11.5, color: "#4F46E5", marginTop: 4 } }, msg));
+}
+
 function SettingsPage({ users, onRefresh, locations, currentUser, isAdmin, isGlobalAdmin, onChangePassword, onFeaturesChanged }) {
     const [section, setSection] = useState(isGlobalAdmin ? "users" : "account");
     const pill = (key, label) => React.createElement("button", { key: key, "data-settings-tab": key, onClick: () => setSection(key), className: `tab-pill ${section === key ? "active" : ""}`, style: { fontSize: 12.5 } }, label);
@@ -11800,15 +12076,20 @@ function SettingsPage({ users, onRefresh, locations, currentUser, isAdmin, isGlo
                 pill("backup", "Backup & Restore"),
                 pill("notifications", "Notifications"),
                 pill("features", "Features"),
+                pill("operations", "Operations"),
+                pill("dataquality", "Data Quality"),
                 pill("logs", "Activity Logs"),
                 pill("license", "License")) : React.createElement(React.Fragment, null,
                 pill("account", "My account"),
                 pill("export", "Manual backup"),
+                pill("dataquality", "Data Quality"),
                 pill("logs", "Activity Logs")))),
         isGlobalAdmin && section === "users" && React.createElement(UserManagement, { users: users, onRefresh: onRefresh, canAdmin: true, locations: locations }),
         isGlobalAdmin && section === "backup" && React.createElement(BackupRestorePanel, null),
         isGlobalAdmin && section === "notifications" && React.createElement(NotificationSettingsPanel, null),
         isGlobalAdmin && section === "features" && React.createElement(FeaturesPanel, { onChanged: onFeaturesChanged }),
+        isGlobalAdmin && section === "operations" && React.createElement(OperationsPanel, null),
+        section === "dataquality" && React.createElement(DataQualityPanel, { isGlobalAdmin: isGlobalAdmin }),
         isGlobalAdmin && section === "license" && React.createElement(LicensePanel, null),
         section === "account" && React.createElement(MyAccountPanel, { currentUser: currentUser, onChangePassword: onChangePassword }),
         !isGlobalAdmin && section === "export" && React.createElement(ScopedBackupPanel, { currentUser: currentUser }),
@@ -17392,6 +17673,7 @@ function DataCenterDashboard() {
                         React.createElement("option", { value: "Moved Out / External" }, "Moved Out / External"),
                         React.createElement("option", { value: "RMA / OEM" }, "RMA / OEM"),
                         React.createElement("option", { value: "Decommissioned" }, "Decommissioned")),
+                    React.createElement(SavedViewsBar, { getState: () => ({ search: assetSearch, site: assetSiteFilter, hw: assetHwFilter, zone: assetZoneFilter, rackType: assetRackTypeFilter, lifecycle: assetLifecycleStatusFilter, col: assetColFilters }), applyState: (f) => { setAssetSearch(f.search || ""); setAssetSiteFilter(f.site || "all"); setAssetHwFilter(f.hw || "all"); setAssetZoneFilter(f.zone || "all"); setAssetRackTypeFilter(f.rackType || "all"); setAssetLifecycleStatusFilter(f.lifecycle || "Active"); setAssetColFilters(f.col && typeof f.col === "object" ? Object.assign(makeEmptyAssetColumnFilters(), f.col) : makeEmptyAssetColumnFilters()); } }),
                     React.createElement(FileActions, { onExportExcel: handleExportAssetsXlsx, onExportCSV: handleExportAssetsCsv, onImport: handleImportAssets, importError: importError, progress: importProgress, errorDetails: importErrorDetails, columns: "asset" }),
                     canEdit && React.createElement("button", { onClick: () => setShowConnImport(true), className: "neu-btn-secondary", style: { display: "flex", alignItems: "center", gap: 6 }, title: "Load the cable-inventory sheet (matched by serial number)" }, React.createElement(Upload, { s: 14 }), " Import cable connectivity"),
                     showConnImport && React.createElement(ConnectivityImportModal, { onClose: () => setShowConnImport(false), onDone: () => { } }),
