@@ -36,8 +36,9 @@ sha256sum -c "$W/keep.sha" >/dev/null && ok ".env and uploads untouched" || bad 
 cmp -s "$PROD/lib/license-public-key.js" "$REPO/dcim/internal-no-license/lib/license-public-key.js" && ok "licence key is the internal null-key overlay" || bad "licence key is not the overlay"
 tok="$(curl -fsS -X POST "http://127.0.0.1:$PORT/api/auth/login" -H 'Content-Type: application/json' -d '{"username":"admin","password":"admin"}' 2>/dev/null | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')" || true
 if [ -n "${tok:-}" ]; then
-  st="$(curl -fsS "http://127.0.0.1:$PORT/api/license/status" -H "Authorization: Bearer $tok" 2>/dev/null || true)"
-  echo "$st" | grep -q '"mode":"off"' && ok "licensing mode is off" || bad "licensing status: $st"
+  st="$(curl -sS "http://127.0.0.1:$PORT/api/license/status" -H "Authorization: Bearer $tok" 2>/dev/null || true)"
+  if echo "$st" | grep -q 'PASSWORD_CHANGE_REQUIRED'; then echo "SKIP  licence status (the default admin must change its password first; the licence key file check above covers it)"
+  else echo "$st" | grep -q '"mode":"off"' && ok "licensing mode is off" || bad "licensing status: $st"; fi
 else echo "SKIP  licence status (admin/admin not available on this database)"; fi
 grep -qiE "uncaught|TypeError|ReferenceError" "$W/node2.log" && bad "errors in log after update" || ok "no runtime errors in log"
 
