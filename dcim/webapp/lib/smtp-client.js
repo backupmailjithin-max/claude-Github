@@ -5,6 +5,7 @@
 'use strict';
 const net = require('net');
 const tls = require('tls');
+const tlsConfig = require('./tls-config');
 
 const LINE_RE = /\r\n/;
 
@@ -41,7 +42,7 @@ async function connectPlain(host, port, timeoutMs) {
 
 async function connectTls(host, port, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const socket = tls.connect({ host, port, timeout: timeoutMs, rejectUnauthorized: false }, () => { socket.setTimeout(0); resolve(socket); });
+    const socket = tls.connect({ host, port, timeout: timeoutMs, ...tlsConfig.tlsOptionsFor(host) }, () => { socket.setTimeout(0); resolve(socket); });
     socket.once('error', reject);
     socket.once('timeout', () => { socket.destroy(); reject(new Error(`TLS connection to ${host}:${port} timed out`)); });
   });
@@ -49,7 +50,7 @@ async function connectTls(host, port, timeoutMs) {
 
 function upgradeToTls(socket, host, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const secure = tls.connect({ socket, host, rejectUnauthorized: false, timeout: timeoutMs }, () => { secure.setTimeout(0); resolve(secure); });
+    const secure = tls.connect({ socket, host, ...tlsConfig.tlsOptionsFor(host), timeout: timeoutMs }, () => { secure.setTimeout(0); resolve(secure); });
     secure.once('error', reject);
   });
 }

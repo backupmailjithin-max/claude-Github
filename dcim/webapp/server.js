@@ -2551,11 +2551,24 @@ try {
   });
 } catch (e) { log.warn('NOTE: "undici" is not installed - Dell OME / HPE OneView appliances with self-signed certificates will be rejected. Run: npm install undici'); }
 const MONITOR_FETCH_TIMEOUT_MS = 30000;
+// OPTIONAL strict TLS with an internal CA (ENABLE_STRICT_TLS=true, INTERNAL_CA_FILE=...). Off by default: when it is off
+// (or its CA file is unusable) dispatcherFor() returns the same relaxed dispatcher as before, so nothing changes.
+const tlsConfig = require('./lib/tls-config');
+tlsConfig.load(log);
+let strictDispatcher = null;
+function dispatcherFor(url) {
+  try {
+    if (!tlsConfig.status().active) return insecureDispatcher;
+    if (tlsConfig.isRelaxedHost(new URL(url).hostname)) return insecureDispatcher;
+    if (!strictDispatcher) { const { Agent } = require('undici'); strictDispatcher = new Agent({ connect: { ...tlsConfig.tlsOptionsFor('strict'), minVersion: 'TLSv1', ciphers: 'DEFAULT:@SECLEVEL=0' } }); }
+    return strictDispatcher;
+  } catch (e) { return insecureDispatcher; }
+}
 function monitorFetch(url, opts = {}) {
   const isHttps = url.startsWith('https://');
   // A hung appliance must never hang a request (or the auto-sync cycle) forever.
   const signal = opts.signal || (typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(MONITOR_FETCH_TIMEOUT_MS) : undefined);
-  return fetch(url, { ...opts, ...(signal ? { signal } : {}), ...(isHttps && insecureDispatcher ? { dispatcher: insecureDispatcher } : {}) });
+  return fetch(url, { ...opts, ...(signal ? { signal } : {}), ...(isHttps && insecureDispatcher ? { dispatcher: dispatcherFor(url) } : {}) });
 }
 // SECURITY: appliance resource references come from the browser. They are appended to the appliance host and sent with its
 // session token, so anything that is not a plain resource id / REST path (e.g. "@evil.host/x", "..", "?") must be rejected.
@@ -8870,6 +8883,7 @@ async function runBackupJob(kind, by) {
     await setSetting('backup.lastRun', JSON.stringify(res)); if (kind === 'auto') await setSetting('backup.lastAutoOk', at);
     auditLog(null, 'BACKUP_CREATE', { username: by || 'system', entity: 'backup', entityId: w.name, details: { kind, size: w.size, sha256: w.meta && w.meta.fileSha256, appVersion: APP_VERSION } });
     log.info(`[backup] ${kind} backup saved: ${path.join(w.dir, w.name)} (${w.size} bytes)${deleted.length ? `; removed old: ${deleted.join(', ')}` : ''}`);
+    try { opsRoutesModule.afterBackup(w); } catch (e) { /* optional backup copy must never affect the backup */ }
     return res;
   } catch (e) {
     const res = { ok: false, at, kind, error: e.message }; log.error('[backup] FAILED:', e.message);
@@ -9393,6 +9407,19 @@ app.post('/api/assets/:id/hardware/sync', authenticateToken, requireRole(['Admin
   } catch (e) { sendErr(res, e); }
 });
 
+// Same work as POST /api/assets/:id/hardware/sync, callable without a request (used by the optional scheduled H/W sync).
+// The route above is left exactly as it was.
+async function hwSyncAsset(a, by) {
+  const serial = String(a.serial_number || '').trim();
+  if (!/^[A-Za-z0-9_.-]{3,64}$/.test(serial)) throw new Error('no usable serial number');
+  const prov = hwProviderFor(a.manufacturer);
+  if (!prov) throw new Error(`no hardware provider for manufacturer "${a.manufacturer || 'unknown'}"`);
+  const zone = a.zone || 'AZ-1';
+  const result = await dedupeInFlight(`HW|${prov.key}|${serial}`, () => prov.pull(a.site, zone, serial));
+  await pool.query('INSERT INTO asset_hw_details (serial_number, vendor, site, zone, data, fetched_by) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE vendor = VALUES(vendor), site = VALUES(site), zone = VALUES(zone), data = VALUES(data), fetched_by = VALUES(fetched_by), fetched_at = CURRENT_TIMESTAMP',
+    [serial, result.vendor, a.site, zone, JSON.stringify({ summary: result.summary, nics: result.nics || [], nicNote: result.nicNote || '' }), by || null]);
+}
+
 // ---- Edit one server's connectivity by hand (new server, or a changed cable) ----
 app.put('/api/assets/:id/connectivity', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
   try {
@@ -9750,6 +9777,16 @@ const visitorRoutesModule = require('./lib/visitor-routes')(app, {
   webappDir: __dirname,
 });
 
+// Optional operational improvements (backup copy, security/health checks, data quality, scheduled H/W sync, saved views, QR).
+// Additive: new /api/ops/* routes only; everything is off until an admin switches it on.
+const opsRoutesModule = require('./lib/ops-routes')(app, {
+  pool: livePool, log, httpErr, sendErr, authenticateToken, requireGlobalAdmin, getAllowedSitesForUser, getSetting, setSetting, auditLog,
+  tlsConfig, backupConfig, hwSyncAsset, hwProviderFor, getMonitorConfig, getOmeToken, getOneviewSession,
+  getAutoSyncInfo: () => ({ lastAutoSyncAt, lastAutoSyncResult, autoSyncRunning }),
+  sendNotification: (...args) => setupRoutesModule.sendNotification(...args),
+  APP_VERSION, webappDir: __dirname,
+});
+
 // Serve frontend (SPA fallback) — compatible with Express 4 and Express 5.
 app.use((req, res, next) => {
   // Unmatched API/static requests must not be converted into index.html.
@@ -9894,7 +9931,7 @@ async function startServer() {
       log.info(`Offline React runtime: ${require('fs').existsSync(path.join(__dirname, 'libs', 'react.production.min.js')) && require('fs').existsSync(path.join(__dirname, 'libs', 'react-dom.production.min.js')) ? '✓ Found' : '✗ NOT FOUND'}`);
       log.info(`Login video (media/login-bg.mp4): ${require('fs').existsSync(path.join(__dirname, 'media', 'login-bg.mp4')) ? '✓ Found' : '✗ NOT FOUND - put the media folder next to server.js (login page will show the animated fallback)'}`);
       log.info(`Serving from folder: ${__dirname}`);
-      startBackupScheduler();
+      startBackupScheduler(); try { opsRoutesModule.startSchedulers(); } catch (e) { log.warn("[ops] schedulers not started: " + e.message); }
       startMonthlyReportScheduler();
       backupConfig().then((c) => log.info(`Auto backup: ${c.enabled ? 'ON' : 'OFF'} - daily at ${BACKUP_TIME} (server time), keeps the last ${c.retentionDays} days -> ${c.dir}`)).catch(() => {});
       console.log(`========================================\n`);
