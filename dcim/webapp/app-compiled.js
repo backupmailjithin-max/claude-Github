@@ -12064,6 +12064,9 @@ function ScanLookup({ onFill }) {
 
 function SettingsPage({ users, onRefresh, locations, currentUser, isAdmin, isGlobalAdmin, onChangePassword, onFeaturesChanged }) {
     const [section, setSection] = useState(isGlobalAdmin ? "users" : "account");
+    // Internal edition (licensing not enforced): the License tab has nothing to show, so it is hidden. Commercial builds are unaffected.
+    const [licOff, setLicOff] = useState(false);
+    useEffect(() => { if (isGlobalAdmin) apiFetch("/license/status").then((st) => { if (st && st.enforced === false) setLicOff(true); }).catch(() => { }); }, []);
     const pill = (key, label) => React.createElement("button", { key: key, "data-settings-tab": key, onClick: () => setSection(key), className: `tab-pill ${section === key ? "active" : ""}`, style: { fontSize: 12.5 } }, label);
     return React.createElement("div", { "data-settings-page": "1" },
         React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12, marginBottom: 18, flexWrap: "wrap" } },
@@ -12079,7 +12082,7 @@ function SettingsPage({ users, onRefresh, locations, currentUser, isAdmin, isGlo
                 pill("operations", "Operations"),
                 pill("dataquality", "Data Quality"),
                 pill("logs", "Activity Logs"),
-                pill("license", "License")) : React.createElement(React.Fragment, null,
+                !licOff && pill("license", "License")) : React.createElement(React.Fragment, null,
                 pill("account", "My account"),
                 pill("export", "Manual backup"),
                 pill("dataquality", "Data Quality"),
@@ -12090,7 +12093,7 @@ function SettingsPage({ users, onRefresh, locations, currentUser, isAdmin, isGlo
         isGlobalAdmin && section === "features" && React.createElement(FeaturesPanel, { onChanged: onFeaturesChanged }),
         isGlobalAdmin && section === "operations" && React.createElement(OperationsPanel, null),
         section === "dataquality" && React.createElement(DataQualityPanel, { isGlobalAdmin: isGlobalAdmin }),
-        isGlobalAdmin && section === "license" && React.createElement(LicensePanel, null),
+        isGlobalAdmin && !licOff && section === "license" && React.createElement(LicensePanel, null),
         section === "account" && React.createElement(MyAccountPanel, { currentUser: currentUser, onChangePassword: onChangePassword }),
         !isGlobalAdmin && section === "export" && React.createElement(ScopedBackupPanel, { currentUser: currentUser }),
         section === "logs" && React.createElement(ActivityLogsPanel, { isAdmin: isAdmin }));
