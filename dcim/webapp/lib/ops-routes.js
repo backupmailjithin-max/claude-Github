@@ -194,6 +194,7 @@ module.exports = function registerOpsRoutes(app, deps) {
   const CATEGORIES = ['Server', 'Storage', 'Network', 'Firewall', 'Backup Appliance', 'PDU'];
   const CAT_RULES = [
     ['Backup Appliance', /backup|data\s*domain|\bdd\d/i], ['PDU', /\bpdu\b|power\s*distribution/i], ['Firewall', /firewall|fortigate|palo\s*alto|checkpoint|\basa\b/i],
+    ['Server', /^(?!.*(storage|switch|network|firewall|\bsan\b)).*server/i],   // before Network so vendor-prefixed names such as "Aristra DELLServer" stay Servers
     ['Network', /switch|router|network|nexus|\baci\b|leaf|spine|load\s*balancer|\bf5\b|aristra|arista/i], ['Storage', /storage|\bsan\b|\bnas\b|netapp|powerstore|unity|3par|array|\bsan\s*switch/i], ['Server', /server|blade|chassis|node/i],
   ];
   // accepted spellings out of the box; the admin can accept more (they are then no longer flagged)
@@ -456,7 +457,7 @@ module.exports = function registerOpsRoutes(app, deps) {
     const site = req.query.site && req.query.site !== 'all' ? String(req.query.site) : null; if (site && !allowed.includes(site)) throw httpErr(403, 'Access denied for this site');
     const sites = site ? [site] : (allowed.length ? allowed : ['__none__']);
     let labels = [];
-    if (type === 'asset') { const [r] = await pool.query('SELECT id, site, zone, rack_no, position, serial_number, asset_tag, device_name, model FROM assets WHERE site IN (?) ORDER BY site, zone, rack_no, position LIMIT 5000', [sites]); labels = r.map((a) => ({ code: qrFor.asset(a), title: a.device_name || a.model || a.serial_number, line2: a.serial_number, line3: `${a.site} / ${a.zone} / ${a.rack_no || '-'} U${a.position || '-'}` })); }
+    if (type === 'asset') { const [r] = await pool.query('SELECT id, site, zone, rack_no, position, serial_number, asset_tag, device_name, model FROM assets WHERE site IN (?) ORDER BY site, zone, rack_no, position LIMIT 5000', [sites]); labels = r.map((a) => { const dn = String(a.device_name || ''); const useDn = dn && !DEVICE_NAME_FLAGS.some((re) => re.test(dn)); return { code: qrFor.asset(a), title: useDn ? dn : (a.model || a.serial_number), line2: a.serial_number, line3: [a.site, a.zone, a.rack_no ? `${a.rack_no}${a.position ? ' U' + a.position : ''}` : ''].filter(Boolean).join(' / ') }; }); }
     else if (type === 'rack') { const [r] = await pool.query('SELECT DISTINCT site, zone, rack_no FROM assets WHERE site IN (?) AND rack_no IS NOT NULL AND rack_no <> "" ORDER BY site, zone, rack_no LIMIT 5000', [sites]); labels = r.map((a) => ({ code: qrFor.rack(a), title: `Rack ${a.rack_no}`, line2: `${a.site} / ${a.zone}`, line3: '' })); }
     else { labels = sites.filter((s) => s !== '__none__').map((s) => ({ code: qrFor.location({ site: s }), title: s, line2: 'Location', line3: '' })); }
     res.json({ type, count: labels.length, labels });
