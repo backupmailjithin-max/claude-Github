@@ -136,6 +136,20 @@ async function redfishPost(monitorFetch, ip, port, username, password, path, bod
 // System.Manufacturer is the standard field, but we also check the Oem key
 // present on ServiceRoot/System as a fallback for BMCs that leave
 // Manufacturer blank (seen on some minimal/early OpenBMC-based implementations).
+// The serial DCIM keeps for a server. A Dell iDRAC reports the system-board manufacturing serial in
+// SerialNumber (e.g. INFLN0051...) - not what operators use. The Dell Service Tag is in SKU (older iDRACs
+// also expose it as Oem.Dell.DellSystem.ServiceTag), so for Dell ONLY the Service Tag is used (null if the BMC
+// does not give one). Every other vendor (HPE, Lenovo, ...) reports its real serial in SerialNumber.
+function pickSerial(vendor, sys) {
+  const s = sys || {};
+  if (/dell/i.test(String(vendor || s.Manufacturer || ''))) {
+    const oem = s.Oem && s.Oem.Dell && s.Oem.Dell.DellSystem;
+    const tag = String(s.SKU || (oem && oem.ServiceTag) || '').trim();
+    return tag || null;
+  }
+  return s.SerialNumber || null;
+}
+
 function normalizeVendor(manufacturer, oemKeys) {
   const m = String(manufacturer || '').trim();
   if (m) return m;
@@ -224,7 +238,7 @@ async function detectRedfish(monitorFetch, ip, port, username, password, retryOn
         const sys = await redfishGet(monitorFetch, ip, port, username, password, firstSys);
         out.vendor = normalizeVendor(sys.Manufacturer, Object.keys(sys.Oem || {}));
         out.model = sys.Model || null;
-        out.serialNumber = sys.SerialNumber || null;
+        out.serialNumber = pickSerial(out.vendor, sys);
         out.biosVersion = sys.BiosVersion || null;
         out.healthStatus = (sys.Status && sys.Status.Health) || null;
         out.powerState = sys.PowerState || null;
@@ -953,3 +967,4 @@ async function getRedfishTaskStatusForDevice(pool, monitorFetch, deviceId, taskU
   const a = rows[0];
   return getRedfishTaskStatus(monitorFetch, a.mgmt_ip, a.redfish_port, a.redfish_username, a.redfish_password, taskUri);
 }
+module.exports.pickSerial = pickSerial;

@@ -9583,6 +9583,31 @@ async function buildFwCompliancePayload(user) {
       if (snap) snap.items.forEach((it) => rows.push({ vendor: vk, site: z.site, zone: z.zone, ...it, fetchedAt: snap.fetchedAt }));
     });
   });
+  // Direct-BMC (Redfish) source: Dell / HPE servers that have Redfish credentials but are NOT reported by OME / OneView
+  // (a server an appliance already reports is never counted twice). Additive and read-only: it only reads columns the Redfish
+  // sync already keeps on the asset. Any failure leaves the OME / OneView result exactly as it was.
+  try {
+    const seen = new Set();
+    Object.keys(fwComplianceCache).forEach((k) => (fwComplianceCache[k].items || []).forEach((it) => { const sn = String(it.serial || '').trim().toUpperCase(); if (sn) seen.add(sn); }));
+    const [bmc] = await pool.query(
+      `SELECT site, zone, device_name, serial_number, redfish_serial_number, manufacturer, model, bios_version, mgmt_ip, health_status, power_state, last_redfish_sync_at
+         FROM assets WHERE site IN (?) AND redfish_username IS NOT NULL AND redfish_username <> '' AND COALESCE(redfish_monitor_ignored, 0) = 0
+          AND (manufacturer LIKE '%dell%' OR manufacturer LIKE '%hp%' OR manufacturer LIKE '%hewlett%')`,
+      [allowed.length ? allowed : ['__none__']]);
+    const zmap = new Map();
+    bmc.forEach((a) => {
+      const sn = String(a.serial_number || a.redfish_serial_number || '').trim();
+      if (!sn || seen.has(sn.toUpperCase()) || (a.redfish_serial_number && seen.has(String(a.redfish_serial_number).trim().toUpperCase()))) return;
+      const ts = a.last_redfish_sync_at ? new Date(a.last_redfish_sync_at).getTime() : null;
+      rows.push({ vendor: 'REDFISH', targetVendor: /dell/i.test(a.manufacturer) ? 'OME' : 'ONEVIEW', site: a.site, zone: a.zone || '', name: a.device_name || sn, serial: sn, model: a.model || '',
+        current: a.bios_version || '', ip: a.mgmt_ip || '', health: a.health_status || '', power: a.power_state || '', fetchedAt: ts });
+      const zk = a.site + '\u0001' + (a.zone || '');
+      const z = zmap.get(zk) || { vendor: 'REDFISH', site: a.site, zone: a.zone || '', reported: false, fetchedAt: null, count: 0 };
+      z.count++; if (ts) { z.reported = true; if (!z.fetchedAt || ts > z.fetchedAt) z.fetchedAt = ts; }
+      zmap.set(zk, z);
+    });
+    zmap.forEach((z) => zones.push(z));
+  } catch (e) { log.warn('Firmware compliance: direct-BMC (Redfish) rows skipped:', e.message); }
   return { rows, zones, lastRunAt: lastAutoSyncAt ? lastAutoSyncAt.getTime() : null, intervalMs: AUTO_SYNC_INTERVAL_MS, running: autoSyncRunning };
 }
 app.get('/api/monitoring/firmware-compliance', authenticateToken, async (req, res) => {

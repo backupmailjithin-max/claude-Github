@@ -13389,7 +13389,7 @@ function FwcTypePicker({ types, counts, value, onChange, left, onOpen }) {
         React.createElement("button", { type: "button", onClick: () => setOpen((o) => !o), "aria-expanded": open, className: "neu-btn-secondary", "data-fwc": "hwtype-btn", style: { fontSize: 11, padding: "4px 10px" }, title: "Choose which hardware types are checked" }, "Modify"),
         popover);
 }
-const FWC_SRC_LABEL = { OME: "Dell OME", ONEVIEW: "HPE OneView" };
+const FWC_SRC_LABEL = { OME: "Dell OME", ONEVIEW: "HPE OneView", REDFISH: "Direct BMC" };
 function DashFirmwareCompliance({ assets = [] }) {
     const [data, setData] = useState(null);
     const [err, setErr] = useState(null);   // null, or the reason the read failed
@@ -13424,7 +13424,7 @@ function DashFirmwareCompliance({ assets = [] }) {
     // Every appliance server (Dell OME + HPE OneView together), tied to its inventory asset by serial number.
     const allRows = useMemo(() => ((data && data.rows) || []).map((r) => {
         const a = invIdx.get(String(r.serial || "").trim().toUpperCase());
-        const list = (targets && (r.vendor === "OME" ? targets.ome : targets.oneview)) || [];
+        const list = (targets && ((r.targetVendor || r.vendor) === "OME" ? targets.ome : targets.oneview)) || [];
         const tg = list.find((t) => fwcModelKey(t.model) === fwcModelKey(r.model));
         const st = fwcStatusOf(r.current, tg && tg.targetVersion);
         return { ...r, target: (tg && tg.targetVersion) || "", status: st.status, reason: st.reason, src: FWC_SRC_LABEL[r.vendor] || r.vendor, hwType: (a && String(a.hardwareType || "").trim()) || "Not in DCIM", manufacturer: a ? (a.manufacturer || "") : "", rackNo: a ? (a.rackNo || "") : "", position: a ? (a.position || "") : "", invName: a ? (a.deviceName || "") : "", assetTag: a ? (a.assetTag || "") : "", invSite: a ? (a.site || "") : "", invZone: a ? (a.zone || "") : "", aSite: r.site, aZone: r.zone, site: (a && a.site) || r.site, zone: (a && a.zone) || r.zone };
@@ -13450,7 +13450,7 @@ function DashFirmwareCompliance({ assets = [] }) {
     const missing = useMemo(() => missAll.filter((a) => keepT(String(a.hardwareType).trim())), [missAll, sel]);
     const zones = (data && data.zones) || [];
     const c = useMemo(() => fwcCount(rows), [rows]);
-    const bySrc = useMemo(() => ["Dell OME", "HPE OneView"].map((s) => ({ s, c: fwcCount(rows.filter((r) => r.src === s)), zones: zones.filter((z) => (FWC_SRC_LABEL[z.vendor] || z.vendor) === s).length })), [rows, zones]);
+    const bySrc = useMemo(() => ["Dell OME", "HPE OneView", "Direct BMC"].map((s) => ({ s, c: fwcCount(rows.filter((r) => r.src === s)), zones: zones.filter((z) => (FWC_SRC_LABEL[z.vendor] || z.vendor) === s).length })), [rows, zones]);
     const lastSync = useMemo(() => zones.reduce((t, z) => (z.fetchedAt && z.fetchedAt > t ? z.fetchedAt : t), 0), [zones]);
     const waiting = zones.filter((z) => !z.reported).length;
     const loading = (!data || !targets) && !err;
@@ -13466,7 +13466,7 @@ function DashFirmwareCompliance({ assets = [] }) {
     const typeLine = React.createElement("div", { "data-fwc": "hwtype-summary", style: { fontFamily: "Inter", fontSize: 11.5, fontWeight: 700, color: "#334155" } }, !sel ? "All hardware types" : !sel.length ? "No hardware type selected" : sel.length <= 3 ? sel.join(", ") : `${sel.length} hardware types`);
     const empty = !loading && !rows.length;
     return React.createElement(React.Fragment, null,
-        React.createElement(DashCard, { title: "Firmware Compliance", sub: "Dell OME + HPE OneView · read-only", className: "dash-fwc-card" + (pickOpen ? " fwc-up" : ""), action },
+        React.createElement(DashCard, { title: "Firmware Compliance", sub: rows.some((r) => r.src === "Direct BMC") ? "Dell OME + HPE OneView + direct BMC · read-only" : "Dell OME + HPE OneView · read-only", className: "dash-fwc-card" + (pickOpen ? " fwc-up" : ""), action },
             React.createElement("div", { "data-fwc": "card", style: { display: "flex", flexDirection: "column", gap: 9, flex: 1 } },
                 typeLine,
                 !empty && React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8 } },
@@ -13474,7 +13474,7 @@ function DashFirmwareCompliance({ assets = [] }) {
                     React.createElement("span", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748B" } }, "Compliance · ", React.createElement("b", { "data-fwc": "kpi-total" }, loading ? "…" : num(c.total)), " servers")),
                 !empty && !loading && React.createElement(FwcBar, { c, h: 9 }),
                 !empty && React.createElement("div", { style: { display: "flex", gap: 6 } }, kpi("COMPLIANT", c.COMPLIANT), kpi("OUTDATED", c.OUTDATED), kpi("UNKNOWN", c.UNKNOWN)),
-                !empty && !loading && React.createElement("div", { "data-fwc": "src-split", style: { display: "flex", flexDirection: "column", gap: 3 } }, bySrc.filter((x) => x.zones > 0 || x.c.total > 0).map((x) => React.createElement("div", { key: x.s, "data-fwc": "split-" + (x.s === "Dell OME" ? "dell" : "hpe"), style: { display: "grid", gridTemplateColumns: "84px 1fr auto", gap: 8, alignItems: "center", fontFamily: "Inter", fontSize: 10.5 } },
+                !empty && !loading && React.createElement("div", { "data-fwc": "src-split", style: { display: "flex", flexDirection: "column", gap: 3 } }, bySrc.filter((x) => x.zones > 0 || x.c.total > 0).map((x) => React.createElement("div", { key: x.s, "data-fwc": "split-" + (x.s === "Dell OME" ? "dell" : x.s === "HPE OneView" ? "hpe" : "bmc"), style: { display: "grid", gridTemplateColumns: "84px 1fr auto", gap: 8, alignItems: "center", fontFamily: "Inter", fontSize: 10.5 } },
                     React.createElement("span", { style: { fontWeight: 700, color: "#1E293B" } }, x.s), React.createElement(FwcBar, { c: x.c, h: 6 }),
                     React.createElement("span", { style: { fontWeight: 700, color: "#334155", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" } }, `${num(x.c.total)} · ${num(x.c.OUTDATED)} outdated`)))),
                 picked && !loading && (inv.length > 0 || rows.length > 0) && React.createElement("div", { "data-fwc": "inv-line", style: { display: "flex", justifyContent: "space-between", gap: 8, padding: "6px 10px", borderRadius: 10, background: "rgba(139,92,246,.10)", fontFamily: "Inter", fontSize: 11, color: "#4C1D95" } },
@@ -13512,12 +13512,12 @@ function FwcDetails({ rows, inv, missing, zones, lastSync, types, typeCounts, se
     const filtered = useMemo(() => locRows.filter((r) => !f.status || r.status === f.status), [locRows, f.status]);
     const extraRows = useMemo(() => locRows.filter((r) => r.hwType === "Not in DCIM"), [locRows]);
     const sum = useMemo(() => fwcCount(locRows), [locRows]);
-    const zeroT = () => ({ total: 0, dell: 0, hpe: 0, COMPLIANT: 0, OUTDATED: 0, UNKNOWN: 0, inv: 0, missing: 0, extra: 0 });
+    const zeroT = () => ({ total: 0, dell: 0, hpe: 0, bmc: 0, COMPLIANT: 0, OUTDATED: 0, UNKNOWN: 0, inv: 0, missing: 0, extra: 0 });
     const addT = (t, x) => { Object.keys(zeroT()).forEach((k) => { t[k] += x[k] || 0; }); };
     // Generic grouping: servers, inventory and not-in lists grouped by the same key.
     const group = (rowKey, assetKey) => {
         const m = new Map(); const get = (k) => { if (!m.has(k)) m.set(k, { key: k, ...zeroT() }); return m.get(k); };
-        locRows.forEach((r) => { const g = get(rowKey(r)); g.total++; g[r.src === "Dell OME" ? "dell" : "hpe"]++; g[r.status]++; if (r.hwType === "Not in DCIM") g.extra++; });
+        locRows.forEach((r) => { const g = get(rowKey(r)); g.total++; g[r.src === "Dell OME" ? "dell" : r.src === "HPE OneView" ? "hpe" : "bmc"]++; g[r.status]++; if (r.hwType === "Not in DCIM") g.extra++; });
         locInv.forEach((a) => { get(assetKey(a)).inv++; });
         locMissing.forEach((a) => { get(assetKey(a)).missing++; });
         return [...m.values()].sort((a, b) => String(a.key).localeCompare(String(b.key)));
@@ -13527,7 +13527,7 @@ function FwcDetails({ rows, inv, missing, zones, lastSync, types, typeCounts, se
     const byModel = useMemo(() => group((r) => r.model || "Unspecified", (a) => a.model || "Unspecified"), [locRows, locInv, locMissing]);
     const zoneRows = useMemo(() => {
         const m = new Map(); const get = (site, zone) => { const k = site + "\u0001" + zone; if (!m.has(k)) m.set(k, { site, zone, ...zeroT() }); return m.get(k); };
-        locRows.forEach((r) => { const z = get(r.site, r.zone); z.total++; z[r.src === "Dell OME" ? "dell" : "hpe"]++; z[r.status]++; if (r.hwType === "Not in DCIM") z.extra++; });
+        locRows.forEach((r) => { const z = get(r.site, r.zone); z.total++; z[r.src === "Dell OME" ? "dell" : r.src === "HPE OneView" ? "hpe" : "bmc"]++; z[r.status]++; if (r.hwType === "Not in DCIM") z.extra++; });
         locInv.forEach((a) => { get(a.site, a.zone).inv++; });
         locMissing.forEach((a) => { get(a.site, a.zone).missing++; });
         const list = [...m.values()].sort((a, b) => String(a.site).localeCompare(String(b.site)) || String(a.zone).localeCompare(String(b.zone)));
@@ -13546,7 +13546,8 @@ function FwcDetails({ rows, inv, missing, zones, lastSync, types, typeCounts, se
     const PER = 50, pages = Math.max(1, Math.ceil(list.length / PER)), pg = Math.min(page, pages - 1);
     const shown = list.slice(pg * PER, pg * PER + PER);
     const serverCols = [
-        { key: "name", label: "Device Name" }, { key: "site", label: "Site" }, { key: "zone", label: "Zone" }, { key: "hwType", label: "Hardware Type" }, { key: "manufacturer", label: "Manufacturer" }, { key: "model", label: "Model" }, { key: "serial", label: "Serial Number" },
+        { key: "name", label: "Device Name" }, { key: "site", label: "Site" }, { key: "zone", label: "Zone" }, { key: "rackNo", label: "Rack" }, { key: "position", label: "Position" }, { key: "hwType", label: "Hardware Type" }, { key: "manufacturer", label: "Manufacturer" }, { key: "model", label: "Model" }, { key: "serial", label: "Serial Number" },
+        { key: "ip", label: "Mgmt IP" }, { key: "health", label: "Health" }, { key: "power", label: "Power State" },
         { key: "current", label: "Current Firmware" }, { key: "target", label: "Target Firmware", format: (v, r) => fwcTarget(r) },
         { key: "status", label: "Status", format: (v) => (FWC_META[v] || FWC_META.UNKNOWN).label }, { key: "src", label: "Source" }, { key: "syncTs", label: "Last Sync", format: (v, r) => fwcWhen(r.fetchedAt) },
     ];
@@ -13554,10 +13555,10 @@ function FwcDetails({ rows, inv, missing, zones, lastSync, types, typeCounts, se
         { key: "deviceName", label: "Device Name" }, { key: "site", label: "Site" }, { key: "zone", label: "Zone" }, { key: "hardwareType", label: "Hardware Type" }, { key: "manufacturer", label: "Manufacturer" }, { key: "model", label: "Model" },
         { key: "serialNumber", label: "Serial Number" }, { key: "rackNo", label: "Rack" }, { key: "position", label: "Position" }, { key: "src", label: "Expected In" }, { key: "reason", label: "Reason" },
     ];
-    const grpCols = (label) => [{ key: "key", label }, { key: "total", label: "Servers in OME / OneView" }, { key: "dell", label: "Dell OME" }, { key: "hpe", label: "HPE OneView" }, { key: "COMPLIANT", label: "Compliant" }, { key: "OUTDATED", label: "Outdated" }, { key: "UNKNOWN", label: "Unknown" },
+    const grpCols = (label) => [{ key: "key", label }, { key: "total", label: "Servers in OME / OneView" }, { key: "dell", label: "Dell OME" }, { key: "hpe", label: "HPE OneView" }, { key: "bmc", label: "Direct BMC" }, { key: "COMPLIANT", label: "Compliant" }, { key: "OUTDATED", label: "Outdated" }, { key: "UNKNOWN", label: "Unknown" },
         { key: "pct", label: "Compliance %", format: (v, r) => pctOf(r) }, { key: "inv", label: "Inventory Assets" }, { key: "missing", label: "Assets Not in OME / OneView" }, { key: "extra", label: "In OME / OneView, Not in Inventory" }];
     const zoneCols = [{ key: "site", label: "Site" }, { key: "zone", label: "Zone" }, ...grpCols("").slice(1)];
-    const NUMK = ["total", "dell", "hpe", "COMPLIANT", "OUTDATED", "UNKNOWN", "pct", "inv", "missing", "extra"];
+    const NUMK = ["total", "dell", "hpe", "bmc", "COMPLIANT", "OUTDATED", "UNKNOWN", "pct", "inv", "missing", "extra"];
     const doExport = (kind) => {
         const base = `firmware-compliance-${tab}-${localDateStr(new Date())}`;
         const tot = { site: "All sites", zone: "Total", key: "Total", ...grand };
@@ -13581,7 +13582,7 @@ function FwcDetails({ rows, inv, missing, zones, lastSync, types, typeCounts, se
     // One summary row (zone rows, group rows, subtotal rows and the grand total share this renderer).
     const sumTr = (z, key, labelCells, drill) => React.createElement("tr", { key, "data-fwc-zone": z.sub ? "sub" : key === "grand" ? "All sites|Total" : (z.site ? z.site + "|" + z.zone : z.key), onClick: drill && !z.sub && key !== "grand" ? () => drill(z) : undefined, style: { cursor: drill && !z.sub && key !== "grand" ? "pointer" : "default", background: key === "grand" ? "#E0E7FF" : z.sub ? "#F8FAFC" : "transparent", fontWeight: z.sub || key === "grand" ? 800 : 500 } },
         labelCells,
-        React.createElement("td", { style: numC, "data-fwc": "z-total" }, z.total.toLocaleString()), React.createElement("td", { style: numC }, z.dell.toLocaleString()), React.createElement("td", { style: numC }, z.hpe.toLocaleString()),
+        React.createElement("td", { style: numC, "data-fwc": "z-total" }, z.total.toLocaleString()), React.createElement("td", { style: numC }, z.dell.toLocaleString()), React.createElement("td", { style: numC }, z.hpe.toLocaleString()), React.createElement("td", { style: numC }, z.bmc.toLocaleString()),
         React.createElement("td", { style: { ...numC, color: FWC_META.COMPLIANT.fg } }, z.COMPLIANT.toLocaleString()),
         React.createElement("td", { style: { ...numC, color: FWC_META.OUTDATED.fg }, "data-fwc": "z-outdated" }, z.sub || key === "grand" || !z.site ? z.OUTDATED.toLocaleString() : link(z.OUTDATED, { site: z.site, zone: z.zone, status: "OUTDATED" }, "servers", FWC_META.OUTDATED.fg)),
         React.createElement("td", { style: { ...numC, color: FWC_META.UNKNOWN.fg } }, z.UNKNOWN.toLocaleString()), React.createElement("td", { style: numC }, pctOf(z)),
@@ -13629,7 +13630,7 @@ function FwcDetails({ rows, inv, missing, zones, lastSync, types, typeCounts, se
             React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" } },
                 React.createElement("div", { style: { display: "inline-flex", alignItems: "center", gap: 6, fontFamily: "Inter", fontSize: 12, fontWeight: 800, color: "#334155" } }, "Hardware Types", React.createElement(FwcTypePicker, { types, counts: typeCounts, value: selTypes || types, onChange: onTypes, left: true })),
                 sel("site", "All sites", siteOpts.map((v) => ({ v, t: v }))), sel("zone", "All zones", zoneOpts.map((v) => ({ v, t: v }))),
-                sel("src", "All sources", [{ v: "Dell OME", t: "Dell OME" }, { v: "HPE OneView", t: "HPE OneView" }]),
+                sel("src", "All sources", [{ v: "Dell OME", t: "Dell OME" }, { v: "HPE OneView", t: "HPE OneView" }, ...(rows.some((r) => r.src === "Direct BMC") ? [{ v: "Direct BMC", t: "Direct BMC (Redfish)" }] : [])]),
                 ["servers", "extra"].includes(tab) && sel("status", "All statuses", ["COMPLIANT", "OUTDATED", "UNKNOWN"].map((v) => ({ v, t: FWC_META[v].label }))),
                 React.createElement("input", { value: f.q, onChange: (e) => { setF((p) => ({ ...p, q: e.target.value })); setPage(0); }, placeholder: "Search name, serial, model", "aria-label": "Search", "data-fwc": "f-q", style: { padding: "6px 10px", borderRadius: 8, border: "1px solid #CBD5E1", fontFamily: "Inter", fontSize: 12, width: 190 } }),
                 React.createElement("button", { onClick: () => { setF(blank); setPage(0); }, className: "neu-btn-secondary", "data-fwc": "reset", style: { fontSize: 11.5, padding: "5px 10px" } }, "Reset")),
