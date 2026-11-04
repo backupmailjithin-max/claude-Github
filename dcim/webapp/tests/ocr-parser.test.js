@@ -17,3 +17,17 @@ test('repairs a look-alike letter inside a serial when its siblings agree', () =
   assert.ok(r.warnings.some((w) => /look-alike/.test(w)));
 });
 test('parseDate tolerates OCR slips in the month', () => assert.ok(parseDate('11-0ct-2026')));
+
+// Gate pass with a ruled item table (Material Name | Serial No | Asset No | Quantity | Unit | Tracking ID)
+test('gate pass: item table rows give serials, names, quantity and unit', () => {
+  const L = (text, y) => ({ text, conf: 80, words: [{ text, conf: 80, x0: 100, x1: 400, y0: y, y1: y + 20 }] });
+  const lines = [L('Material Movement Gate Pass', 10), L('Tracking ID: OCHE261124769', 40), L('Material Name Serial No | unit [Tracking ID|', 100),
+    L('ASSY,CRD,RSR4Q, 2X 26H63 Loo Nos', 140), L('8FHHL,2U,16G |', 170), L('ASSY,CRD,PLN,PIB, PJ7CD i 0 Nos', 220), L('RIO,R7615,V4 |', 250),
+    L('Total Entry : 3', 400), L('Checked By : Nxtra Security-DC2', 430)];
+  const r = require('../ocr/doc-types').parseDocument(lines, {});
+  assert.strictEqual(r.documentType.id, 'gate-pass');
+  assert.deepStrictEqual(r.serialNumbers.map((s) => s.value), ['26H63', 'PJ7CD']);
+  assert.strictEqual(r.fields.quantity.value, '2');
+  assert.strictEqual(r.fields.unit.value, 'Nos');
+  assert.ok(/RIO,R7615,V4/.test(r.fields.itemDescription.value));
+});

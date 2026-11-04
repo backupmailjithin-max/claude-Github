@@ -81,6 +81,36 @@ function resize(g, w, h, nw, nh) {
   }
   return out;
 }
+// Phone photos often carry a shadow (a hand, a phone, a fold) across the page: text inside the shadow turns pale grey and is
+// missed. The paper brightness is estimated with a very large blur; when it varies a lot over the page, every pixel is divided
+// by it, which evens the lighting out (shadow gone, faint text darker). Evenly lit pictures are left exactly as they are.
+function flattenLighting(g, w, h) {
+  try {
+    const f = Math.max(1, Math.round(Math.max(w, h) / 600));            // work on a reduced copy (fast)
+    const sw = Math.max(8, Math.floor(w / f)), sh = Math.max(8, Math.floor(h / f)); const sm = new Float32Array(sw * sh);
+    for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) { let m = 0; for (let yy = 0; yy < f; yy++) for (let xx = 0; xx < f; xx++) { const v = g[Math.min(h - 1, y * f + yy) * w + Math.min(w - 1, x * f + xx)]; if (v > m) m = v; } sm[y * sw + x] = m; }  // local max ~ paper colour
+    const r = Math.max(4, Math.round(Math.max(sw, sh) / 14));
+    const blur = (src) => { const out = new Float32Array(sw * sh), tmp = new Float32Array(sw * sh);
+      for (let y = 0; y < sh; y++) { let sum = 0, c = 0; const row = y * sw; for (let x = 0; x < Math.min(sw, r); x++) { sum += src[row + x]; c++; }
+        for (let x = 0; x < sw; x++) { if (x + r < sw) { sum += src[row + x + r]; c++; } if (x - r - 1 >= 0) { sum -= src[row + x - r - 1]; c--; } tmp[row + x] = sum / c; } }
+      for (let x = 0; x < sw; x++) { let sum = 0, c = 0; for (let y = 0; y < Math.min(sh, r); y++) { sum += tmp[y * sw + x]; c++; }
+        for (let y = 0; y < sh; y++) { if (y + r < sh) { sum += tmp[(y + r) * sw + x]; c++; } if (y - r - 1 >= 0) { sum -= tmp[(y - r - 1) * sw + x]; c--; } out[y * sw + x] = sum / c; } }
+      return out; };
+    const bg = blur(blur(sm));
+    const sorted = Array.from(bg).sort((a, b) => a - b); const lo = sorted[Math.floor(sorted.length * 0.08)], hi = sorted[Math.floor(sorted.length * 0.92)];
+    if (!(lo > 20) || hi / lo < 1.25) return g;                         // lighting is already even
+    const out = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) { const fy = Math.min(sh - 1, y / f), y0 = Math.floor(fy), y1 = Math.min(sh - 1, y0 + 1), wy = fy - y0;
+      for (let x = 0; x < w; x++) { const fx = Math.min(sw - 1, x / f), x0 = Math.floor(fx), x1 = Math.min(sw - 1, x0 + 1), wx = fx - x0;
+        const b = (bg[y0 * sw + x0] * (1 - wx) + bg[y0 * sw + x1] * wx) * (1 - wy) + (bg[y1 * sw + x0] * (1 - wx) + bg[y1 * sw + x1] * wx) * wy;
+        const v = g[y * w + x] / Math.max(40, b) * 238; out[y * w + x] = v > 255 ? 255 : v; } }
+    return out;
+  } catch (e) { return g; }
+}
+// Printed text in a pale grey font (common in table cells of generated gate passes / challans) is read poorly. A gentle
+// curve darkens the mid-greys while white paper and black text stay where they are.
+const GAMMA_LUT = (() => { const t = new Uint8Array(256); for (let i = 0; i < 256; i++) { const v = Math.min(1, i / 238); t[i] = Math.round(255 * Math.pow(v, 2.1)); } return t; })();
+function darkenFaintText(g) { const out = new Uint8Array(g.length); for (let i = 0; i < g.length; i++) out[i] = GAMMA_LUT[g[i]]; return out; }
 function crc32(buf) { let c, crc = ~0; for (let n = 0; n < buf.length; n++) { c = (crc ^ buf[n]) & 0xff; for (let k = 0; k < 8; k++) c = c & 1 ? (c >>> 1) ^ 0xedb88320 : c >>> 1; crc = (crc >>> 8) ^ c; } return (~crc) >>> 0; }
 function chunk(type, data) { const len = Buffer.alloc(4); len.writeUInt32BE(data.length); const td = Buffer.concat([Buffer.from(type, 'latin1'), data]); const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(td)); return Buffer.concat([len, td, crc]); }
 function encodeGrayPng(g, w, h) {
@@ -103,6 +133,8 @@ function prepare(buf, ext, opts = {}) {
     const dm = dims(buf, ext); if (dm && dm[0] * dm[1] > MAX_PIXELS) return null;
     const d = decode(buf, ext); if (!d) return null;
     let { g, w, h } = (() => { const o = orient(toGray(d), d.w, d.h, d.orient); return o; })();
+    g = flattenLighting(g, w, h);
+    g = darkenFaintText(g);
     const rotated = d.orient !== 1;
     let scale = opts.scale || 1; const side = Math.max(w, h);
     if (!opts.scale && side > MAX_SIDE) scale = MAX_SIDE / side;

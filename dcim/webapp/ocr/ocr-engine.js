@@ -138,7 +138,39 @@ async function recognizeImage(buf, ext) {
     const up = prep.prepare(buf, ext, { scale: (base ? base.scale : 1) * Math.min(3, 26 / med0) });
     if (up && up.scale > 1.2) { try { const out2 = await readPasses(worker, up.buf, t0); if (quality(out2) > quality(out)) out = out2; } catch (e) { /* keep the first reading */ } }
   }
+  // ruled tables (gate passes, challans): re-read the table body as one block - the full-page passes often miss pale cells
+  if (base) { try { out = await tableRescue(worker, base, out, t0); } catch (e) { /* keep the page reading */ } }
   if (med0 && med0 < 12) out.meta = { lowRes: true, textHeight: Math.round(med0) };
+  return out;
+}
+const lineGeo = (l) => { const g = l.words.filter((w) => typeof w.x0 === 'number'); return g.length ? { x0: Math.min(...g.map((w) => w.x0)), x1: Math.max(...g.map((w) => w.x1)), y0: Math.min(...g.map((w) => w.y0)), y1: Math.max(...g.map((w) => w.y1)) } : null; };
+async function tableRescue(worker, base, lines, t0) {
+  if (Date.now() - t0 > OCR_TIMEOUT_MS * 0.6) return lines;
+  // header row: a line that names at least two of the usual table headings
+  const HEAD = /^(?:serial|quantity|quantit\w*|material|asset|unit|tracking|description|item)$/i;
+  let hdr = null;
+  for (const l of lines) { const g = lineGeo(l); if (!g || g.y0 < base.h * 0.15) continue; const hits = l.words.filter((w) => HEAD.test(String(w.text).replace(/[^A-Za-z]/g, ''))).length; if (hits >= 2 && /serial|asset|quantit/i.test(l.text)) { hdr = { l, g }; break; } }
+  if (!hdr) return lines;
+  const left = Math.max(0, Math.round(hdr.g.x0 - 40)); const top = Math.round(hdr.g.y1 + 6);
+  let bottom = Math.min(base.h, top + Math.round(base.h * 0.3));
+  for (const l of lines) { const g = lineGeo(l); if (g && g.y0 > top + 80 && /\b(?:total\s+entr|approved\s+by|checked\s+by|prepared\s+by|authori[sz]ed)/i.test(l.text)) { bottom = Math.min(bottom, g.y0 - 4); } }
+  const width = Math.min(base.w - left, Math.round(Math.max(hdr.g.x1 - hdr.g.x0, base.w * 0.5) + 80)); const height = bottom - top;
+  if (width < 200 || height < 60) return lines;
+  await worker.setParameters({ tessedit_pageseg_mode: '6', thresholding_method: '0' });
+  const res = await worker.recognize(base.buf, { rectangle: { left, top, width, height } }, { blocks: true });
+  const extra = linesFromData(res.data || {});
+  extra.forEach((l) => { l.table = true; });
+  return mergeTable(lines, extra);
+}
+// table-body lines replace whatever the page passes read inside that block (the block was read as a table, so its rows are cleaner)
+function mergeTable(lines, extra) {
+  const gs = extra.map(lineGeo).filter(Boolean); if (!gs.length) return lines;
+  const y0 = Math.min(...gs.map((g) => g.y0)) - 4, y1 = Math.max(...gs.map((g) => g.y1)) + 4;
+  const keep = lines.filter((l) => { const g = lineGeo(l); return !g || g.y1 < y0 || g.y0 > y1; });
+  const out = keep.concat(extra);
+  const key = (l) => { const g = lineGeo(l); return g ? [g.y0, g.x0] : [1e9, 0]; };
+  out.sort((x, y) => { const a = key(x), b = key(y); return Math.abs(a[0] - b[0]) > 10 ? a[0] - b[0] : a[1] - b[1]; });
+  if (lines.meta) out.meta = lines.meta;
   return out;
 }
 

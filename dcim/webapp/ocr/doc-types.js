@@ -64,6 +64,7 @@ const DOC_TYPES = [
   { id: 'invoice', label: 'Invoice', detect: [/tax\s+invoice/i, /\binvoice\b/i, /\bbill\s+of\s+supply\b/i], primary: ['invoice'] },
   { id: 'pod', label: 'Proof of Delivery (POD)', detect: [/proof\s+of\s+delivery/i, /\bPOD\b/], primary: ['pod'] },
   { id: 'grn', label: 'Goods Receipt Note (GRN)', detect: [/goods\s+receipt/i, /\bGRN\b/], primary: ['grn'] },
+  { id: 'gate-pass', label: 'Material Movement Gate Pass', detect: [/gate\s*pass/i, /material\s+movement/i, /\bmaterial\s+details\b/i], primary: [] },
   { id: 'shipment', label: 'Shipment Document', detect: [/\bshipment\b/i, /air\s*way\s*bill/i, /\bwaybill\b/i, /\bpacking\s+list\b/i, /\bconsignment\s+note\b/i, /\blorry\s+receipt\b/i], primary: [] },
   // Future types: add an entry such as
   //   { id: 'rma', label: 'RMA Document', detect: [/\bRMA\b/i], primary: [] }
@@ -170,6 +171,40 @@ function splitTokens(v) {
 const isIdToken = (t) => /^[A-Za-z0-9][A-Za-z0-9\-_.\/]{4,29}$/.test(t) && /\d/.test(t) && !NOT_ID.test(t) && !/^\d{1,2}[-\/.]\d{1,2}[-\/.]\d{2,4}$/.test(t) && !/^\+?\d{10,13}$/.test(t.replace(/[\s-]/g, '')) ;
 
 // ---------- main entry ----------
+// Reads item rows from a ruled table whose heading names Serial / Quantity / Unit. Each row's first line carries the serial, the quantity and the unit;
+// the item name usually wraps onto the line below. Returns { rows:[{n,name,serial,qty,conf}], unit, conf } or null.
+function readItemTable(lines) {
+  let h = -1;
+  for (let i = 0; i < lines.length; i++) { const t = lines[i].text; if (/serial/i.test(t) && /(?:material|item|quantit|unit|asset|tracking)/i.test(t)) { h = i; break; } }
+  if (h < 0) return null;
+  const UNIT = /^(?:nos|pcs|pc|units?|sets?|box(?:es)?|kgs?|rolls?|met(?:er|re)s?|mtr)$/i;
+  const STOP = /\b(?:total\s+entr|approved\s+by|checked\s+by|prepared\s+by|authori[sz]ed|signature|outward\s+material|ltd\b)/i;
+  const rows = []; let unit = null, confSum = 0, confN = 0;
+  for (let i = h + 1; i < lines.length && rows.length < 60; i++) {
+    const t = lines[i].text; if (STOP.test(t)) break;
+    const toks = t.replace(/[|\[\]_~]/g, ' ').split(/\s+/).filter(Boolean);
+    const ui = toks.findIndex((x) => UNIT.test(x));
+    if (ui < 0) { // wrapped item name: attach to the previous row
+      const prev = rows[rows.length - 1];
+      if (prev && !prev.done && /[A-Za-z0-9]/.test(t) && /,/.test(t) && !/^\W*$/.test(t)) { prev.name = (prev.name + ' ' + toks.join(' ')).trim(); prev.done = true; }
+      continue;
+    }
+    const before = toks.slice(0, ui);
+    const nameToks = before.filter((x) => /,/.test(x) || /^[A-Z]{3,}$/.test(x) && false);
+    // serial: first plain alphanumeric token (4-14 chars, no comma) that is not a quantity
+    let serial = null, serialIdx = -1;
+    for (let k = 0; k < before.length; k++) { const x = before[k].replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, ''); if (x.length >= 4 && x.length <= 14 && /^[A-Za-z0-9]+$/.test(x) && !/,/.test(before[k]) && !NOT_ID.test(x) && !/^\d+$/.test(x) && !/^[0-9]\.?[0-9]$/.test(x)) { serial = x.toUpperCase(); serialIdx = k; } }
+    const name = before.filter((x, k) => k !== serialIdx && /[A-Za-z]/.test(x) && (/,/.test(x) || k < serialIdx || serialIdx < 0) && x.length >= 2).join(' ').replace(/^[^A-Za-z0-9]+/, '').trim();
+    // quantity text is badly read on pale print ("1.0" -> "Loo", "10"): a serial on the row means one unit unless a clear decimal says otherwise
+    const qtok = toks.slice(Math.max(0, ui - 2), ui).join(' '); const qm = /(\d{1,4})\.(\d)\b/.exec(qtok); let qty = 1; if (qm && +qm[1] >= 2 && !/[A-Za-z]/.test(qtok)) qty = +qm[1];
+    unit = unit || (UNIT_WORDS[toks[ui].toLowerCase()] || 'Nos');
+    const conf = lines[i].conf || 70; confSum += conf; confN++;
+    if (!serial && !name) continue;
+    rows.push({ n: rows.length + 1, name, serial, qty, conf, done: false });
+  }
+  if (!rows.length) return null;
+  return { rows, unit, conf: confN ? confSum / confN : 70 };
+}
 function parseDocument(lines, meta = {}) {
   lines = (lines || []).map((l) => ({ ...l, text: clean(l.text) })).filter((l) => l.text);
   const full = lines.map((l) => l.text).join('\n');
@@ -262,7 +297,18 @@ function parseDocument(lines, meta = {}) {
     }
     return [...found.values()];
   };
-  const serialNumbers = collect(L.serial, 'serial');
+  let serialNumbers = collect(L.serial, 'serial');
+  // Ruled "Material Name | Serial No | Asset No | Quantity | Unit" tables (gate passes, challans): read row by row
+  const tbl = readItemTable(lines);
+  if (tbl && tbl.rows.length) {
+    const mk = (r, v) => ({ ...mkVal(v, 0.85, r.conf, /\d/.test(v) ? 1 : 0.75, 'table'), kind: 'serial', row: r.n });
+    const fromTable = tbl.rows.filter((r) => r.serial).map((r) => mk(r, r.serial));
+    if (fromTable.length) serialNumbers = fromTable;   // the table is authoritative: drops stamp numbers and names from "Checked By" lines
+    const names = [...new Set(tbl.rows.map((r) => r.name).filter(Boolean))];
+    if (names.length) { const v = names.join('; ').slice(0, 300); fields.itemDescription = mkVal(v, 0.85, tbl.conf, v.length > 160 ? 0.8 : 1, 'table'); }
+    const qty = tbl.rows.reduce((a, r) => a + r.qty, 0); if (qty >= 1) fields.quantity = mkVal(String(qty), 0.85, tbl.conf, 1, 'table');
+    if (tbl.unit) fields.unit = mkVal(tbl.unit, 0.8, tbl.conf, 1, 'table');
+  }
   // Repair look-alike letters inside a serial when at least two same-length siblings agree on a digit at that position.
   const repaired = [];
   { const CONF = { O: '0', D: '0', Q: '0', I: '1', L: '1', S: '5', B: '8', Z: '2' };
