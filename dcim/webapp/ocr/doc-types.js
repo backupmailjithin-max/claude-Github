@@ -53,7 +53,7 @@ const L = {
   track: /\b(?:Courier(?:\s*(?:Tracking|Track|Docket|AWB))?(?:\s*(?:No|Number|ID|#))?|Tracking(?:\s*(?:No|Number|ID|#))?|AWB(?:\s*(?:No|Number|#))?|Air\s*Way\s*Bill(?:\s*(?:No|Number))?|Docket(?:\s*(?:No|Number))?|Consignment\s*(?:No|Number)|LR\s*(?:No|Number)|Waybill(?:\s*(?:No|Number))?)\b\.?\s*[:#\-]?\s*/i,
   remarks: /\b(?:Remarks?|Notes?|Comments?)\b\.?\s*[:\-]\s*/i,
 };
-const UNIT_WORDS = { nos: 'Nos', no: 'Nos', pcs: 'Nos', pc: 'Nos', piece: 'Nos', pieces: 'Nos', unit: 'Nos', units: 'Nos', box: 'Box', boxes: 'Box', set: 'Set', sets: 'Set', kg: 'Kg', kgs: 'Kg', roll: 'Roll', rolls: 'Roll', meter: 'Meter', meters: 'Meter', mtr: 'Meter', litre: 'Litre', liter: 'Litre', pallet: 'Pallet', pallets: 'Pallet' };
+const UNIT_WORDS = { ea: 'Nos', each: 'Nos', nos: 'Nos', no: 'Nos', pcs: 'Nos', pc: 'Nos', piece: 'Nos', pieces: 'Nos', unit: 'Nos', units: 'Nos', box: 'Box', boxes: 'Box', set: 'Set', sets: 'Set', kg: 'Kg', kgs: 'Kg', roll: 'Roll', rolls: 'Roll', meter: 'Meter', meters: 'Meter', mtr: 'Meter', litre: 'Litre', liter: 'Litre', pallet: 'Pallet', pallets: 'Pallet' };
 // Words that look like identifiers but are not serial numbers / tags.
 const NOT_ID = /^(?:serial|number|numbers|asset|tag|tags|date|quantity|invoice|challan|delivery|courier|tracking|received|description|vendor|remarks|total|amount|nos|pcs|units|model|part|item|none|nil|n\/a|na)$/i;
 
@@ -250,7 +250,14 @@ function parseDocument(lines, meta = {}) {
   }
   // parties
   const company = (v) => { const c = cutAtNextLabel(v).replace(/\s{2,}.*$/, ''); return stripPunct(c); };
-  pick('vendor', L.vendor, { clean: company, valid: (v) => v.length >= 3, fmt: (v) => (/[A-Za-z]{3}/.test(v) ? 1 : 0.65) });
+  pick('vendor', L.vendor, { clean: company, valid: (v) => v.length >= 3 && !/\b(?:GSTIN|GST|PAN|invoice|date)\b/i.test(v) && (v.match(/[A-Za-z]/g) || []).length >= v.length * 0.5, fmt: (v) => (/[A-Za-z]{3}/.test(v) ? 1 : 0.65) });
+  if (!fields.vendor) { // "Supplier" block: the first "Name : CODE - COMPANY LTD" line above the receiver block
+    const end = lines.findIndex((l) => /details\s+of\s+(?:receiver|consignee)|bill\s*to|ship\s*to/i.test(l.text));
+    for (let i = 0; i < (end < 0 ? Math.min(lines.length, 25) : end); i++) {
+      const m = /\b(?:Name|Neme|Narne)\s*[:;]?\s*(?:[A-Z0-9]{4,8}[\s\-]+)?([A-Za-z0-9&.,' ]{3,}?(?:\bPVT\b|\bPRIVATE\b|\bLTD\b|\bLIMITED\b|\bLLP\b|\bINC\b)[.,A-Za-z ]*?)(?=\s+(?:AWB|Courier|Ship|Order|RMA|Date)\b|$)/i.exec(lines[i].text);
+      if (m) { const v = stripPunct(m[1]); if (v.length >= 5) { fields.vendor = mkVal(v, 0.75, valueConf(lines[i], v), 1, 'label'); break; } }
+    }
+  }
   pick('sender', L.sender, { clean: company, valid: (v) => v.length >= 3 && !/^(?:the|date)\b/i.test(v), fmt: (v) => (/[A-Za-z]{3}/.test(v) ? 1 : 0.65) });
   if (!fields.vendor && !fields.sender) { // heuristic: a company-looking line near the top
     const idx = lines.slice(0, 8).findIndex((l) => /\b(?:Pvt\.?|Private|Ltd\.?|Limited|Inc\.?|LLP|Corp(?:oration)?|Technologies|Systems|Solutions|Enterprises)\b/i.test(l.text) && !/(?:ship\s*to|bill\s*to|consignee)/i.test(l.text));
@@ -283,7 +290,7 @@ function parseDocument(lines, meta = {}) {
   if (!fields.quantity) { for (const l of lines) { const m = /^\s*Total\b[^0-9A-Za-z]{0,3}\s*(\d{1,5})\s+(Nos|Pcs|Units?|Sets?|Boxes|Pieces)\b/i.exec(l.text); if (m && +m[1] >= 1) { fields.quantity = mkVal(String(+m[1]), 0.55, valueConf(l, m[1]), 1, 'pattern'); fields.unit = mkVal(UNIT_WORDS[m[2].toLowerCase()] || 'Nos', 0.55, valueConf(l, m[2]), 1, 'pattern'); break; } } }
   // courier / tracking
   pick('courierTracking', L.track, { clean: (v) => firstWord(cutAtNextLabel(v), /[A-Za-z0-9][A-Za-z0-9\-]{5,24}/), valid: (v) => v.length >= 6 && /\d{4}/.test(v), fmt: (v) => (/^\d{8,}$|^[A-Za-z]{1,4}\d{6,}$/.test(v) ? 1 : 0.8) });
-  pick('remarks', L.remarks, { clean: (v) => stripPunct(v).slice(0, 300), valid: (v) => v.length >= 2, fmt: () => 1 });
+  pick('remarks', L.remarks, { clean: (v) => stripPunct(v).slice(0, 300), valid: (v) => v.length >= 2 && (v.match(/[A-Za-z0-9]/g) || []).length >= v.length * 0.7 && /[A-Za-z0-9]{3}/.test(v), fmt: () => 1 });
 
   // serial numbers and asset tags
   const collect = (labelRe, kind) => {
@@ -305,6 +312,23 @@ function parseDocument(lines, meta = {}) {
     }
     return [...found.values()];
   };
+  // Invoice item grid (S.No | HSN | Part Number & Description | LPN | Qty | Unit | Rate ...): the first data row gives the part number, quantity and unit
+  if (!fields.quantity || !fields.itemDescription) {
+    const hi = lines.findIndex((l) => /(?:part\s*number|description)/i.test(l.text) && /\bqty\b|quantity/i.test(l.text));
+    const hj = hi >= 0 ? hi : lines.findIndex((l) => /part\s*number/i.test(l.text));
+    if (hj >= 0) {
+      for (let i = hj + 1; i < Math.min(lines.length, hj + 14); i++) {
+        const t = lines[i].text; if (/^\W*Total\b/i.test(t)) break;
+        const pm = /(?:^|[\s|])\d{6,9}\s*[|\s]\s*([A-Z][A-Z0-9]*\d[A-Z0-9]*(?:-[A-Z0-9]+)+)/.exec(t.replace(/\s+/g, ' '));
+        if (!pm) continue;
+        const qm = /(?:^|[\s|\/])(\d{1,4})\s*[\/|]?\s*(EA|NOS|PCS|UNITS?|SETS?)\b/i.exec(t.slice(pm.index + pm[0].length));
+        const conf = valueConf(lines[i], pm[1]);
+        if (!fields.itemDescription) fields.itemDescription = mkVal(pm[1], 0.8, conf, 1, 'table');
+        if (qm && !fields.quantity) { fields.quantity = mkVal(String(+qm[1]), 0.8, conf, 1, 'table'); const u = UNIT_WORDS[qm[2].toLowerCase()]; if (u && !fields.unit) fields.unit = mkVal(u, 0.8, conf, 1, 'table'); }
+        break;
+      }
+    }
+  }
   let serialNumbers = collect(L.serial, 'serial');
   // Ruled "Material Name | Serial No | Asset No | Quantity | Unit" tables (gate passes, challans): read row by row
   const tbl = readItemTable(lines);

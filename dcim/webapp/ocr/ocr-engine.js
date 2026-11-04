@@ -132,14 +132,16 @@ async function recognizeImage(buf, ext) {
   const worker = await getWorker(); const t0 = Date.now();
   const base = prep && ext ? prep.prepare(buf, ext, {}) : null;          // upright (EXIF), grey, never huge
   let out = await readPasses(worker, base ? base.buf : buf, t0);
+  let cur = base;                                                         // the picture the current line coordinates belong to
   let hs = wordHeights(out); const med0 = hs.length >= 8 ? hs[hs.length >> 1] : 0;
   // small print (screenshots, low-resolution scans): read again enlarged and keep the better reading
   if (prep && ext && med0 && med0 < 17 && Date.now() - t0 < OCR_TIMEOUT_MS * 0.3) {
     const up = prep.prepare(buf, ext, { scale: (base ? base.scale : 1) * Math.min(3, 26 / med0) });
-    if (up && up.scale > 1.2) { try { const out2 = await readPasses(worker, up.buf, t0); if (quality(out2) > quality(out)) out = out2; } catch (e) { /* keep the first reading */ } }
+    if (up && up.scale > 1.2) { try { const out2 = await readPasses(worker, up.buf, t0); if (quality(out2) > quality(out)) { out = out2; cur = up; } } catch (e) { /* keep the first reading */ } }
   }
   // ruled tables (gate passes, challans): re-read the table body as one block - the full-page passes often miss pale cells
-  if (base) { try { out = await tableRescue(worker, { ...base, src: buf, ext }, out, t0); } catch (e) { /* keep the page reading */ } }
+  if (cur) { try { out = await tableRescue(worker, { ...cur, src: buf, ext }, out, t0); } catch (e) { /* keep the page reading */ } }
+  if (cur) { try { await refineIds(worker, { ...cur, src: buf, ext }, out, t0); } catch (e) { /* keep the page reading */ } }
   if (med0 && med0 < 12) out.meta = { lowRes: true, textHeight: Math.round(med0) };
   return out;
 }
@@ -177,14 +179,14 @@ function collapseExtra(cands) {
     return c;
   });
 }
-function voteTokens(cands0) {
+function voteTokens(cands0, plain) {
   const cands = collapseExtra(cands0);
   const cnt = new Map(); cands.forEach((c) => cnt.set(c.t.length, (cnt.get(c.t.length) || 0) + 1)); const len = [...cnt.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0][0]; const same = cands.filter((c) => c.t.length === len); if (same.length < 2) return cands[0].t;
   let out = '';
   for (let i = 0; i < len; i++) {
     const tally = new Map(); same.forEach((c) => tally.set(c.t[i], (tally.get(c.t[i]) || 0) + 1 + c.conf / 400));
     let best = [...tally.entries()].sort((a, b) => b[1] - a[1])[0][0];
-    if (LOOK.test(best)) { const dig = same.filter((c) => /\d/.test(c.t[i]) && c.conf >= 50).sort((a, b) => b.conf - a.conf)[0]; if (dig) best = dig.t[i]; }
+    if (!plain && LOOK.test(best)) { const dig = same.filter((c) => /\d/.test(c.t[i]) && c.conf >= 50).sort((a, b) => b.conf - a.conf)[0]; if (dig) best = dig.t[i]; }
     out += best;
   }
   return out;
@@ -210,6 +212,28 @@ async function refineTable(worker, base, lines, rectLeft, t0) {
         else { const tt = t.replace(/[^A-Za-z0-9]/g, '').toUpperCase(); if (tt.length >= 4) cands.push({ t: tt, conf: r.data.confidence || 0 }); }
       }
       if (!first && cands.length > 1) { const v = voteTokens(cands); if (v && v !== txt.toUpperCase()) { w.text = w.text.replace(txt, v); l.text = l.words.map((x) => x.text).join(' '); } }
+    }
+  }
+}
+// Document / invoice / tracking numbers next to their label: re-read the value on its own (enlarged, contrast-stretched) and vote with the page reading.
+async function refineIds(worker, base, lines, t0) {
+  if (!prep || !base.ext || !base.src) return;
+  const LAB = /(?:invoice|inv|challan|dc|grn|pod|order|awb|tracking|rma|serial)\s*(?:no|number|num|#)?\.?\s*[:#]?/i;
+  let n = 0;
+  for (const l of lines) {
+    if (n >= 8 || Date.now() - t0 > OCR_TIMEOUT_MS * 0.85) return;
+    const lm = LAB.exec(l.text); const top = lines.indexOf(l) < 6;
+    for (const w of l.words) {
+      if (typeof w.x0 !== 'number') continue;
+      const txt = String(w.text).replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '');
+      if (!/^[A-Za-z0-9][A-Za-z0-9\-\/]{7,24}$/.test(txt) || !/\d/.test(txt) || !/[A-Za-z]/.test(txt)) continue;
+      if (!lm && !top) continue; if (w.conf >= 93) continue;
+      n++;
+      const rect = { x: w.x0 - 12, y: w.y0 - 10, w: (w.x1 - w.x0) + 24, h: (w.y1 - w.y0) + 20 };
+      await worker.setParameters({ tessedit_pageseg_mode: '7', thresholding_method: '0', tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/' });
+      const cands = [{ t: txt.toUpperCase(), conf: w.conf }];
+      for (const up of [1, 2, 3]) { const png = prep.cropCell(base.src, base.ext, base.scale, rect, up); if (!png) continue; const r = await worker.recognize(png, {}, {}); const tt = String(r.data.text || '').trim().replace(/[^A-Za-z0-9\-\/]/g, '').toUpperCase(); if (tt.length >= 6) cands.push({ t: tt, conf: r.data.confidence || 0 }); }
+      if (cands.length > 1) { const v = voteTokens(cands, true); if (v && v !== txt.toUpperCase()) { w.text = w.text.replace(txt, v); l.text = l.words.map((x) => x.text).join(' '); } }
     }
   }
 }
