@@ -203,6 +203,14 @@ function readItemTable(lines) {
     rows.push({ n: rows.length + 1, name, serial, qty, conf, done: false });
   }
   if (!rows.length) return null;
+  // a name clipped by the table edge loses its first letter ("SSY,CRD" for "ASSY,CRD"): restore it when two other rows agree on the full prefix
+  { const names = rows.map((r) => r.name || ''); const warn = [];
+    rows.forEach((r, i) => { if (!r.name) return; const others = names.filter((n, k) => k !== i && n.length > 4); if (others.length < 2) return;
+      let p = others[0]; for (const o of others.slice(1)) { let k = 0; while (k < p.length && k < o.length && p[k] === o[k]) k++; p = p.slice(0, k); }
+      if (p.length >= 5 && /^[A-Za-z]/.test(p) && r.name.startsWith(p.slice(1)) && !r.name.startsWith(p)) { r.name = p[0] + r.name; warn.push(r.n); } });
+    if (warn.length) rows.fixed = warn; }
+  // part names are comma-joined codes without spaces; a wrapped cell or a gap in the reading must not insert one
+  rows.forEach((r) => { if (r.name && (r.name.match(/,/g) || []).length >= 2) r.name = r.name.replace(/\s+/g, ''); });
   return { rows, unit, conf: confN ? confSum / confN : 70 };
 }
 function parseDocument(lines, meta = {}) {

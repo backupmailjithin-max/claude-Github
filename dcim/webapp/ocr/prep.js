@@ -143,4 +143,23 @@ function prepare(buf, ext, opts = {}) {
     return { buf: encodeGrayPng(g, w, h), w, h, scale, rotated, srcW: d.w, srcH: d.h };
   } catch (e) { return null; }
 }
-module.exports = { prepare, exifOrientation };
+// cropCell(buf, ext, baseScale, rect, up) -> PNG buffer | null. A small cell of the (un-flattened) picture, enlarged `up` times and contrast-stretched,
+// for re-reading one short value (a serial number) on its own. rect is in the coordinates of the prepared picture (scale = baseScale).
+function cropCell(buf, ext, baseScale, rect, up) {
+  try {
+    const d = decode(buf, ext); if (!d) return null;
+    let { g, w, h } = orient(toGray(d), d.w, d.h, d.orient);
+    if (Math.abs(baseScale - 1) > 0.02) { const nw = Math.max(16, Math.round(w * baseScale)), nh = Math.max(16, Math.round(h * baseScale)); g = resize(g, w, h, nw, nh); w = nw; h = nh; }
+    const x0 = Math.max(0, Math.round(rect.x)), y0 = Math.max(0, Math.round(rect.y)); const cw = Math.min(w - x0, Math.round(rect.w)), ch = Math.min(h - y0, Math.round(rect.h));
+    if (cw < 8 || ch < 8) return null;
+    const c = new Uint8Array(cw * ch); for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) c[y * cw + x] = g[(y0 + y) * w + x0 + x];
+    const hist = new Uint32Array(256); for (let i = 0; i < c.length; i++) hist[c[i]]++;
+    let lo = 0, hi = 255, acc = 0; for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= c.length * 0.01) { lo = v; break; } } acc = 0; for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc >= c.length * 0.3) { hi = v; break; } }
+    if (hi - lo < 10) return null;
+    for (let i = 0; i < c.length; i++) c[i] = Math.max(0, Math.min(255, Math.round(255 * (c[i] - lo) / (hi - lo))));
+    const pad = 16; const nw = cw * up + pad * 2, nh = ch * up + pad * 2; const big = new Uint8Array(nw * nh).fill(255);
+    const r = resize(c, cw, ch, cw * up, ch * up); for (let y = 0; y < ch * up; y++) for (let x = 0; x < cw * up; x++) big[(y + pad) * nw + x + pad] = r[y * cw * up + x];
+    return encodeGrayPng(big, nw, nh);
+  } catch (e) { return null; }
+}
+module.exports = { prepare, exifOrientation, cropCell };

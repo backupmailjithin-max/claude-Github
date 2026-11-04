@@ -139,7 +139,7 @@ async function recognizeImage(buf, ext) {
     if (up && up.scale > 1.2) { try { const out2 = await readPasses(worker, up.buf, t0); if (quality(out2) > quality(out)) out = out2; } catch (e) { /* keep the first reading */ } }
   }
   // ruled tables (gate passes, challans): re-read the table body as one block - the full-page passes often miss pale cells
-  if (base) { try { out = await tableRescue(worker, base, out, t0); } catch (e) { /* keep the page reading */ } }
+  if (base) { try { out = await tableRescue(worker, { ...base, src: buf, ext }, out, t0); } catch (e) { /* keep the page reading */ } }
   if (med0 && med0 < 12) out.meta = { lowRes: true, textHeight: Math.round(med0) };
   return out;
 }
@@ -160,7 +160,58 @@ async function tableRescue(worker, base, lines, t0) {
   const res = await worker.recognize(base.buf, { rectangle: { left, top, width, height } }, { blocks: true });
   const extra = linesFromData(res.data || {});
   extra.forEach((l) => { l.table = true; });
-  return mergeTable(lines, extra);
+  const merged = mergeTable(lines, extra);
+  try { await refineTable(worker, base, merged, left, t0); } catch (e) { if (process.env.OCR_DEBUG) console.error('refine', e); }
+  return merged;
+}
+// Pale or small print: re-read each short serial-like token (and a first word clipped at the table edge) on its own, at several enlargements,
+// and vote character by character. A look-alike letter (I, O, Q, ...) loses to a digit that any clear reading supports.
+const LOOK = /[IOQLDSBZ]/i;
+// "TI9CVK" next to "T9CVK": a stray thin stroke read as an extra I/L/1 - drop it when that makes the reading agree with a shorter one
+function collapseExtra(cands) {
+  const lens = cands.map((c) => c.t.length); const min = Math.min(...lens);
+  return cands.map((c) => {
+    if (c.t.length !== min + 1) return c;
+    for (let i = 0; i < c.t.length; i++) { if (!/[IL1|]/.test(c.t[i])) continue; const r = c.t.slice(0, i) + c.t.slice(i + 1);
+      const ok = cands.some((o) => o.t.length === min && [...r].filter((ch, k) => ch === o.t[k] || (LOOK.test(ch) && /\d/.test(o.t[k]))).length >= min - 1); if (ok) return { ...c, t: r }; }
+    return c;
+  });
+}
+function voteTokens(cands0) {
+  const cands = collapseExtra(cands0);
+  const cnt = new Map(); cands.forEach((c) => cnt.set(c.t.length, (cnt.get(c.t.length) || 0) + 1)); const len = [...cnt.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0][0]; const same = cands.filter((c) => c.t.length === len); if (same.length < 2) return cands[0].t;
+  let out = '';
+  for (let i = 0; i < len; i++) {
+    const tally = new Map(); same.forEach((c) => tally.set(c.t[i], (tally.get(c.t[i]) || 0) + 1 + c.conf / 400));
+    let best = [...tally.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    if (LOOK.test(best)) { const dig = same.filter((c) => /\d/.test(c.t[i]) && c.conf >= 50).sort((a, b) => b.conf - a.conf)[0]; if (dig) best = dig.t[i]; }
+    out += best;
+  }
+  return out;
+}
+async function refineTable(worker, base, lines, rectLeft, t0) {
+  if (!prep || !base.ext) return;
+  const SER = (x) => /^[A-Za-z0-9]{4,14}$/.test(x) && !/^(?:nos|pcs|unit|units|asset|serial|quantity|tracking|material|name)$/i.test(x) && !/^\d+$/.test(x);
+  for (const l of lines) {
+    if (!l.table) continue;
+    for (const w of l.words) {
+      if (Date.now() - t0 > OCR_TIMEOUT_MS * 0.8) return;
+      if (typeof w.x0 !== 'number') continue;
+      const txt = String(w.text).replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '');
+      const first = false;
+      if (!first && !(SER(txt) && w.conf < 92)) continue;
+      const pad = first ? 48 : 12; const rect = { x: w.x0 - pad, y: w.y0 - 10, w: (w.x1 - w.x0) + pad + 12, h: (w.y1 - w.y0) + 20 };
+      await worker.setParameters({ tessedit_pageseg_mode: '7', thresholding_method: '0', tessedit_char_whitelist: first ? '' : 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789' });
+      const cands = [{ t: txt.toUpperCase(), conf: w.conf }];
+      for (const up of (first ? [2] : [2, 3, 4])) {
+        const png = prep.cropCell(base.src, base.ext, base.scale, rect, up); if (!png) continue;
+        const r = await worker.recognize(png, {}, {}); const t = String(r.data.text || '').trim();
+        if (first) { const o = String(w.text); if (t && t.length > o.length && t.length <= o.length + 3 && t.toUpperCase().includes(o.toUpperCase().replace(/^[^A-Z0-9]+/, '').slice(0, 5))) { w.text = t; l.text = l.words.map((x) => x.text).join(' '); } }
+        else { const tt = t.replace(/[^A-Za-z0-9]/g, '').toUpperCase(); if (tt.length >= 4) cands.push({ t: tt, conf: r.data.confidence || 0 }); }
+      }
+      if (!first && cands.length > 1) { const v = voteTokens(cands); if (v && v !== txt.toUpperCase()) { w.text = w.text.replace(txt, v); l.text = l.words.map((x) => x.text).join(' '); } }
+    }
+  }
 }
 // table-body lines replace whatever the page passes read inside that block (the block was read as a table, so its rows are cleaner)
 function mergeTable(lines, extra) {
