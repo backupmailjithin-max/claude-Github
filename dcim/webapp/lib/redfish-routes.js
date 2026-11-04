@@ -160,6 +160,130 @@ function buildHwSummary(sys) {
   return parts.join(' - ').slice(0, 250) || null;
 }
 
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Hardware inventory (CPU / Memory / Disks / NICs) - read on demand, stored on the asset, shown as separate columns.
+// Standard Redfish resources only (Systems/*/Processors, Memory, Storage -> Drives, EthernetInterfaces), so Dell iDRAC and
+// HPE iLO use the same code; every section is independent and optional - a BMC that lacks one just leaves it empty.
+// ---------------------------------------------------------------------------------------------------------------------
+const cleanCpuName = (m) => String(m || '').replace(/\((R|TM)\)/gi, '').replace(/\bCPU\b/g, '').replace(/\s+@.*$/, '').replace(/\s+/g, ' ').trim();
+const fmtGB = (gb) => (gb >= 1000 ? (Math.round(gb / 10) / 100) + ' TB' : Math.round(gb) + ' GB');
+const groupCount = (items, keyFn) => { const m = new Map(); items.forEach((i) => { const k = keyFn(i); m.set(k, (m.get(k) || 0) + 1); }); return [...m.entries()]; };
+
+function summariseCpu(items, quick) {
+  if (quick) { const n = quick.Count, m = cleanCpuName(quick.Model); return m ? ((n ? n + ' x ' : '') + m).slice(0, 250) : null; }
+  if (!items.length) return null;
+  return groupCount(items, (c) => cleanCpuName(c.model) + (c.cores ? ' (' + c.cores + 'C)' : '')).map(([k, n]) => n + ' x ' + k).join(', ').slice(0, 250);
+}
+function summariseMemory(items, totalGiB) {
+  const total = totalGiB != null ? Math.round(Number(totalGiB)) : Math.round(items.reduce((a, d) => a + (d.sizeGiB || 0), 0));
+  if (!items.length) return total ? total + ' GB' : null;
+  const g = groupCount(items, (d) => Math.round(d.sizeGiB) + 'GB' + (d.type ? ' ' + d.type : '')).map(([k, n]) => n + ' x ' + k).join(', ');
+  return (total + ' GB (' + g + ')').slice(0, 250);
+}
+function summariseDisks(items) {
+  if (!items.length) return null;
+  return groupCount(items, (d) => fmtGB(d.capacityGB || 0) + (d.media ? ' ' + d.media : '') + (d.protocol && d.protocol !== d.media ? ' ' + d.protocol : '')).map(([k, n]) => n + ' x ' + k).join(', ').slice(0, 250);
+}
+function summariseNics(items) {
+  const up = items.filter((n) => n.link);
+  if (!items.length) return null;
+  const sp = groupCount(items.filter((n) => n.speedMbps), (n) => (n.speedMbps >= 1000 ? Math.round(n.speedMbps / 1000) + 'G' : n.speedMbps + 'M')).map(([k, n]) => n + ' x ' + k).join(', ');
+  return (items.length + ' port' + (items.length === 1 ? '' : 's') + (sp ? ' (' + sp + ')' : '') + ' - ' + up.length + ' up').slice(0, 250);
+}
+
+async function mapLimit(list, limit, fn) {
+  const out = new Array(list.length); let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, list.length) }, async () => { while (next < list.length) { const i = next++; try { out[i] = await fn(list[i], i); } catch (e) { out[i] = null; } } }));
+  return out;
+}
+const memberLinks = (coll) => ((coll && coll.Members) || []).map((m) => m && m['@odata.id']).filter(Boolean);
+
+async function collectHardware(monitorFetch, ip, port, username, password, systemPath) {
+  const get = (path) => redfishGet(monitorFetch, ip, port, username, password, path);
+  const sysPath = systemPath || '/redfish/v1/Systems/System.Embedded.1';
+  let sys = null;
+  try { sys = await get(sysPath); } catch (e) { if (e.statusCode === 401 || e.statusCode === 403) throw e; }
+  if (!sys) { // the saved system path is not valid on this BMC: use the first system in the collection
+    const root = await get('/redfish/v1'); const coll = await get((root.Systems && root.Systems['@odata.id']) || '/redfish/v1/Systems');
+    const first = memberLinks(coll)[0]; if (!first) throw new Error('No computer system found on this BMC');
+    sys = await get(first);
+  }
+  const base = sys['@odata.id'] || sysPath;
+  const link = (name) => (sys[name] && sys[name]['@odata.id']) || (base + '/' + name);
+  const res = { cpu: [], memory: [], disks: [], nics: [], notes: [] };
+
+  // CPUs
+  try {
+    const items = await mapLimit(memberLinks(await get(link('Processors'))).slice(0, 16), 4, (l) => get(l));
+    res.cpu = items.filter((c) => c && (!c.Status || c.Status.State !== 'Absent') && (c.ProcessorType == null || /cpu/i.test(c.ProcessorType))).map((c) => ({
+      socket: c.Socket || c.Id || c.Name, model: c.Model || c.Name, cores: c.TotalCores || null, threads: c.TotalThreads || null,
+      speedMHz: c.MaxSpeedMHz || null, health: (c.Status && c.Status.Health) || null }));
+  } catch (e) { res.notes.push('Processors not available'); }
+
+  // Memory (installed DIMMs only)
+  try {
+    const items = await mapLimit(memberLinks(await get(link('Memory'))).slice(0, 96), 6, (l) => get(l));
+    res.memory = items.filter((d) => d && (!d.Status || d.Status.State !== 'Absent') && Number(d.CapacityMiB) > 0).map((d) => ({
+      slot: d.DeviceLocator || d.Name || d.Id, sizeGiB: Math.round(Number(d.CapacityMiB) / 1024), type: d.MemoryDeviceType || d.MemoryType || null,
+      speedMHz: d.OperatingSpeedMhz || d.AllowedSpeedsMHz && d.AllowedSpeedsMHz[0] || null, manufacturer: d.Manufacturer || null, part: (d.PartNumber || '').trim() || null,
+      health: (d.Status && d.Status.Health) || null }));
+  } catch (e) { res.notes.push('Memory modules not available'); }
+
+  // Disks: Storage -> Drives (Dell iDRAC, HPE iLO 5+), then SimpleStorage, then HPE SmartStorage
+  const driveFrom = (d) => ({ name: d.Name || d.Id, model: (d.Model || '').trim() || null, capacityGB: d.CapacityBytes ? Math.round(Number(d.CapacityBytes) / 1e9) : 0,
+    media: d.MediaType || null, protocol: d.Protocol || null, serial: (d.SerialNumber || '').trim() || null, health: (d.Status && d.Status.Health) || null, state: (d.Status && d.Status.State) || null });
+  try {
+    const ctrls = await mapLimit(memberLinks(await get(link('Storage'))).slice(0, 16), 4, (l) => get(l));
+    const links = []; ctrls.forEach((c) => { if (c) ((c.Drives || []).forEach((d) => d && d['@odata.id'] && links.push(d['@odata.id']))); });
+    const drives = await mapLimit([...new Set(links)].slice(0, 96), 6, (l) => get(l));
+    res.disks = drives.filter((d) => d && (!d.Status || d.Status.State !== 'Absent')).map(driveFrom);
+  } catch (e) { /* try the fallbacks */ }
+  if (!res.disks.length) {
+    try {
+      const ss = await mapLimit(memberLinks(await get(link('SimpleStorage'))).slice(0, 16), 4, (l) => get(l));
+      ss.forEach((c) => c && (c.Devices || []).forEach((d) => d && d.CapacityBytes && res.disks.push({ name: d.Name, model: d.Model || null, capacityGB: Math.round(Number(d.CapacityBytes) / 1e9), media: null, protocol: null, serial: null, health: (d.Status && d.Status.Health) || null })));
+    } catch (e) { /* not provided */ }
+  }
+  if (!res.disks.length) {
+    try {
+      const sm = sys.Oem && sys.Oem.Hpe && sys.Oem.Hpe.Links && sys.Oem.Hpe.Links.SmartStorage && sys.Oem.Hpe.Links.SmartStorage['@odata.id'];
+      if (sm) {
+        const root = await get(sm); const arr = root.Links && root.Links.ArrayControllers && root.Links.ArrayControllers['@odata.id'];
+        const ac = arr ? memberLinks(await get(arr)) : [];
+        for (const a of ac.slice(0, 8)) {
+          const c = await get(a); const pd = c.Links && c.Links.PhysicalDrives && c.Links.PhysicalDrives['@odata.id'];
+          if (!pd) continue;
+          const drives = await mapLimit(memberLinks(await get(pd)).slice(0, 96), 6, (l) => get(l));
+          drives.forEach((d) => d && res.disks.push({ name: d.Location || d.Name, model: (d.Model || '').trim() || null, capacityGB: d.CapacityGB ? Math.round(Number(d.CapacityGB) * 1.073741824) : (d.CapacityMiB ? Math.round(d.CapacityMiB * 1.048576 / 1000) : 0),
+            media: d.MediaType === 'SSD' ? 'SSD' : (d.MediaType ? 'HDD' : null), protocol: d.InterfaceType || null, serial: (d.SerialNumber || '').trim() || null, health: d.Status && d.Status.Health || null }));
+        }
+      }
+    } catch (e) { /* not provided */ }
+  }
+  if (!res.disks.length) res.notes.push('Disks not reported by this BMC (they may sit behind a RAID controller that does not expose them)');
+
+  // Network ports
+  try {
+    const items = await mapLimit(memberLinks(await get(link('EthernetInterfaces'))).slice(0, 48), 6, (l) => get(l));
+    res.nics = items.filter((n) => n && (!n.Status || n.Status.State !== 'Absent')).map((n) => ({
+      name: n.Name || n.Id, mac: n.MACAddress || n.PermanentMACAddress || null, speedMbps: n.SpeedMbps || null,
+      link: /up|linkup/i.test(String(n.LinkStatus || '')) || (n.Status && n.Status.State === 'Enabled' && !n.LinkStatus && !!n.SpeedMbps), linkStatus: n.LinkStatus || null,
+      ip: (n.IPv4Addresses && n.IPv4Addresses[0] && n.IPv4Addresses[0].Address) || null }));
+  } catch (e) { res.notes.push('Network ports not available'); }
+
+  const quickCpu = sys.ProcessorSummary || null;
+  return {
+    ...res,
+    summary: {
+      cpu: res.cpu.length ? summariseCpu(res.cpu) : summariseCpu([], quickCpu),
+      memory: summariseMemory(res.memory, sys.MemorySummary && sys.MemorySummary.TotalSystemMemoryGiB),
+      disk: summariseDisks(res.disks), nic: summariseNics(res.nics),
+    },
+    totals: { cpus: res.cpu.length, cores: res.cpu.reduce((a, c) => a + (c.cores || 0), 0), dimms: res.memory.length, drives: res.disks.length, ports: res.nics.length },
+  };
+}
+
 function normalizeVendor(manufacturer, oemKeys) {
   const m = String(manufacturer || '').trim();
   if (m) return m;
@@ -253,6 +377,8 @@ async function detectRedfish(monitorFetch, ip, port, username, password, retryOn
         out.healthStatus = (sys.Status && sys.Status.Health) || null;
         out.powerState = sys.PowerState || null;
         out.hwSummary = buildHwSummary(sys);
+        out.cpuQuick = summariseCpu([], sys.ProcessorSummary || null);
+        out.memQuick = summariseMemory([], sys.MemorySummary && sys.MemorySummary.TotalSystemMemoryGiB);
       }
     }
   } catch (e) {
@@ -491,6 +617,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
     // asset-tag-style value, not the vendor's real hardware serial, and is COALESCE-protected
     // so it's never silently overwritten. This field always reflects the latest Redfish poll.
     redfishSerialNumber: a.redfish_serial_number, hwSummary: a.redfish_hw_summary,
+    cpuSummary: a.redfish_cpu, memSummary: a.redfish_mem, diskSummary: a.redfish_disk, nicSummary: a.redfish_nic, hwCollectedAt: a.redfish_hw_at,
     redfishConfigured: !!a.redfish_username, redfishVersion: a.redfish_version, bmcFirmware: a.bmc_firmware, biosVersion: a.bios_version,
     healthStatus: a.health_status, powerState: a.power_state, alertCount: a.redfish_alert_count,
     powerWatts: a.redfish_power_watts, hardwareType: a.hardware_type, monitorIgnored: !!a.redfish_monitor_ignored,
@@ -563,7 +690,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
           `UPDATE assets SET redfish_username = NULL, redfish_password = NULL, redfish_port = NULL,
              redfish_version = NULL, bmc_firmware = NULL, bios_version = NULL, health_status = NULL, power_state = NULL,
              redfish_alert_count = NULL, redfish_power_watts = NULL, redfish_monitor_ignored = 0,
-             redfish_serial_number = NULL, redfish_hw_summary = NULL, last_redfish_sync_at = NULL, last_redfish_error = NULL
+             redfish_serial_number = NULL, redfish_hw_summary = NULL, redfish_cpu = NULL, redfish_mem = NULL, redfish_disk = NULL, redfish_nic = NULL, redfish_hw_json = NULL, redfish_hw_at = NULL, last_redfish_sync_at = NULL, last_redfish_error = NULL
            WHERE id = ?`,
           [rows[0].id]
         );
@@ -612,7 +739,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
        WHERE id = ?`,
       [r.vendor, r.model, r.serialNumber, r.biosVersion, r.serialNumber, r.bmcFirmware, r.biosVersion, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
     );
-    try { await pool.query('UPDATE assets SET redfish_hw_summary = ? WHERE id = ?', [r.hwSummary || null, asset.id]); } catch (e) { /* cosmetic column - never fails a sync */ }
+    try { await pool.query('UPDATE assets SET redfish_hw_summary = ?, redfish_cpu = IF(redfish_hw_at IS NULL, ?, redfish_cpu), redfish_mem = IF(redfish_hw_at IS NULL, ?, redfish_mem) WHERE id = ?', [r.hwSummary || null, r.cpuQuick || null, r.memQuick || null, asset.id]); } catch (e) { /* cosmetic column - never fails a sync */ }
     return { reachable: true, ...r };
   }
 
@@ -876,7 +1003,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
                WHERE id = ?`,
               [r.credential.username, r.credential.password || '', r.vendor, r.model, r.serialNumber, r.biosVersion, r.serialNumber, r.bmcFirmware, r.biosVersion, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
             );
-            try { await pool.query('UPDATE assets SET redfish_hw_summary = ? WHERE id = ?', [r.hwSummary || null, asset.id]); } catch (e) { /* cosmetic column */ }
+            try { await pool.query('UPDATE assets SET redfish_hw_summary = ?, redfish_cpu = IF(redfish_hw_at IS NULL, ?, redfish_cpu), redfish_mem = IF(redfish_hw_at IS NULL, ?, redfish_mem) WHERE id = ?', [r.hwSummary || null, r.cpuQuick || null, r.memQuick || null, asset.id]); } catch (e) { /* cosmetic column */ }
             job.applied++;
           } finally { job.processed++; }
         }
@@ -897,6 +1024,35 @@ module.exports = function registerRedfishRoutes(app, deps) {
     const job = applyJobs.get(req.params.jobId);
     if (!job) return res.status(404).json({ error: 'This apply has finished and its results have been cleared, or the job id is wrong.' });
     res.json({ status: job.status, total: job.total, processed: job.processed, applied: job.applied, requested: job.total, skippedNotFound: job.skippedNotFound, skippedNoMatch: job.skippedNoMatch, error: job.error });
+  });
+
+  // Hardware inventory: read CPU / memory / disks / NIC ports from the BMC now, store the result on the asset (summaries for the table columns, full detail as JSON).
+  const hwInFlight = new Set();
+  app.post('/api/monitoring/redfish/:assetId/hardware', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+    try {
+      const asset = await loadAssetForUser(req, res, req.params.assetId);
+      if (!asset) return;
+      if (!asset.redfish_username) return res.status(400).json({ error: 'No Redfish credentials saved for this asset yet' });
+      if (hwInFlight.has(asset.id)) return res.status(409).json({ error: 'Hardware is already being collected for this device' });
+      hwInFlight.add(asset.id);
+      try {
+        let hw;
+        try { hw = await collectHardware(monitorFetch, asset.mgmt_ip, asset.redfish_port, asset.redfish_username, asset.redfish_password, null); }
+        catch (e) { return res.status(502).json({ error: e.statusCode === 401 || e.statusCode === 403 ? 'The BMC rejected the saved credentials' : 'Could not read the hardware from the BMC: ' + String((e && e.cause && e.cause.code) || e.message || e).slice(0, 160) }); }
+        const detail = { cpu: hw.cpu, memory: hw.memory, disks: hw.disks, nics: hw.nics, notes: hw.notes, totals: hw.totals };
+        await pool.query('UPDATE assets SET redfish_cpu = ?, redfish_mem = ?, redfish_disk = ?, redfish_nic = ?, redfish_hw_json = ?, redfish_hw_at = NOW() WHERE id = ?',
+          [hw.summary.cpu, hw.summary.memory, hw.summary.disk, hw.summary.nic, JSON.stringify(detail).slice(0, 4000000), asset.id]);
+        res.json({ ok: true, summary: hw.summary, ...detail, collectedAt: new Date().toISOString() });
+      } finally { hwInFlight.delete(asset.id); }
+    } catch (e) { sendErr(res, e); }
+  });
+  app.get('/api/monitoring/redfish/:assetId/hardware', authenticateToken, async (req, res) => {
+    try {
+      const asset = await loadAssetForUser(req, res, req.params.assetId);
+      if (!asset) return;
+      let detail = null; try { detail = asset.redfish_hw_json ? JSON.parse(asset.redfish_hw_json) : null; } catch (e) { detail = null; }
+      res.json({ collected: !!detail, collectedAt: asset.redfish_hw_at, summary: { cpu: asset.redfish_cpu, memory: asset.redfish_mem, disk: asset.redfish_disk, nic: asset.redfish_nic }, ...(detail || { cpu: [], memory: [], disks: [], nics: [], notes: [], totals: {} }) });
+    } catch (e) { sendErr(res, e); }
   });
 
   app.get('/api/monitoring/redfish/:assetId/firmware-inventory', authenticateToken, async (req, res) => {
@@ -982,3 +1138,8 @@ async function getRedfishTaskStatusForDevice(pool, monitorFetch, deviceId, taskU
 }
 module.exports.pickSerial = pickSerial;
 module.exports.buildHwSummary = buildHwSummary;
+module.exports.collectHardware = collectHardware;
+module.exports.summariseDisks = summariseDisks;
+module.exports.summariseNics = summariseNics;
+module.exports.summariseMemory = summariseMemory;
+module.exports.summariseCpu = summariseCpu;

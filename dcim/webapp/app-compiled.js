@@ -442,6 +442,8 @@ const api = {
     // Optional: omit both (or pass {}) to fall back to the old full-candidate-list behavior.
     applyRedfishDiscoveryStart: (assetIds, credentialsByAsset, credentialIdsByAsset) => apiFetch('/monitoring/redfish/discover/apply', { method: 'POST', body: JSON.stringify({ assetIds, credentialsByAsset, credentialIdsByAsset }), timeoutMs: 15000 }),
     applyRedfishDiscoveryStatus: (jobId) => apiFetch('/monitoring/redfish/discover/apply/' + encodeURIComponent(jobId), { timeoutMs: 15000 }),
+    getRedfishHardware: (assetId) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/hardware'),
+    collectRedfishHardware: (assetId) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/hardware', { method: 'POST', timeoutMs: 90000 }),
     getRedfishFirmwareInventory: (assetId) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/firmware-inventory', { timeoutMs: 20000 }),
     updateRedfishFirmware: (assetId, imageUri) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/firmware/update', { method: 'POST', body: JSON.stringify({ imageUri }) }),
     getAuditLogs: (params = {}) => { const q = new URLSearchParams(); if (params.action) q.set('action', params.action); if (params.username) q.set('username', params.username); if (params.entity) q.set('entity', params.entity); if (params.status) q.set('status', params.status); if (params.from) q.set('from', params.from); if (params.to) q.set('to', params.to); if (params.limit) q.set('limit', params.limit); if (params.offset) q.set('offset', params.offset); const qs = q.toString(); return apiFetch('/audit-logs' + (qs ? '?' + qs : '')); },
@@ -1587,13 +1589,15 @@ const REDFISH_COLUMNS = [
     { key: "hardwareType", label: "Category", format: (v) => v || "Uncategorized" },
     { key: "mgmtIp", label: "Mgmt IP" },
     { key: "_vendorModel", label: "Vendor / Model", format: (v, row) => row.vendor ? `${row.vendor} ${row.model || ""}`.trim() : "—" },
-    { key: "hwSummary", label: "Hardware", format: (v) => v || "—" },
+    { key: "cpuSummary", label: "CPU", format: (v) => v || "—" }, { key: "memSummary", label: "Memory", format: (v) => v || "—" },
+    { key: "diskSummary", label: "Disk", format: (v) => v || "—" }, { key: "nicSummary", label: "NIC", format: (v) => v || "—" },
     { key: "healthStatus", label: "Health", format: (v) => v || "Unknown" },
     { key: "powerState", label: "Power State" },
     { key: "powerWatts", label: "Power (W)", format: (v) => (v == null ? "—" : `${v} W`) },
     { key: "alertCount", label: "Alerts", format: (v) => (v == null ? "—" : String(v)) },
     { key: "biosVersion", label: "BIOS Version" }, { key: "bmcFirmware", label: "BMC Firmware", format: (v) => v || "—" },
     { key: "fwTarget", label: "Target BIOS", format: (v) => v || "—" }, { key: "fwStatus", label: "Firmware Status", format: (v) => v || "—" },
+    { key: "syncState", label: "Sync Status", format: (v) => v || "—" },
     { key: "lastSyncAt", label: "Last Sync", format: (v) => (v ? new Date(v).toLocaleString() : "Never") },
 ];
 function rowsFromColumns(items, columns) { return items.map((r) => { const obj = {}; columns.forEach((c) => { obj[c.label] = c.format ? c.format(r[c.key], r) : (r[c.key] != null ? r[c.key] : ""); }); return obj; }); }
@@ -8400,6 +8404,95 @@ function RedfishDiscoverModal({ onClose, onApplied }) {
                     scan && React.createElement("button", { type: "button", onClick: apply, disabled: busy || !selected.size, className: "neu-btn-primary" }, busy ? (applyProgress && applyProgress.total ? `Applying… ${applyProgress.processed} / ${applyProgress.total}` : "Applying…") : `Apply to ${selected.size} Selected`))))
         , document.body);
 }
+// ===== Multi-Vendor page: hardware detail window + overview modules =====
+function RfHwDetailModal({ asset, canEdit, onClose, onChanged }) {
+    const [data, setData] = useState(null);
+    const [err, setErr] = useState("");
+    const [busy, setBusy] = useState(false);
+    const [tab, setTab] = useState("cpu");
+    const open = () => { api.getRedfishHardware(asset.id).then(setData).catch((e) => setErr(e.message || "Could not load")); };
+    useEffect(open, [asset.id]);
+    const collect = async () => { setBusy(true); setErr(""); try { await api.collectRedfishHardware(asset.id); open(); if (onChanged) onChanged(); } catch (e) { setErr(e.message || "Could not read the hardware from the BMC"); } finally { setBusy(false); } };
+    const th = { textAlign: "left", padding: "6px 8px", fontSize: 10, textTransform: "uppercase", color: "#64748B", borderBottom: "1px solid #E2E8F0", whiteSpace: "nowrap" };
+    const td = { padding: "6px 8px", fontSize: 12, borderBottom: "1px solid #F1F5F9", fontFamily: "Inter" };
+    const mono = { ...td, fontFamily: "'JetBrains Mono'", fontSize: 11 };
+    const sections = {
+        cpu: { label: "CPU", cols: ["Socket", "Model", "Cores", "Threads", "Max MHz", "Health"], rows: (data && data.cpu || []).map((c) => [c.socket, c.model, c.cores, c.threads, c.speedMHz, c.health]) },
+        memory: { label: "Memory", cols: ["Slot", "Size", "Type", "Speed MHz", "Manufacturer", "Part No", "Health"], rows: (data && data.memory || []).map((d) => [d.slot, d.sizeGiB + " GB", d.type, d.speedMHz, d.manufacturer, d.part, d.health]) },
+        disks: { label: "Disks", cols: ["Name", "Model", "Capacity", "Media", "Protocol", "Serial", "Health"], rows: (data && data.disks || []).map((d) => [d.name, d.model, d.capacityGB ? (d.capacityGB >= 1000 ? (Math.round(d.capacityGB / 10) / 100) + " TB" : d.capacityGB + " GB") : "", d.media, d.protocol, d.serial, d.health]) },
+        nics: { label: "Network ports", cols: ["Port", "MAC", "Speed", "Link", "IP"], rows: (data && data.nics || []).map((n) => [n.name, n.mac, n.speedMbps ? (n.speedMbps >= 1000 ? Math.round(n.speedMbps / 1000) + " Gbps" : n.speedMbps + " Mbps") : "", n.link ? "Up" : (n.linkStatus || "Down"), n.ip]) },
+    };
+    const sec = sections[tab];
+    return React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(14,18,28,0.55)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100000 }, onClick: onClose },
+        React.createElement("div", { className: "neu-card", onClick: (e) => e.stopPropagation(), style: { width: 900, maxWidth: "94vw", maxHeight: "88vh", overflow: "auto", padding: 22 } },
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 12 } },
+                React.createElement("div", null,
+                    React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 16, fontWeight: 700, color: "#0F172A" } }, "Hardware details"),
+                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginTop: 2 } }, `${asset.redfishSerialNumber || asset.serialNumber || asset.deviceName || asset.id} · ${asset.vendor || ""} ${asset.model || ""}`.trim() + (data && data.collectedAt ? " · read " + new Date(data.collectedAt).toLocaleString() : " · not read yet"))),
+                React.createElement("div", { style: { display: "flex", gap: 8 } },
+                    canEdit && React.createElement("button", { onClick: collect, disabled: busy, className: "neu-btn-primary", style: { fontSize: 11.5 } }, busy ? "Reading…" : "Read from BMC now"),
+                    React.createElement("button", { onClick: onClose, className: "neu-btn-secondary", style: { fontSize: 11.5 } }, "Close"))),
+            err && React.createElement("div", { style: { padding: "8px 12px", borderRadius: 9, background: "rgba(220,38,38,.08)", color: "#B91C1C", fontFamily: "Inter", fontSize: 12, marginBottom: 10 } }, err),
+            !data && !err && React.createElement("div", { style: { padding: 20, fontFamily: "Inter", fontSize: 13, color: "#64748B" } }, "Loading…"),
+            data && React.createElement(React.Fragment, null,
+                React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" } },
+                    Object.keys(sections).map((k) => React.createElement("button", { key: k, onClick: () => setTab(k), className: tab === k ? "neu-btn-primary" : "neu-btn-secondary", style: { fontSize: 11.5, padding: "6px 12px" } }, `${sections[k].label} (${sections[k].rows.length})`))),
+                !data.collected && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#92400E", background: "#FEF3C7", borderRadius: 8, padding: "8px 12px", marginBottom: 10 } }, "Full details have not been read from this device yet. Use \"Read from BMC now\"."),
+                sec.rows.length ? React.createElement("div", { style: { overflowX: "auto" } }, React.createElement("table", { style: { width: "100%", borderCollapse: "collapse" } },
+                    React.createElement("thead", null, React.createElement("tr", null, sec.cols.map((c) => React.createElement("th", { key: c, style: th }, c)))),
+                    React.createElement("tbody", null, sec.rows.map((r, i) => React.createElement("tr", { key: i }, r.map((v, j) => React.createElement("td", { key: j, style: /Serial|MAC|Part/.test(sec.cols[j]) ? mono : td }, v == null || v === "" ? "—" : String(v)))))))) : React.createElement("div", { style: { padding: 16, fontFamily: "Inter", fontSize: 12.5, color: "#64748B" } }, data.collected ? "The BMC did not report any " + sec.label.toLowerCase() + "." : "Nothing stored yet."),
+                data.notes && data.notes.length > 0 && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748B", marginTop: 10 } }, data.notes.join(" · ")))));
+}
+function RfModuleShell({ title, sub, children, controls }) {
+    return React.createElement("div", { className: "neu-card", style: { padding: "12px 14px", minWidth: 0, display: "flex", flexDirection: "column" } },
+        React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, color: "#0F172A" } }, title),
+        React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#64748B", marginTop: 2 } }, sub),
+        controls && React.createElement("div", { style: { display: "flex", gap: 5, flexWrap: "wrap", margin: "7px 0 6px" } }, controls),
+        React.createElement("div", { style: { flex: 1, minHeight: 0, maxHeight: 190, overflowY: "auto", marginTop: controls ? 0 : 8 } }, children));
+}
+const RF_MOD_SEL = { padding: "3px 6px", borderRadius: 7, border: "1px solid #CBD5E1", background: "#fff", fontFamily: "Inter", fontSize: 10.5, color: "#0F172A", maxWidth: 120 };
+function RfOverviewModules({ rows, onPick }) {
+    const isServer = (a) => !a.hardwareType || /server/i.test(a.hardwareType);
+    const [m1Site, setM1Site] = useState("all"); const [m1Sort, setM1Sort] = useState("count");
+    const [m2Make, setM2Make] = useState("all"); const [m2Q, setM2Q] = useState(""); const [m2Sort, setM2Sort] = useState("count");
+    const [m3Site, setM3Site] = useState("all"); const [m3Sort, setM3Sort] = useState("site");
+    const [m4Site, setM4Site] = useState("all"); const [m4Zone, setM4Zone] = useState("all");
+    const sites = useMemo(() => Array.from(new Set(rows.map((a) => a.site).filter(Boolean))).sort(), [rows]);
+    const zones = useMemo(() => Array.from(new Set(rows.filter((a) => m4Site === "all" || a.site === m4Site).map((a) => a.zone).filter(Boolean))).sort(), [rows, m4Site]);
+    const bar = (pct, color) => React.createElement("div", { style: { height: 7, borderRadius: 7, background: "rgba(148,163,184,.25)", overflow: "hidden", flex: 1 } }, React.createElement("div", { style: { width: Math.max(2, pct) + "%", height: "100%", background: color } }));
+    const num = { fontFamily: "'JetBrains Mono'", fontSize: 11.5, fontWeight: 700, textAlign: "right" };
+    const link = { cursor: "pointer" };
+    // 1 - device items by category
+    const m1 = useMemo(() => { const m = new Map(); rows.filter((a) => m1Site === "all" || a.site === m1Site).forEach((a) => { const k = a.hardwareType || "Uncategorized"; m.set(k, (m.get(k) || 0) + 1); }); const l = [...m.entries()]; l.sort((x, y) => (m1Sort === "name" ? x[0].localeCompare(y[0]) : y[1] - x[1])); return l; }, [rows, m1Site, m1Sort]);
+    const m1Total = m1.reduce((a, x) => a + x[1], 0), m1Max = Math.max(1, ...m1.map((x) => x[1]));
+    // 2 - servers by make & model
+    const m2 = useMemo(() => { const servers = rows.filter((a) => isServer(a) && a.vendor); const mk = new Map(); servers.forEach((a) => { const make = a.vendor; if (m2Make !== "all" && make !== m2Make) return; const model = a.model || "Unknown model"; if (m2Q.trim() && !model.toLowerCase().includes(m2Q.trim().toLowerCase())) return; if (!mk.has(make)) mk.set(make, new Map()); const mm = mk.get(make); const r = mm.get(model) || { n: 0, ok: 0 }; r.n++; if (a.syncState === "Synced") r.ok++; mm.set(model, r); }); const out = [...mk.entries()].map(([make, mm]) => { const models = [...mm.entries()].map(([model, r]) => ({ model, ...r })); models.sort((x, y) => (m2Sort === "name" ? x.model.localeCompare(y.model) : y.n - x.n)); return { make, models, n: models.reduce((a, r) => a + r.n, 0), ok: models.reduce((a, r) => a + r.ok, 0) }; }); out.sort((x, y) => (m2Sort === "name" ? x.make.localeCompare(y.make) : y.n - x.n)); return out; }, [rows, m2Make, m2Q, m2Sort]);
+    const makes = useMemo(() => Array.from(new Set(rows.filter((a) => isServer(a) && a.vendor).map((a) => a.vendor))).sort(), [rows]);
+    // 3 - location & zone
+    const m3 = useMemo(() => { const m = new Map(); rows.filter((a) => m3Site === "all" || a.site === m3Site).forEach((a) => { const k = (a.site || "—") + "\u0001" + (a.zone || "—"); const r = m.get(k) || { site: a.site || "—", zone: a.zone || "—", n: 0, ok: 0 }; r.n++; if (a.syncState === "Synced") r.ok++; m.set(k, r); }); const l = [...m.values()]; l.sort((x, y) => (m3Sort === "count" ? y.n - x.n : x.site.localeCompare(y.site) || x.zone.localeCompare(y.zone))); return l; }, [rows, m3Site, m3Sort]);
+    // 4 - sync status
+    const STATES = [["Synced", "#10B981"], ["Not synced yet", "#F59E0B"], ["Failed", "#EF4444"], ["No credentials", "#94A3B8"], ["Ignored", "#CBD5E1"]];
+    const m4rows = rows.filter((a) => (m4Site === "all" || a.site === m4Site) && (m4Zone === "all" || a.zone === m4Zone));
+    const m4 = STATES.map(([k, c]) => ({ k, c, n: m4rows.filter((a) => a.syncState === k).length }));
+    const m4Total = Math.max(1, m4rows.length);
+    let acc = 0; const stops = m4.map((s) => { const a0 = acc; acc += (s.n / m4Total) * 100; return `${s.c} ${a0}% ${acc}%`; }).join(",");
+    const sel = (v, set, opts, all) => React.createElement(ThemedSelect, { value: v, onChange: (e) => set(e.target.value), style: RF_MOD_SEL }, React.createElement("option", { value: "all" }, all), opts.map((o) => React.createElement("option", { key: o, value: o }, o)));
+    const sortSel = (v, set, opts) => React.createElement(ThemedSelect, { value: v, onChange: (e) => set(e.target.value), style: RF_MOD_SEL, title: "Sort" }, opts.map(([k, l]) => React.createElement("option", { key: k, value: k }, l)));
+    return React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 12, marginBottom: 16 } },
+        React.createElement(RfModuleShell, { title: "Device items", sub: `${m1Total} devices with a management IP`, controls: [sel(m1Site, setM1Site, sites, "All sites"), sortSel(m1Sort, setM1Sort, [["count", "Count ↓"], ["name", "Name A–Z"]])] },
+            m1.map(([k, n]) => React.createElement("div", { key: k, onClick: () => onPick({ hardwareType: [k], ...(m1Site !== "all" ? { site: [m1Site] } : {}) }), title: "Show these devices in the list", style: { display: "grid", gridTemplateColumns: "104px 1fr 44px", gap: 8, alignItems: "center", padding: "3px 0", fontFamily: "Inter", fontSize: 11.5, ...link } }, React.createElement("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, k), bar((n / m1Max) * 100, "#3157EE"), React.createElement("span", { style: num }, n)))),
+        React.createElement(RfModuleShell, { title: "Servers by make & model", sub: "Dell, HPE and other servers", controls: [sel(m2Make, setM2Make, makes, "All makes"), React.createElement("input", { key: "q", value: m2Q, onChange: (e) => setM2Q(e.target.value), placeholder: "Model…", style: { ...RF_MOD_SEL, width: 84 } }), sortSel(m2Sort, setM2Sort, [["count", "Count ↓"], ["name", "Name A–Z"]])] },
+            m2.length === 0 ? React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B" } }, "No servers match.") : React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontFamily: "Inter", fontSize: 11.5 } },
+                React.createElement("thead", null, React.createElement("tr", null, ["Make / Model", "Servers", "Synced", "Not"].map((h, i) => React.createElement("th", { key: h, style: { textAlign: i ? "right" : "left", fontSize: 9.5, textTransform: "uppercase", color: "#94A3B8", padding: "2px 4px" } }, h)))),
+                React.createElement("tbody", null, m2.map((g) => [React.createElement("tr", { key: g.make, onClick: () => onPick({ _vendorModel: Array.from(new Set(rows.filter((a) => isServer(a) && a.vendor === g.make).map((a) => `${a.vendor} ${a.model || ""}`.trim()))) }), style: { background: "#F4F7FC", fontWeight: 800, ...link } }, React.createElement("td", { style: { padding: "3px 4px" } }, g.make), React.createElement("td", { style: { ...num, padding: "3px 4px" } }, g.n), React.createElement("td", { style: { ...num, padding: "3px 4px" } }, g.ok), React.createElement("td", { style: { ...num, padding: "3px 4px" } }, g.n - g.ok))].concat(g.models.map((r) => React.createElement("tr", { key: g.make + r.model, onClick: () => onPick({ _vendorModel: [`${g.make} ${r.model === "Unknown model" ? "" : r.model}`.trim()] }), style: link }, React.createElement("td", { style: { padding: "3px 4px 3px 12px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 150 } }, r.model), React.createElement("td", { style: { ...num, padding: "3px 4px" } }, r.n), React.createElement("td", { style: { ...num, padding: "3px 4px" } }, r.ok), React.createElement("td", { style: { ...num, padding: "3px 4px" } }, r.n - r.ok)))))))),
+        React.createElement(RfModuleShell, { title: "Location & zone", sub: "Devices per site and zone", controls: [sel(m3Site, setM3Site, sites, "All sites"), sortSel(m3Sort, setM3Sort, [["site", "Site A–Z"], ["count", "Count ↓"]])] },
+            m3.map((r) => React.createElement("div", { key: r.site + r.zone, onClick: () => onPick({ site: [r.site], ...(r.zone !== "—" ? { zone: [r.zone] } : {}) }), title: `${r.ok} synced of ${r.n}`, style: { display: "grid", gridTemplateColumns: "1fr 1fr 36px 52px", gap: 6, alignItems: "center", padding: "3px 0", fontFamily: "Inter", fontSize: 11.5, ...link } }, React.createElement("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, r.site), React.createElement("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#475569" } }, r.zone), React.createElement("span", { style: num }, r.n), React.createElement("div", { style: { display: "flex", height: 7, borderRadius: 7, overflow: "hidden", background: "#F59E0B" } }, React.createElement("div", { style: { width: (r.ok / r.n) * 100 + "%", background: "#10B981" } })))),
+            m3.length === 0 && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B" } }, "No devices.")),
+        React.createElement(RfModuleShell, { title: "Sync status", sub: "Result of each device's last sync", controls: [sel(m4Site, (v) => { setM4Site(v); setM4Zone("all"); }, sites, "All sites"), sel(m4Zone, setM4Zone, zones, "All zones")] },
+            React.createElement("div", { style: { display: "flex", gap: 12, alignItems: "center" } },
+                React.createElement("div", { style: { width: 78, height: 78, borderRadius: "50%", background: m4rows.length ? `conic-gradient(${stops})` : "#E2E8F0", position: "relative", flex: "none" } }, React.createElement("div", { style: { position: "absolute", inset: 14, borderRadius: "50%", background: "#F4F7FC", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Space Grotesk'", fontWeight: 800, fontSize: 14 } }, m4rows.length ? Math.round((m4[0].n / m4rows.length) * 100) + "%" : "–")),
+                React.createElement("div", { style: { flex: 1, minWidth: 0 } }, m4.map((s) => React.createElement("div", { key: s.k, onClick: () => onPick({ syncState: [s.k], ...(m4Site !== "all" ? { site: [m4Site] } : {}), ...(m4Zone !== "all" ? { zone: [m4Zone] } : {}) }), style: { display: "flex", alignItems: "center", gap: 6, padding: "2px 0", fontFamily: "Inter", fontSize: 11.5, ...link } }, React.createElement("span", { style: { width: 8, height: 8, borderRadius: "50%", background: s.c, flex: "none" } }), React.createElement("span", { style: { flex: 1 } }, s.k), React.createElement("span", { style: num }, s.n)))))));
+}
 function RedfishTab({ canEdit, allowedSites }) {
     const [rawAssets, setAssets] = useState(null);
     const [fwTargets, setFwTargets] = useState(null);   // the same per-model targets the Monitoring page uses (Dell = OME list, HPE = OneView list)
@@ -8414,12 +8507,18 @@ function RedfishTab({ canEdit, allowedSites }) {
     const [selectedIds, setSelectedIds] = useState(() => new Set());
     const [busyAction, setBusyAction] = useState(false);
     const [syncState, setSyncState] = useState(null); // { running, processed, total, msg }
+    const [hwModalAsset, setHwModalAsset] = useState(null);
+    const [hwState, setHwState] = useState(null); // { running, done, total, failed, msg }
+    const [sortKey, setSortKey] = useState(null);
+    const [sortDir, setSortDir] = useState(null);
+    const handleSort = (key) => { if (sortKey !== key) { setSortKey(key); setSortDir("asc"); } else if (sortDir === "asc") setSortDir("desc"); else { setSortKey(null); setSortDir(null); } };
     const tableWrapRef = useRef(null);
     const load = () => { api.getRedfishAssets(site, showIgnored).then((r) => { setAssets(r); setErr(""); setSelectedIds(new Set()); }).catch((e) => setErr(e.message || "Could not load devices")); };
     useEffect(() => { load(); }, [site, showIgnored]);
     useEffect(() => { api.getFirmwareModelTargets().then(setFwTargets).catch(() => setFwTargets({ ome: [], oneview: [] })); }, []);
     // Adds the firmware target + Compliant / Outdated / Unknown to Dell and HPE servers (same rule as Firmware Compliance); other devices stay blank.
-    const assets = useMemo(() => (rawAssets ? rawAssets.map((a) => {
+    const assets = useMemo(() => (rawAssets ? rawAssets.map((a0) => {
+        const a = { ...a0, syncState: a0.monitorIgnored ? "Ignored" : !a0.redfishConfigured ? "No credentials" : a0.lastError ? "Failed" : a0.lastSyncAt ? "Synced" : "Not synced yet" };
         const v = String(a.vendor || "").toLowerCase();
         const isDell = v.includes("dell"), isHpe = v.includes("hp") || v.includes("hewlett");
         if (!fwTargets || !(isDell || isHpe) || (a.hardwareType && !/server/i.test(a.hardwareType))) return { ...a, fwTarget: "", fwStatus: "" };
@@ -8432,7 +8531,8 @@ function RedfishTab({ canEdit, allowedSites }) {
     // management IP (servers, storage, network switches, firewalls, ...), not a fixed list.
     const categories = useMemo(() => { const set = new Set(); (assets || []).forEach((a) => set.add(a.hardwareType || "Uncategorized")); return Array.from(set).sort((x, y) => x.localeCompare(y)); }, [assets]);
     const categoryRows = (assets || []).filter((a) => categoryFilter === "all" || (a.hardwareType || "Uncategorized") === categoryFilter);
-    const filtered = categoryRows.filter((row) => REDFISH_COLUMNS.every((col) => listColumnFilterMatches(columnFilters[col.key], col, row)));
+    const filteredUnsorted = categoryRows.filter((row) => REDFISH_COLUMNS.every((col) => listColumnFilterMatches(columnFilters[col.key], col, row)));
+    const filtered = useMemo(() => sortListRows(filteredUnsorted, REDFISH_COLUMNS.find((c) => c.key === sortKey), sortDir), [filteredUnsorted, sortKey, sortDir]);
     const optionRowsForColumn = (key) => categoryRows.filter((row) => REDFISH_COLUMNS.every((col) => col.key === key || listColumnFilterMatches(columnFilters[col.key], col, row)));
     const activeColumnFilterCount = countListColumnFilters(columnFilters);
     const thBase = { textAlign: "left", padding: "8px 9px", borderBottom: "1px solid #E2E8F0", color: "#64748B", fontWeight: 700, fontSize: 10.5, textTransform: "uppercase", whiteSpace: "nowrap" };
@@ -8466,6 +8566,20 @@ function RedfishTab({ canEdit, allowedSites }) {
             setSyncState({ running: false, msg: job ? `Synced ${job.reachable} of ${job.total} device(s)` + (job.unreachable ? ` · ${job.unreachable} unreachable` : "") + (job.skipped ? ` · ${job.skipped} skipped (already syncing)` : "") + " · " + new Date().toLocaleTimeString() : "" });
         } catch (e) { setSyncState({ running: false, msg: e.message || "Sync failed", error: true }); }
     };
+    // Collect hardware (CPU / memory / disks / NIC) from the BMCs: selected rows if any are ticked, else every configured device in the current view; three at a time, with progress.
+    const runCollect = async (onlySelected) => {
+        if (hwState && hwState.running) return;
+        const base = onlySelected ? filtered.filter((a) => selectedIds.has(a.id)) : filtered;
+        const ids = base.filter((a) => a.redfishConfigured && !a.monitorIgnored).map((a) => a.id);
+        if (!ids.length) { setHwState({ running: false, msg: "No configured devices in this view - use Configure or Discover first." }); return; }
+        let done = 0, failed = 0; setHwState({ running: true, done: 0, total: ids.length, failed: 0 });
+        let next = 0;
+        const worker = async () => { while (next < ids.length) { const id = ids[next++]; try { await api.collectRedfishHardware(id); } catch (e) { failed++; } done++; setHwState({ running: true, done, total: ids.length, failed }); } };
+        await Promise.all([worker(), worker(), worker()]);
+        await load();
+        setHwState({ running: false, msg: `Hardware read for ${ids.length - failed} of ${ids.length} device(s)` + (failed ? ` · ${failed} could not be read` : "") + " · " + new Date().toLocaleTimeString() });
+    };
+    const pickFromModule = (obj) => { setColumnFilters({ ...makeEmptyListColumnFilters(REDFISH_COLUMNS), ...obj }); setCategoryFilter("all"); if (tableWrapRef.current && tableWrapRef.current.scrollIntoView) tableWrapRef.current.scrollIntoView({ behavior: "smooth", block: "start" }); };
     const ignoreSelected = async (ignored) => {
         const ids = Array.from(selectedIds); if (!ids.length) return;
         setBusyAction(true);
@@ -8487,6 +8601,12 @@ function RedfishTab({ canEdit, allowedSites }) {
             case "lastSyncAt": return React.createElement("span", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748B" } }, a.lastSyncAt ? new Date(a.lastSyncAt).toLocaleString() : "Never");
             case "fwStatus": return a.fwStatus ? React.createElement(FwcStatusPill, { s: String(a.fwStatus).toUpperCase() }) : React.createElement("span", { style: { color: "#94A3B8" } }, "—");
             case "hwSummary": return React.createElement("span", { title: a.hwSummary || "", style: { fontFamily: "Inter", fontSize: 11.5, display: "inline-block", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "bottom" } }, a.hwSummary || "—");
+            case "cpuSummary": case "memSummary": case "diskSummary": case "nicSummary": {
+                const v = a[col.key];
+                if (!v) return React.createElement("span", { style: { color: "#94A3B8", fontSize: 11 } }, a.redfishConfigured && (col.key === "diskSummary" || col.key === "nicSummary") ? "Not read yet" : "—");
+                return React.createElement("span", { title: v + " - click for details", onClick: () => setHwModalAsset(a), style: { fontFamily: "Inter", fontSize: 11.5, display: "inline-block", maxWidth: col.key === "memSummary" ? 190 : 210, overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "bottom", cursor: "pointer", color: "#1E3A8A" } }, v);
+            }
+            case "syncState": { const c = { "Synced": ["#065F46", "#D1FAE5"], "Failed": ["#991B1B", "#FEE2E2"], "Not synced yet": ["#92400E", "#FEF3C7"] }[a.syncState] || ["#475569", "#E2E8F0"]; return React.createElement("span", { style: { fontFamily: "Inter", fontSize: 10.5, fontWeight: 700, color: c[0], background: c[1], borderRadius: 999, padding: "2px 9px" } }, a.syncState); }
             case "bmcFirmware": return React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontSize: 11.5 } }, a.bmcFirmware || "—");
             case "rackNo": return a.rackNo || "—";
             case "hardwareType": return a.hardwareType || "Uncategorized";
@@ -8501,8 +8621,10 @@ function RedfishTab({ canEdit, allowedSites }) {
                 React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#475569", marginTop: 3, maxWidth: 680, lineHeight: 1.5 } }, "Works directly against any server's management port (Dell iDRAC, HPE iLO, Lenovo XCC, Cisco standalone IMC, NVIDIA DGX, and any other Redfish-capable BMC) — no vendor appliance needed. This is additional to Dell OME / HPE OneView above, not a replacement.")),
             canEdit && React.createElement("div", { style: { display: "flex", gap: 8 } },
                 React.createElement("button", { onClick: () => runSync(false), disabled: !!(syncState && syncState.running), className: "neu-btn-secondary", title: "Re-read health, power, alerts and BIOS version from every configured device shown below" }, syncState && syncState.running ? `Syncing ${syncState.processed || 0}/${syncState.total || 0}…` : "Sync"),
+                React.createElement("button", { onClick: () => runCollect(selectedIds.size > 0), disabled: !!(hwState && hwState.running), className: "neu-btn-secondary", title: "Read CPU, memory, disks and network ports from the BMCs (selected rows, or every configured device shown)" }, hwState && hwState.running ? `Reading hardware ${hwState.done}/${hwState.total}…` : (selectedIds.size > 0 ? "Collect hardware (selected)" : "Collect hardware")),
                 React.createElement("button", { onClick: () => setDiscoverOpen(true), className: "neu-btn-secondary" }, "Discover"),
                 React.createElement("button", { onClick: () => setModalAsset(null), className: "neu-btn-primary" }, "+ Test & Detect"))),
+        assets && assets.length > 0 && React.createElement(RfOverviewModules, { rows: assets, onPick: pickFromModule }),
         React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 14 } },
             React.createElement("select", { value: site, onChange: (e) => setSite(e.target.value), style: sel },
                 React.createElement("option", { value: "all" }, "All locations"),
@@ -8521,6 +8643,10 @@ function RedfishTab({ canEdit, allowedSites }) {
             React.createElement("button", { disabled: busyAction, onClick: () => ignoreSelected(true), className: "neu-btn-secondary", style: { fontSize: 11.5 } }, "Ignore Selected"),
             React.createElement("button", { disabled: busyAction, onClick: () => ignoreSelected(false), className: "neu-btn-secondary", style: { fontSize: 11.5 } }, "Un-ignore Selected"),
             React.createElement("button", { onClick: () => setSelectedIds(new Set()), className: "neu-btn-secondary", style: { fontSize: 11.5 } }, "Clear")),
+        hwState && hwState.running && React.createElement("div", { style: { padding: "9px 12px", borderRadius: 9, background: "rgba(49,87,238,.07)", border: "1px solid rgba(49,87,238,.2)", marginBottom: 12, fontFamily: "Inter", fontSize: 12, color: "#1E3A8A" } },
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 5 } }, React.createElement("span", null, `Reading CPU, memory, disks and network ports… ${hwState.done} of ${hwState.total}` + (hwState.failed ? ` · ${hwState.failed} failed` : "")), React.createElement("strong", null, Math.round((hwState.done / Math.max(1, hwState.total)) * 100) + "%")),
+            React.createElement("div", { style: { height: 7, borderRadius: 7, background: "rgba(148,163,184,.3)", overflow: "hidden" } }, React.createElement("div", { style: { width: (hwState.done / Math.max(1, hwState.total)) * 100 + "%", height: "100%", background: "#3157EE", transition: "width .3s" } }))),
+        hwState && !hwState.running && hwState.msg && React.createElement("div", { style: { padding: "8px 12px", borderRadius: 9, background: "rgba(5,150,105,.08)", border: "1px solid rgba(5,150,105,.25)", color: "#065F46", fontFamily: "Inter", fontSize: 12, marginBottom: 12 } }, hwState.msg),
         syncState && syncState.msg && React.createElement("div", { style: { padding: "8px 12px", borderRadius: 9, background: syncState.error ? "rgba(220,38,38,.08)" : "rgba(5,150,105,.08)", border: "1px solid " + (syncState.error ? "rgba(220,38,38,.25)" : "rgba(5,150,105,.25)"), color: syncState.error ? "#B91C1C" : "#047857", fontFamily: "Inter", fontSize: 12, marginBottom: 12 } }, syncState.msg),
         err && React.createElement("div", { style: { padding: "9px 12px", borderRadius: 9, background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.25)", color: "#B91C1C", fontFamily: "Inter", fontSize: 12, marginBottom: 14 } }, err),
         !assets && !err && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 13, color: "#64748B", padding: 20 } }, "Loading…"),
@@ -8530,7 +8656,7 @@ function RedfishTab({ canEdit, allowedSites }) {
                 canEdit && React.createElement("th", { style: { ...thBase, width: 34 } },
                     React.createElement("input", { type: "checkbox", checked: filtered.length > 0 && filtered.every((a) => selectedIds.has(a.id)), ref: (el) => { if (el)
                             el.indeterminate = filtered.some((a) => selectedIds.has(a.id)) && !filtered.every((a) => selectedIds.has(a.id)); }, onChange: (e) => { const checked = e.target.checked; setSelectedIds((prev) => { const n = new Set(prev); filtered.forEach((a) => checked ? n.add(a.id) : n.delete(a.id)); return n; }); }, style: { width: 15, height: 15, accentColor: "#6366F1", cursor: "pointer" } })),
-                REDFISH_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, style: thBase })),
+                REDFISH_COLUMNS.map((col) => React.createElement(SortableListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpenFilter: setOpenFilter, sortKey: sortKey, sortDir: sortDir, onSort: handleSort, style: ["cpuSummary", "memSummary", "diskSummary", "nicSummary"].includes(col.key) ? { ...thBase, background: "rgba(49,87,238,.07)", color: "#3157EE" } : thBase })),
                 React.createElement("th", { style: { ...thBase, textAlign: "right" } }))),
             React.createElement("tbody", null,
                 filtered.length === 0 && React.createElement("tr", null,
@@ -8543,6 +8669,7 @@ function RedfishTab({ canEdit, allowedSites }) {
                         canEdit && React.createElement("button", { onClick: () => toggleIgnore(a), className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px", marginRight: 6 }, title: a.monitorIgnored ? "Include this device in Redfish monitoring again" : "Exclude this device from Redfish monitoring (e.g. storage/network/firewall gear that doesn't need it)" }, a.monitorIgnored ? "Un-ignore" : "Ignore from Monitor"),
                         a.redfishConfigured && React.createElement("button", { onClick: () => setModalAsset(a), className: "neu-btn-secondary", title: "Open the device: Load Firmware Inventory and (Admin / Operator) start a firmware update", "data-rf": "firmware-btn", style: { fontSize: 11, padding: "4px 10px", marginRight: 6 } }, "Firmware"), React.createElement("button", { onClick: () => setModalAsset(a), className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px" } }, a.redfishConfigured ? "View / Sync" : "Configure"))))))), React.createElement(FloatingHScroll, { wrapRef: tableWrapRef })),
         modalAsset !== undefined && React.createElement(RedfishDetectModal, { asset: modalAsset, onClose: () => setModalAsset(undefined), onSaved: load }),
+        hwModalAsset && React.createElement(RfHwDetailModal, { asset: hwModalAsset, canEdit: canEdit, onClose: () => setHwModalAsset(null), onChanged: load }),
         discoverOpen && React.createElement(RedfishDiscoverModal, { onClose: () => setDiscoverOpen(false), onApplied: load }),
         openFilter && React.createElement(ValueListFilterPopup, { column: openFilter, currentFilter: columnFilters[openFilter.key], optionRows: optionRowsForColumn(openFilter.key), onApply: (value) => setColumnFilters((prev) => ({ ...prev, [openFilter.key]: value })), onClose: () => setOpenFilter(null) }));
 }

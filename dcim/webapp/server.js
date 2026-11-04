@@ -1238,6 +1238,7 @@ async function initDB() {
     try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_serial_number VARCHAR(150)'); } catch (e) { /* already exists */ }
     // CPU / memory summary the BMC reports (shown as the Hardware column on the Multi-Vendor page; always the latest reading).
     try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_hw_summary VARCHAR(255)'); } catch (e) { /* already exists */ }
+    for (const c of ['redfish_cpu VARCHAR(255)', 'redfish_mem VARCHAR(255)', 'redfish_disk VARCHAR(255)', 'redfish_nic VARCHAR(255)', 'redfish_hw_json MEDIUMTEXT', 'redfish_hw_at DATETIME']) { try { await conn.query('ALTER TABLE assets ADD COLUMN ' + c); } catch (e) { /* already exists */ } }
 
     // ---- Widen id columns (VARCHAR(20) -> VARCHAR(50)) ----
     // Bulk-upsert generates IDs like AST-<13-digit timestamp>-<batch index>,
