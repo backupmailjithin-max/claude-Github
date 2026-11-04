@@ -1583,15 +1583,17 @@ const REDFISH_COLUMNS = [
     // Asset Inventory's serial, then device name/asset tag/id, only for a device Redfish has
     // never successfully reached yet.
     { key: "_asset", label: "Serial No", format: (v, row) => row.redfishSerialNumber || row.serialNumber || row.deviceName || row.assetTag || row.id },
-    { key: "site", label: "Site" }, { key: "rackNo", label: "Rack" },
+    { key: "site", label: "Site" }, { key: "zone", label: "Zone" }, { key: "rackNo", label: "Rack" },
     { key: "hardwareType", label: "Category", format: (v) => v || "Uncategorized" },
     { key: "mgmtIp", label: "Mgmt IP" },
     { key: "_vendorModel", label: "Vendor / Model", format: (v, row) => row.vendor ? `${row.vendor} ${row.model || ""}`.trim() : "—" },
+    { key: "hwSummary", label: "Hardware", format: (v) => v || "—" },
     { key: "healthStatus", label: "Health", format: (v) => v || "Unknown" },
     { key: "powerState", label: "Power State" },
     { key: "powerWatts", label: "Power (W)", format: (v) => (v == null ? "—" : `${v} W`) },
     { key: "alertCount", label: "Alerts", format: (v) => (v == null ? "—" : String(v)) },
-    { key: "biosVersion", label: "BIOS Version" },
+    { key: "biosVersion", label: "BIOS Version" }, { key: "bmcFirmware", label: "BMC Firmware", format: (v) => v || "—" },
+    { key: "fwTarget", label: "Target BIOS", format: (v) => v || "—" }, { key: "fwStatus", label: "Firmware Status", format: (v) => v || "—" },
     { key: "lastSyncAt", label: "Last Sync", format: (v) => (v ? new Date(v).toLocaleString() : "Never") },
 ];
 function rowsFromColumns(items, columns) { return items.map((r) => { const obj = {}; columns.forEach((c) => { obj[c.label] = c.format ? c.format(r[c.key], r) : (r[c.key] != null ? r[c.key] : ""); }); return obj; }); }
@@ -8399,7 +8401,8 @@ function RedfishDiscoverModal({ onClose, onApplied }) {
         , document.body);
 }
 function RedfishTab({ canEdit, allowedSites }) {
-    const [assets, setAssets] = useState(null);
+    const [rawAssets, setAssets] = useState(null);
+    const [fwTargets, setFwTargets] = useState(null);   // the same per-model targets the Monitoring page uses (Dell = OME list, HPE = OneView list)
     const [err, setErr] = useState("");
     const [modalAsset, setModalAsset] = useState(undefined); // undefined=closed, null=new/ad-hoc, object=existing asset
     const [discoverOpen, setDiscoverOpen] = useState(false);
@@ -8414,6 +8417,16 @@ function RedfishTab({ canEdit, allowedSites }) {
     const tableWrapRef = useRef(null);
     const load = () => { api.getRedfishAssets(site, showIgnored).then((r) => { setAssets(r); setErr(""); setSelectedIds(new Set()); }).catch((e) => setErr(e.message || "Could not load devices")); };
     useEffect(() => { load(); }, [site, showIgnored]);
+    useEffect(() => { api.getFirmwareModelTargets().then(setFwTargets).catch(() => setFwTargets({ ome: [], oneview: [] })); }, []);
+    // Adds the firmware target + Compliant / Outdated / Unknown to Dell and HPE servers (same rule as Firmware Compliance); other devices stay blank.
+    const assets = useMemo(() => (rawAssets ? rawAssets.map((a) => {
+        const v = String(a.vendor || "").toLowerCase();
+        const isDell = v.includes("dell"), isHpe = v.includes("hp") || v.includes("hewlett");
+        if (!fwTargets || !(isDell || isHpe) || (a.hardwareType && !/server/i.test(a.hardwareType))) return { ...a, fwTarget: "", fwStatus: "" };
+        const tg = ((isDell ? fwTargets.ome : fwTargets.oneview) || []).find((t) => fwcModelKey(t.model) === fwcModelKey(a.model));
+        const st = fwcStatusOf(a.biosVersion, tg && tg.targetVersion);
+        return { ...a, fwTarget: (tg && tg.targetVersion) || "", fwStatus: (FWC_META[st.status] || FWC_META.UNKNOWN).label };
+    }) : null), [rawAssets, fwTargets]);
     const sel = { padding: "6px 10px", borderRadius: 8, border: "1px solid #CBD5E1", background: "#fff", fontFamily: "Inter", fontSize: 12, color: "#0F172A" };
     // Category options reflect whatever is actually in Inventory for devices with a
     // management IP (servers, storage, network switches, firewalls, ...), not a fixed list.
@@ -8472,6 +8485,9 @@ function RedfishTab({ canEdit, allowedSites }) {
             case "alertCount": return a.alertCount == null ? React.createElement("span", { style: { color: "#94A3B8" } }, "—") : a.alertCount === 0 ? React.createElement("span", { style: { color: "#059669", fontWeight: 700 } }, "0") : React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 5, color: "#DC2626", fontWeight: 700 } }, React.createElement("span", { style: { width: 6, height: 6, borderRadius: "50%", background: "#DC2626" } }), a.alertCount);
             case "biosVersion": return React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontSize: 11.5 } }, a.biosVersion || "—");
             case "lastSyncAt": return React.createElement("span", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748B" } }, a.lastSyncAt ? new Date(a.lastSyncAt).toLocaleString() : "Never");
+            case "fwStatus": return a.fwStatus ? React.createElement(FwcStatusPill, { s: String(a.fwStatus).toUpperCase() }) : React.createElement("span", { style: { color: "#94A3B8" } }, "—");
+            case "hwSummary": return React.createElement("span", { title: a.hwSummary || "", style: { fontFamily: "Inter", fontSize: 11.5, display: "inline-block", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "bottom" } }, a.hwSummary || "—");
+            case "bmcFirmware": return React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontSize: 11.5 } }, a.bmcFirmware || "—");
             case "rackNo": return a.rackNo || "—";
             case "hardwareType": return a.hardwareType || "Uncategorized";
             case "powerState": return a.powerState || "—";
@@ -8525,7 +8541,7 @@ function RedfishTab({ canEdit, allowedSites }) {
                     REDFISH_COLUMNS.map((col) => React.createElement("td", { key: col.key, style: { padding: "8px 9px", whiteSpace: "nowrap" } }, renderCell(col, a), col.key === "hardwareType" && a.monitorIgnored && React.createElement("span", { style: { marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#92400E", background: "#FEF3C7", borderRadius: 5, padding: "1px 6px" } }, "IGNORED"))),
                     React.createElement("td", { style: { padding: "8px 9px", textAlign: "right", whiteSpace: "nowrap" } },
                         canEdit && React.createElement("button", { onClick: () => toggleIgnore(a), className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px", marginRight: 6 }, title: a.monitorIgnored ? "Include this device in Redfish monitoring again" : "Exclude this device from Redfish monitoring (e.g. storage/network/firewall gear that doesn't need it)" }, a.monitorIgnored ? "Un-ignore" : "Ignore from Monitor"),
-                        React.createElement("button", { onClick: () => setModalAsset(a), className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px" } }, a.redfishConfigured ? "View / Sync" : "Configure"))))))), React.createElement(FloatingHScroll, { wrapRef: tableWrapRef })),
+                        a.redfishConfigured && React.createElement("button", { onClick: () => setModalAsset(a), className: "neu-btn-secondary", title: "Open the device: Load Firmware Inventory and (Admin / Operator) start a firmware update", "data-rf": "firmware-btn", style: { fontSize: 11, padding: "4px 10px", marginRight: 6 } }, "Firmware"), React.createElement("button", { onClick: () => setModalAsset(a), className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px" } }, a.redfishConfigured ? "View / Sync" : "Configure"))))))), React.createElement(FloatingHScroll, { wrapRef: tableWrapRef })),
         modalAsset !== undefined && React.createElement(RedfishDetectModal, { asset: modalAsset, onClose: () => setModalAsset(undefined), onSaved: load }),
         discoverOpen && React.createElement(RedfishDiscoverModal, { onClose: () => setDiscoverOpen(false), onApplied: load }),
         openFilter && React.createElement(ValueListFilterPopup, { column: openFilter, currentFilter: columnFilters[openFilter.key], optionRows: optionRowsForColumn(openFilter.key), onApply: (value) => setColumnFilters((prev) => ({ ...prev, [openFilter.key]: value })), onClose: () => setOpenFilter(null) }));

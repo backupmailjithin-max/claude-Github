@@ -150,6 +150,16 @@ function pickSerial(vendor, sys) {
   return s.SerialNumber || null;
 }
 
+// "2 x Intel Xeon Gold 6330 @ 2.00GHz - 1024 GB RAM" from the standard ComputerSystem summaries (same fields on Dell, HPE, Lenovo ...).
+function buildHwSummary(sys) {
+  const p = (sys && sys.ProcessorSummary) || {}, m = (sys && sys.MemorySummary) || {};
+  const parts = [];
+  const cpu = String(p.Model || '').replace(/\((R|TM)\)/gi, '').replace(/\bCPU\b/g, '').replace(/\s+/g, ' ').trim();
+  if (cpu) parts.push((p.Count ? p.Count + ' x ' : '') + cpu);
+  if (m.TotalSystemMemoryGiB) parts.push(Math.round(Number(m.TotalSystemMemoryGiB)) + ' GB RAM');
+  return parts.join(' - ').slice(0, 250) || null;
+}
+
 function normalizeVendor(manufacturer, oemKeys) {
   const m = String(manufacturer || '').trim();
   if (m) return m;
@@ -242,6 +252,7 @@ async function detectRedfish(monitorFetch, ip, port, username, password, retryOn
         out.biosVersion = sys.BiosVersion || null;
         out.healthStatus = (sys.Status && sys.Status.Health) || null;
         out.powerState = sys.PowerState || null;
+        out.hwSummary = buildHwSummary(sys);
       }
     }
   } catch (e) {
@@ -479,7 +490,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
     // comment in initDB() for why: Asset Inventory's Serial Number is often a site's own
     // asset-tag-style value, not the vendor's real hardware serial, and is COALESCE-protected
     // so it's never silently overwritten. This field always reflects the latest Redfish poll.
-    redfishSerialNumber: a.redfish_serial_number,
+    redfishSerialNumber: a.redfish_serial_number, hwSummary: a.redfish_hw_summary,
     redfishConfigured: !!a.redfish_username, redfishVersion: a.redfish_version, bmcFirmware: a.bmc_firmware, biosVersion: a.bios_version,
     healthStatus: a.health_status, powerState: a.power_state, alertCount: a.redfish_alert_count,
     powerWatts: a.redfish_power_watts, hardwareType: a.hardware_type, monitorIgnored: !!a.redfish_monitor_ignored,
@@ -552,7 +563,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
           `UPDATE assets SET redfish_username = NULL, redfish_password = NULL, redfish_port = NULL,
              redfish_version = NULL, bmc_firmware = NULL, bios_version = NULL, health_status = NULL, power_state = NULL,
              redfish_alert_count = NULL, redfish_power_watts = NULL, redfish_monitor_ignored = 0,
-             redfish_serial_number = NULL, last_redfish_sync_at = NULL, last_redfish_error = NULL
+             redfish_serial_number = NULL, redfish_hw_summary = NULL, last_redfish_sync_at = NULL, last_redfish_error = NULL
            WHERE id = ?`,
           [rows[0].id]
         );
@@ -601,6 +612,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
        WHERE id = ?`,
       [r.vendor, r.model, r.serialNumber, r.biosVersion, r.serialNumber, r.bmcFirmware, r.biosVersion, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
     );
+    try { await pool.query('UPDATE assets SET redfish_hw_summary = ? WHERE id = ?', [r.hwSummary || null, asset.id]); } catch (e) { /* cosmetic column - never fails a sync */ }
     return { reachable: true, ...r };
   }
 
@@ -864,6 +876,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
                WHERE id = ?`,
               [r.credential.username, r.credential.password || '', r.vendor, r.model, r.serialNumber, r.biosVersion, r.serialNumber, r.bmcFirmware, r.biosVersion, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
             );
+            try { await pool.query('UPDATE assets SET redfish_hw_summary = ? WHERE id = ?', [r.hwSummary || null, asset.id]); } catch (e) { /* cosmetic column */ }
             job.applied++;
           } finally { job.processed++; }
         }
@@ -968,3 +981,4 @@ async function getRedfishTaskStatusForDevice(pool, monitorFetch, deviceId, taskU
   return getRedfishTaskStatus(monitorFetch, a.mgmt_ip, a.redfish_port, a.redfish_username, a.redfish_password, taskUri);
 }
 module.exports.pickSerial = pickSerial;
+module.exports.buildHwSummary = buildHwSummary;

@@ -1236,6 +1236,8 @@ async function initDB() {
     // health_status/power_state above), so the Multi-Vendor (Redfish) table can show the
     // BMC's own serial without touching or depending on Asset Inventory's field at all.
     try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_serial_number VARCHAR(150)'); } catch (e) { /* already exists */ }
+    // CPU / memory summary the BMC reports (shown as the Hardware column on the Multi-Vendor page; always the latest reading).
+    try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_hw_summary VARCHAR(255)'); } catch (e) { /* already exists */ }
 
     // ---- Widen id columns (VARCHAR(20) -> VARCHAR(50)) ----
     // Bulk-upsert generates IDs like AST-<13-digit timestamp>-<batch index>,
@@ -9588,11 +9590,12 @@ async function buildFwCompliancePayload(user) {
   // sync already keeps on the asset. Any failure leaves the OME / OneView result exactly as it was.
   try {
     const seen = new Set();
-    Object.keys(fwComplianceCache).forEach((k) => (fwComplianceCache[k].items || []).forEach((it) => { const sn = String(it.serial || '').trim().toUpperCase(); if (sn) seen.add(sn); }));
+    rows.forEach((it) => { const sn = String(it.serial || '').trim().toUpperCase(); if (sn) seen.add(sn); });   // only servers an appliance is actually reporting now
     const [bmc] = await pool.query(
       `SELECT site, zone, device_name, serial_number, redfish_serial_number, manufacturer, model, bios_version, mgmt_ip, health_status, power_state, last_redfish_sync_at
          FROM assets WHERE site IN (?) AND redfish_username IS NOT NULL AND redfish_username <> '' AND COALESCE(redfish_monitor_ignored, 0) = 0
-          AND (manufacturer LIKE '%dell%' OR manufacturer LIKE '%hp%' OR manufacturer LIKE '%hewlett%')`,
+          AND (manufacturer LIKE '%dell%' OR manufacturer LIKE '%hp%' OR manufacturer LIKE '%hewlett%')
+          AND (COALESCE(hardware_type, '') = '' OR hardware_type LIKE '%server%')`,
       [allowed.length ? allowed : ['__none__']]);
     const zmap = new Map();
     bmc.forEach((a) => {

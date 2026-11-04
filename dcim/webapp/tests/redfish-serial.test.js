@@ -18,3 +18,9 @@ test('HPE and others keep SerialNumber', () => {
 test('vendor taken from Manufacturer when not passed', () => {
   assert.strictEqual(pickSerial(null, { Manufacturer: 'Dell Inc.', SerialNumber: 'INFLN1', SKU: 'TAG0001' }), 'TAG0001');
 });
+
+const { buildHwSummary } = require('../lib/redfish-routes');
+test('hardware summary from the real R750 / DL380 Gen10 Plus payloads', () => {
+  assert.strictEqual(buildHwSummary({ ProcessorSummary: { Count: 2, Model: 'Intel(R) Xeon(R) Gold 6330 CPU @ 2.00GHz' }, MemorySummary: { TotalSystemMemoryGiB: 1024 } }), '2 x Intel Xeon Gold 6330 @ 2.00GHz - 1024 GB RAM');
+  assert.strictEqual(buildHwSummary({}), null);
+});
