@@ -33,7 +33,7 @@ grep -q "LICENSE_PUBLIC_KEY_PEM: *null" "$NEW/lib/license-public-key.js" || { ec
 # Candidate runtime files: exclude dev/vendor/data/doc content.
 mapfile -t CAND < <(cd "$NEW" && find . -type f \
   ! -path './node_modules/*' ! -path './tests/*' ! -path './tools/*' ! -path './docs/*' ! -path './lib/vendor/*' \
-  ! -path './uploads/*' ! -path './backups/*' ! -path './logs/*' ! -path './runtime/*' ! -path './ocr/*' \
+  ! -path './uploads/*' ! -path './backups/*' ! -path './logs/*' ! -path './runtime/*' ! -path './ocr/vendor/*' \
   ! -name '*.md' ! -name '*.sh' ! -name '*.bat' ! -name 'package.json' ! -name 'package-lock.json' ! -name 'schema.sql' \
   ! -name '.env*' ! -name '.gitkeep' ! -name 'integrity.manifest.json' | sed 's|^\./||' | sort)
 : > "$W/FILES.txt"; : > "$W/CHANGES.txt"
