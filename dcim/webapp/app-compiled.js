@@ -8437,6 +8437,7 @@ function RfHwDetailModal({ asset, canEdit, onClose, onChanged }) {
     const [tab, setTab] = useState("cpu");
     const open = () => { api.getRedfishHardware(asset.id).then(setData).catch((e) => setErr(e.message || "Could not load")); };
     useEffect(open, [asset.id]);
+    useEffect(() => { const h = (e) => { if (e.key === "Escape") onClose(); }; document.addEventListener("keydown", h); return () => document.removeEventListener("keydown", h); }, [onClose]);
     const collect = async () => { setBusy(true); setErr(""); try { await api.collectRedfishHardware(asset.id); open(); if (onChanged) onChanged(); } catch (e) { setErr(e.message || "Could not read the hardware from the BMC"); } finally { setBusy(false); } };
     const th = { textAlign: "left", padding: "6px 8px", fontSize: 10, textTransform: "uppercase", color: "#64748B", borderBottom: "1px solid #E2E8F0", whiteSpace: "nowrap" };
     const td = { padding: "6px 8px", fontSize: 12, borderBottom: "1px solid #F1F5F9", fontFamily: "Inter" };
@@ -8448,7 +8449,8 @@ function RfHwDetailModal({ asset, canEdit, onClose, onChanged }) {
         nics: { label: "Network ports", cols: ["Port", "MAC", "Speed", "Link", "IP"], rows: (data && data.nics || []).map((n) => [n.name, n.mac, n.speedMbps ? (n.speedMbps >= 1000 ? Math.round(n.speedMbps / 1000) + " Gbps" : n.speedMbps + " Mbps") : "", n.link ? "Up" : (n.linkStatus || "Down"), n.ip]) },
     };
     const sec = sections[tab];
-    return React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(14,18,28,0.55)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100000 }, onClick: onClose },
+    // Rendered into document.body: inside the animated page card a "fixed" popup is positioned against that (tall) card, not the screen.
+    return ReactDOM.createPortal(React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(14,18,28,0.55)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100000 }, onClick: onClose },
         React.createElement("div", { className: "neu-card", onClick: (e) => e.stopPropagation(), style: { width: 900, maxWidth: "94vw", maxHeight: "88vh", overflow: "auto", padding: 22 } },
             React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 12 } },
                 React.createElement("div", null,
@@ -8466,7 +8468,7 @@ function RfHwDetailModal({ asset, canEdit, onClose, onChanged }) {
                 sec.rows.length ? React.createElement("div", { style: { overflowX: "auto" } }, React.createElement("table", { style: { width: "100%", borderCollapse: "collapse" } },
                     React.createElement("thead", null, React.createElement("tr", null, sec.cols.map((c) => React.createElement("th", { key: c, style: th }, c)))),
                     React.createElement("tbody", null, sec.rows.map((r, i) => React.createElement("tr", { key: i }, r.map((v, j) => React.createElement("td", { key: j, style: /Serial|MAC|Part/.test(sec.cols[j]) ? mono : td }, v == null || v === "" ? "—" : String(v)))))))) : React.createElement("div", { style: { padding: 16, fontFamily: "Inter", fontSize: 12.5, color: "#64748B" } }, data.collected ? "The BMC did not report any " + sec.label.toLowerCase() + "." : "Nothing stored yet."),
-                data.notes && data.notes.length > 0 && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748B", marginTop: 10 } }, data.notes.join(" · ")))));
+                data.notes && data.notes.length > 0 && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748B", marginTop: 10 } }, data.notes.join(" · "))))), document.body);
 }
 function RfModuleShell({ title, sub, children, controls, controls2 }) {
     // Every card has the same three bands so the row lines up: header, two control rows (always reserved), and a fixed-height body that scrolls.
