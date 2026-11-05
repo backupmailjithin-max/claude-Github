@@ -125,7 +125,7 @@ async function testSmtp({ host, port, secure, user, pass, fromAddress, toAddress
  * (setup-routes.sendNotification). Throws an Error naming the failed step.
  */
 function encodeHeader(v) { return /^[\x20-\x7e]*$/.test(v) ? v : '=?UTF-8?B?' + Buffer.from(v, 'utf8').toString('base64') + '?='; }
-async function sendMail({ host, port, secure, user, pass, fromAddress, toAddresses, subject, html, timeoutMs = 15000 }) {
+async function sendMail({ host, port, secure, user, pass, fromAddress, toAddresses, subject, html, attachments, timeoutMs = 15000 }) {
   const rcpts = (toAddresses || []).filter(Boolean);
   if (!rcpts.length) throw new Error('No recipients');
   let socket = secure ? await connectTls(host, port, timeoutMs) : await connectPlain(host, port, timeoutMs);
@@ -159,11 +159,24 @@ async function sendMail({ host, port, secure, user, pass, fromAddress, toAddress
     if (!accepted) throw new Error(`RCPT TO rejected: ${lastErr}`);
     const d = await sendCmd(socket, 'DATA', timeoutMs);
     if (d.code !== 354) throw new Error(`DATA rejected: ${d.text}`);
-    const b64 = Buffer.from(String(html || ''), 'utf8').toString('base64').replace(/.{1,76}/g, '$&\r\n').trimEnd();
-    const msg = [
-      `From: ${fromAddress}`, `To: ${rcpts.join(', ')}`, `Subject: ${encodeHeader(String(subject || '').replace(/[\r\n]+/g, ' '))}`,
-      `Date: ${new Date().toUTCString()}`, 'MIME-Version: 1.0', 'Content-Type: text/html; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', b64, '.',
-    ].join('\r\n');
+    const wrap76 = (buf) => Buffer.from(buf).toString('base64').replace(/.{1,76}/g, '$&\r\n').trimEnd();
+    const b64 = wrap76(Buffer.from(String(html || ''), 'utf8'));
+    const head = [`From: ${fromAddress}`, `To: ${rcpts.join(', ')}`, `Subject: ${encodeHeader(String(subject || '').replace(/[\r\n]+/g, ' '))}`, `Date: ${new Date().toUTCString()}`, 'MIME-Version: 1.0'];
+    let msg;
+    const atts = Array.isArray(attachments) ? attachments.filter((a) => a && a.content) : [];
+    if (!atts.length) {
+      msg = [...head, 'Content-Type: text/html; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', b64, '.'].join('\r\n');
+    } else {
+      // multipart/mixed: the HTML body followed by each attachment (base64). Names are reduced to a safe ASCII set.
+      const boundary = `dcim-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+      const parts = [...head, `Content-Type: multipart/mixed; boundary="${boundary}"`, '', `--${boundary}`, 'Content-Type: text/html; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', b64];
+      for (const a of atts) {
+        const fn = String(a.filename || 'attachment').replace(/[^A-Za-z0-9._ -]/g, '_').slice(0, 120);
+        parts.push(`--${boundary}`, `Content-Type: ${a.contentType || 'application/octet-stream'}; name="${fn}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${fn}"`, '', wrap76(a.content));
+      }
+      parts.push(`--${boundary}--`, '.');
+      msg = parts.join('\r\n');
+    }
     const sent = await sendCmd(socket, msg, timeoutMs);
     if (sent.code !== 250) throw new Error(`Message not accepted: ${sent.text}`);
     await sendCmd(socket, 'QUIT', timeoutMs).catch(() => {});

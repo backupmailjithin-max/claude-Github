@@ -14624,9 +14624,170 @@ td{padding:8px 10px;border-bottom:1px solid #1E293B;color:#E2E8F0}
                 React.createElement("button", { onClick: downloadReport, title: "Download Report", style: { width: 52, height: 52, borderRadius: "50%", background: "linear-gradient(135deg,#6366F1,#4F46E5)", color: "#fff", border: "none", cursor: "pointer", boxShadow: "0 6px 22px rgba(79,70,229,0.55)", display: "flex", alignItems: "center", justifyContent: "center", transition: "transform 0.2s ease" }, onMouseEnter: e => e.currentTarget.style.transform = "scale(1.08)", onMouseLeave: e => e.currentTarget.style.transform = "scale(1)" },
                     React.createElement(Download, { s: 24, c: "#fff" })))));
 }
+/* ===== MONTHLY MANAGEMENT REPORT (opens from the Overall Summary) ===== */
+function MonthlyReportModal({ onClose }) {
+    const [opts, setOpts] = useState(null);
+    const [loadErr, setLoadErr] = useState("");
+    const [tab, setTab] = useState("generate");
+    const [month, setMonth] = useState("");
+    const [site, setSite] = useState("__all__");
+    const [notes, setNotes] = useState("");
+    const [busy, setBusy] = useState("");
+    const [msg, setMsg] = useState(null); // { ok, text }
+    const [previewUrl, setPreviewUrl] = useState("");
+    const [mailTo, setMailTo] = useState("");
+    const [hist, setHist] = useState(null);
+    const [hFilter, setHFilter] = useState("");
+    const [hSort, setHSort] = useState({ key: "createdAt", dir: "desc" });
+    const [sch, setSch] = useState(null);
+    const [schInfo, setSchInfo] = useState({ next: null, last: null });
+    const [testTo, setTestTo] = useState("");
+    useEffect(() => { if (msg) { const t = setTimeout(() => setMsg(null), msg.ok ? 6000 : 12000); return () => clearTimeout(t); } }, [msg]);
+    useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
+    const call = async (path, o = {}) => {
+        const res = await fetch(API_BASE + path, { method: o.method || "GET", cache: "no-store", headers: { "Content-Type": "application/json", Authorization: "Bearer " + getToken() }, body: o.body ? JSON.stringify(o.body) : undefined });
+        if (!res.ok) { let e = {}; try { e = await res.json(); } catch (x) { } if (res.status === 401) { clearAuth(); window.location.reload(); } throw new Error(e.error || ("Request failed (" + res.status + ")")); }
+        return res;
+    };
+    const loadOpts = async () => {
+        try {
+            const r = await (await call("/reports/monthly/options")).json();
+            setOpts(r); setMonth(m => m || r.defaultMonth); setSite(s => (r.allowAll ? "__all__" : (r.sites[0] || "")));
+            if (r.schedule) { setSch(r.schedule); setSchInfo({ last: r.last || null, next: null }); }
+        } catch (e) { setLoadErr(e.message); }
+    };
+    useEffect(() => { loadOpts(); }, []);
+    const loadHist = async () => { try { setHist((await (await call("/reports/monthly/history")).json()).items); } catch (e) { setMsg({ ok: false, text: e.message }); } };
+    useEffect(() => { if (tab === "history") loadHist(); }, [tab]);
+    useEffect(() => { if (tab === "auto" && opts && opts.canSchedule) { (async () => { try { const r = await (await call("/reports/monthly/schedule")).json(); setSch(r.schedule); setSchInfo({ last: r.last, next: r.next }); } catch (e) { setMsg({ ok: false, text: e.message }); } })(); } }, [tab, opts]);
+    const body = () => ({ month, site, notes, download: true });
+    const fetchPdf = async () => { const res = await call("/reports/monthly/pdf", { method: "POST", body: body() }); return await res.blob(); };
+    const doPreview = async () => {
+        setBusy("preview"); setMsg(null);
+        try { const b = await fetchPdf(); if (previewUrl) URL.revokeObjectURL(previewUrl); setPreviewUrl(URL.createObjectURL(b)); }
+        catch (e) { setMsg({ ok: false, text: e.message }); } finally { setBusy(""); }
+    };
+    const saveBlob = (blob, name) => { const u = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 4000); };
+    const nameOf = () => "DCIM-Monthly-Report-" + (site === "__all__" ? (opts && opts.allowAll ? "All-locations" : (opts && opts.sites[0]) || "Report") : site).replace(/[^A-Za-z0-9]+/g, "-") + "-" + month + ".pdf";
+    const doDownload = async () => {
+        setBusy("download"); setMsg(null);
+        try { saveBlob(await fetchPdf(), nameOf()); setMsg({ ok: true, text: "Report downloaded." }); }
+        catch (e) { setMsg({ ok: false, text: e.message }); } finally { setBusy(""); }
+    };
+    const doEmail = async () => {
+        setBusy("email"); setMsg(null);
+        try { const r = await (await call("/reports/monthly/email", { method: "POST", body: { month, site, notes, to: mailTo } })).json(); setMsg({ ok: true, text: "Report e-mailed to " + r.sentTo.join(", ") + "." }); }
+        catch (e) { setMsg({ ok: false, text: e.message }); } finally { setBusy(""); }
+    };
+    const saveSchedule = async () => {
+        setBusy("save"); setMsg(null);
+        try { const r = await (await call("/reports/monthly/schedule", { method: "PUT", body: { ...sch, recipients: (sch.recipients || []).filter(x => String(x.email || "").trim()) } })).json(); setSch(r.schedule); setSchInfo(i => ({ ...i, next: r.next })); setMsg({ ok: true, text: r.schedule.enabled ? "Saved. The report will be e-mailed automatically every month." : "Saved. Automatic e-mail is off." }); }
+        catch (e) { setMsg({ ok: false, text: e.message }); } finally { setBusy(""); }
+    };
+    const sendTest = async () => {
+        setBusy("test"); setMsg(null);
+        try { const r = await (await call("/reports/monthly/schedule/test", { method: "POST", body: { email: testTo } })).json(); setMsg({ ok: true, text: "Test report sent to " + r.sentTo + "." }); }
+        catch (e) { setMsg({ ok: false, text: e.message }); } finally { setBusy(""); }
+    };
+    const downloadHist = async (h) => {
+        try { const res = await call("/reports/monthly/history/" + h.id + "/pdf"); saveBlob(await res.blob(), "DCIM-Monthly-Report-" + String(h.scope).replace(/[^A-Za-z0-9]+/g, "-") + "-" + h.month + ".pdf"); }
+        catch (e) { setMsg({ ok: false, text: e.message }); }
+    };
+    const C = { bg: "#0B1120", card: "#111827", line: "#334155", text: "#E2E8F0", mute: "#94A3B8", dim: "#64748B", ind: "#6366F1" };
+    const inp = { background: "#0F172A", border: "1px solid " + C.line, color: C.text, borderRadius: 9, padding: "9px 11px", fontSize: 13, fontFamily: "Inter", outline: "none", width: "100%", boxSizing: "border-box" };
+    const lab = { fontSize: 10.5, fontWeight: 800, letterSpacing: ".9px", textTransform: "uppercase", color: C.dim, marginBottom: 5, display: "block" };
+    const btn = (primary, disabled) => ({ display: "inline-flex", alignItems: "center", gap: 7, padding: "10px 16px", borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.55 : 1, border: primary ? "1px solid " + C.ind : "1px solid " + C.line, background: primary ? C.ind : "#1E293B", color: "#fff", fontFamily: "Inter" });
+    const tabBtn = (id, text) => React.createElement("button", { key: id, type: "button", onClick: () => { setTab(id); setMsg(null); }, style: { padding: "9px 16px", borderRadius: 9, fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "Inter", border: "1px solid " + (tab === id ? C.ind : C.line), background: tab === id ? "rgba(99,102,241,.18)" : "transparent", color: tab === id ? "#C7D2FE" : C.mute } }, text);
+    const field = (label, node, grow) => React.createElement("div", { style: { flex: grow || "1 1 200px", minWidth: 160 } }, React.createElement("label", { style: lab }, label), node);
+    const message = msg && React.createElement("div", { role: "status", style: { margin: "12px 0 0", padding: "10px 13px", borderRadius: 10, fontSize: 12.5, fontWeight: 600, background: msg.ok ? "rgba(16,185,129,.12)" : "rgba(239,68,68,.12)", border: "1px solid " + (msg.ok ? "rgba(16,185,129,.45)" : "rgba(239,68,68,.45)"), color: msg.ok ? "#6EE7B7" : "#FCA5A5" } }, msg.text);
+
+    let content;
+    if (loadErr) content = React.createElement("div", { style: { color: "#FCA5A5", fontSize: 13 } }, loadErr);
+    else if (!opts) content = React.createElement("div", { style: { color: C.mute, fontSize: 13 } }, "Loading...");
+    else if (tab === "generate") {
+        content = React.createElement("div", null,
+            React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 14 } },
+                field("Month", React.createElement("select", { value: month, onChange: e => { setMonth(e.target.value); setPreviewUrl(""); }, style: inp }, opts.months.map(m => React.createElement("option", { key: m.key, value: m.key }, m.label + (m.current ? " (so far)" : ""))))),
+                field("Location", opts.allowAll
+                    ? React.createElement("select", { value: site, onChange: e => { setSite(e.target.value); setPreviewUrl(""); }, style: inp }, React.createElement("option", { value: "__all__" }, "All locations"), opts.sites.map(s => React.createElement("option", { key: s, value: s }, s)))
+                    : React.createElement("div", { style: { ...inp, color: C.mute } }, opts.sites[0] || "-"))),
+            React.createElement("div", { style: { marginTop: 14 } }, React.createElement("label", { style: lab }, "Management notes (optional - printed on the last page)"),
+                React.createElement("textarea", { value: notes, maxLength: 1500, rows: 3, onChange: e => setNotes(e.target.value), placeholder: "Decisions required, risks, thanks...", style: { ...inp, resize: "vertical" } })),
+            React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 10, marginTop: 14, alignItems: "center" } },
+                React.createElement("button", { type: "button", disabled: !!busy || !month, onClick: doPreview, style: btn(true, !!busy || !month) }, busy === "preview" ? "Preparing..." : "Preview report"),
+                React.createElement("button", { type: "button", disabled: !!busy || !month, onClick: doDownload, style: btn(false, !!busy || !month) }, React.createElement(Download, { s: 14, c: "#DC2626" }), busy === "download" ? "Preparing..." : "Download PDF")),
+            opts.canEmail && React.createElement("div", { style: { marginTop: 18, paddingTop: 16, borderTop: "1px solid " + C.line } },
+                React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end" } },
+                    field("E-mail this report to", React.createElement("input", { type: "text", value: mailTo, onChange: e => setMailTo(e.target.value), placeholder: "name@company.com, other@company.com", style: inp }), "2 1 320px"),
+                    React.createElement("button", { type: "button", disabled: !!busy || !month || !mailTo.trim() || !opts.smtpConfigured, onClick: doEmail, style: btn(false, !!busy || !month || !mailTo.trim() || !opts.smtpConfigured) }, busy === "email" ? "Sending..." : "Send e-mail")),
+                !opts.smtpConfigured && React.createElement("div", { style: { fontSize: 11.5, color: "#FCD34D", marginTop: 8 } }, "E-mail is not set up yet. An administrator can configure it in Setup, E-mail (SMTP).")),
+            message,
+            previewUrl && React.createElement("div", { style: { fontSize: 11.5, color: C.dim, marginTop: 14 } }, "If the preview does not show in your browser, use Download PDF."),
+            previewUrl && React.createElement("iframe", { title: "Monthly report preview", src: previewUrl, style: { width: "100%", height: "62vh", marginTop: 6, border: "1px solid " + C.line, borderRadius: 12, background: "#0B1220" } }));
+    } else if (tab === "auto" && opts.canSchedule && sch) {
+        const upd = (p) => setSch(s => ({ ...s, ...p }));
+        const rec = sch.recipients || [];
+        const setRec = (i, p) => upd({ recipients: rec.map((r, j) => j === i ? { ...r, ...p } : r) });
+        const last = schInfo.last;
+        content = React.createElement("div", null,
+            React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 10, fontSize: 13.5, fontWeight: 700, color: C.text, cursor: "pointer" } },
+                React.createElement("input", { type: "checkbox", checked: !!sch.enabled, onChange: e => upd({ enabled: e.target.checked }), style: { width: 18, height: 18 } }), "E-mail the monthly report automatically"),
+            !opts.smtpConfigured && React.createElement("div", { style: { fontSize: 12, color: "#FCD34D", marginTop: 8 } }, "E-mail is not set up yet. Configure SMTP in Setup before turning this on."),
+            React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 14, marginTop: 14 } },
+                field("Day of the month", React.createElement("select", { value: sch.day, onChange: e => upd({ day: Number(e.target.value) }), style: inp }, Array.from({ length: 28 }, (_, i) => React.createElement("option", { key: i + 1, value: i + 1 }, String(i + 1)))), "1 1 140px"),
+                field("Time (server time)", React.createElement("input", { type: "time", value: sch.time, onChange: e => upd({ time: e.target.value }), style: inp }), "1 1 140px"),
+                field("Report covers", React.createElement("div", { style: { ...inp, color: C.mute } }, "The previous full month"), "2 1 220px")),
+            React.createElement("div", { style: { marginTop: 16 } }, React.createElement("label", { style: lab }, "Recipients and what each one receives"),
+                rec.length === 0 && React.createElement("div", { style: { fontSize: 12, color: C.dim, marginBottom: 8 } }, "No recipients yet."),
+                rec.map((r, i) => React.createElement("div", { key: i, style: { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 } },
+                    React.createElement("input", { type: "text", value: r.email, placeholder: "name@company.com", onChange: e => setRec(i, { email: e.target.value }), style: { ...inp, flex: "2 1 220px", width: "auto" } }),
+                    React.createElement("select", { value: r.scope, onChange: e => setRec(i, { scope: e.target.value }), style: { ...inp, flex: "1 1 160px", width: "auto" } }, React.createElement("option", { value: "__all__" }, "All locations"), (opts.allSites || []).map(s => React.createElement("option", { key: s, value: s }, s + " only"))),
+                    React.createElement("button", { type: "button", onClick: () => upd({ recipients: rec.filter((_, j) => j !== i) }), style: btn(false), title: "Remove" }, "Remove"))),
+                React.createElement("button", { type: "button", disabled: rec.length >= 20, onClick: () => upd({ recipients: [...rec, { email: "", scope: "__all__" }] }), style: btn(false, rec.length >= 20) }, "+ Add recipient")),
+            React.createElement("div", { style: { marginTop: 14 } }, React.createElement("label", { style: lab }, "Management notes added to every automatic report (optional)"),
+                React.createElement("textarea", { value: sch.notes || "", maxLength: 1500, rows: 2, onChange: e => upd({ notes: e.target.value }), style: { ...inp, resize: "vertical" } })),
+            React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 10, marginTop: 14, alignItems: "center" } },
+                React.createElement("button", { type: "button", disabled: !!busy, onClick: saveSchedule, style: btn(true, !!busy) }, busy === "save" ? "Saving..." : "Save schedule")),
+            React.createElement("div", { style: { marginTop: 14, fontSize: 12.5, color: C.mute, lineHeight: 1.7 } },
+                schInfo.next ? React.createElement("div", null, "Next e-mail: ", React.createElement("b", { style: { color: C.text } }, new Date(schInfo.next.at).toLocaleString()), " (report for ", schInfo.next.reportMonth, ")") : React.createElement("div", null, "Next e-mail: not scheduled"),
+                last && last.month ? React.createElement("div", null, "Last run: ", React.createElement("b", { style: { color: last.status === "sent" ? "#6EE7B7" : "#FCA5A5" } }, last.status), " for ", last.month, last.message ? " - " + last.message : "", last.at ? " (" + new Date(last.at).toLocaleString() + ")" : "") : React.createElement("div", null, "Last run: none yet")),
+            React.createElement("div", { style: { marginTop: 18, paddingTop: 16, borderTop: "1px solid " + C.line, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end" } },
+                field("Send a test report to", React.createElement("input", { type: "text", value: testTo, onChange: e => setTestTo(e.target.value), placeholder: "name@company.com", style: inp }), "2 1 280px"),
+                React.createElement("button", { type: "button", disabled: !!busy || !testTo.trim() || !opts.smtpConfigured, onClick: sendTest, style: btn(false, !!busy || !testTo.trim() || !opts.smtpConfigured) }, busy === "test" ? "Sending..." : "Send test")),
+            message);
+    } else if (tab === "history") {
+        const rows = (hist || []).filter(h => !hFilter.trim() || [h.monthLabel, h.scope, h.source, h.createdBy, h.deliveredTo].join(" ").toLowerCase().includes(hFilter.trim().toLowerCase()))
+            .sort((a, b) => { const k = hSort.key; const av = a[k] == null ? "" : a[k], bv = b[k] == null ? "" : b[k]; const c = k === "sizeBytes" ? av - bv : String(av).localeCompare(String(bv)); return hSort.dir === "asc" ? c : -c; });
+        const th = (key, text) => React.createElement("th", { key, onClick: () => setHSort(s => ({ key, dir: s.key === key && s.dir === "desc" ? "asc" : "desc" })), style: { textAlign: "left", padding: "8px 10px", fontSize: 10.5, letterSpacing: ".8px", textTransform: "uppercase", color: C.dim, cursor: "pointer", borderBottom: "1px solid " + C.line, whiteSpace: "nowrap" } }, text + (hSort.key === key ? (hSort.dir === "asc" ? " ▲" : " ▼") : ""));
+        content = React.createElement("div", null,
+            React.createElement("input", { type: "text", value: hFilter, onChange: e => setHFilter(e.target.value), placeholder: "Filter by month, location, who sent it...", style: { ...inp, maxWidth: 360, marginBottom: 12 } }),
+            hist === null ? React.createElement("div", { style: { color: C.mute, fontSize: 13 } }, "Loading...")
+                : rows.length === 0 ? React.createElement("div", { style: { color: C.mute, fontSize: 13, padding: "18px 0" } }, hist.length ? "No report matches the filter." : "No report has been sent yet. Reports that are e-mailed (manually or automatically) are kept here for 24 months.")
+                    : React.createElement("div", { style: { overflowX: "auto", maxHeight: "52vh", overflowY: "auto" } }, React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12.5, color: C.text } },
+                        React.createElement("thead", null, React.createElement("tr", null, th("month", "Month"), th("scope", "Location"), th("source", "How"), th("createdAt", "Created"), th("createdBy", "By"), th("deliveredTo", "Sent to"), th("sizeBytes", "Size"), React.createElement("th", { style: { borderBottom: "1px solid " + C.line } }))),
+                        React.createElement("tbody", null, rows.map(h => React.createElement("tr", { key: h.id, style: { borderTop: "1px solid rgba(51,65,85,.5)" } },
+                            React.createElement("td", { style: { padding: "9px 10px", fontWeight: 700 } }, h.monthLabel), React.createElement("td", { style: { padding: "9px 10px" } }, h.scope),
+                            React.createElement("td", { style: { padding: "9px 10px", color: C.mute } }, h.source === "auto" ? "Automatic" : h.source === "test" ? "Test" : "Manual"),
+                            React.createElement("td", { style: { padding: "9px 10px", color: C.mute, whiteSpace: "nowrap" } }, new Date(h.createdAt).toLocaleString()), React.createElement("td", { style: { padding: "9px 10px", color: C.mute } }, h.createdBy || "-"),
+                            React.createElement("td", { style: { padding: "9px 10px", color: h.delivery === "failed" ? "#FCA5A5" : C.mute, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: h.deliveredTo || "" }, h.delivery === "failed" ? "Failed: " : "", h.deliveredTo || "-"),
+                            React.createElement("td", { style: { padding: "9px 10px", color: C.mute, whiteSpace: "nowrap" } }, Math.max(1, Math.round((h.sizeBytes || 0) / 1024)) + " KB"),
+                            React.createElement("td", { style: { padding: "9px 10px" } }, React.createElement("button", { type: "button", onClick: () => downloadHist(h), style: { ...btn(false), padding: "6px 11px" } }, React.createElement(Download, { s: 13, c: "#DC2626" }), "PDF"))))))),
+            message);
+    }
+    return React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(2,6,23,0.9)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 110, padding: 12 }, onClick: (e) => { e.stopPropagation(); onClose(); } },
+        React.createElement("div", { role: "dialog", "aria-label": "Monthly Report", onClick: e => e.stopPropagation(), style: { width: 980, maxWidth: "100%", maxHeight: "94vh", overflowY: "auto", background: C.bg, borderRadius: 20, padding: 26, border: "1px solid #1E293B", boxShadow: "0 25px 50px rgba(0,0,0,0.6)", boxSizing: "border-box" } },
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 16 } },
+                React.createElement("div", null,
+                    React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 22, fontWeight: 800, color: "#fff" } }, "Monthly Report"),
+                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: C.dim, marginTop: 4 } }, "What changed this month compared with last month, for management. Same data as the Overall Summary.")),
+                React.createElement("button", { onClick: onClose, "aria-label": "Close", style: { width: 36, height: 36, flex: "none", borderRadius: 10, background: "#1E293B", border: "1px solid " + C.line, color: C.mute, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" } }, React.createElement(X, { s: 16, c: "#94A3B8" }))),
+            React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 18 } }, tabBtn("generate", "Generate now"), opts && opts.canSchedule && tabBtn("auto", "Automatic e-mail"), tabBtn("history", "Past reports")),
+            content));
+}
 /* ===== OVERALL SUMMARY REPORT (Dark Theme) ===== */
 function OverallSummaryModal({ assets, rackComponents, issues, activities, movements, racks, zones, allowedSites, pduSummary, onClose }) {
     const today = new Date();
+    const [monthlyOpen, setMonthlyOpen] = useState(false);
     // Rack Elevation = Device U + Component U — merge components into the same
     // shape so zone/rack U-usage below counts both, same as DC Capacity.
     // Asset counts are DEVICES only (same as the Dashboard's Installed Devices); rack components are merged in
@@ -15030,6 +15191,8 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                         totalRacks,
                         " racks")),
                 React.createElement("div", { "data-summary-control": "true", style: { display: "flex", alignItems: "center", gap: 8 } },
+                    React.createElement("button", { type: "button", onClick: () => setMonthlyOpen(true), className: "neu-btn-secondary", style: { display: "inline-flex", alignItems: "center", gap: 7, padding: "9px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }, title: "Monthly report: what changed this month compared with last month (PDF, e-mail, automatic schedule)" },
+                        " Monthly Report"),
                     React.createElement("button", { type: "button", onClick: downloadOverallSummary, className: "neu-btn-secondary", style: { display: "inline-flex", alignItems: "center", gap: 7, padding: "9px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }, title: "Download Overall Summary as image" },
                         React.createElement(Download, { s: 14, c: "#6366F1" }),
                         " Download Summary Image"),
@@ -15306,7 +15469,8 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                                 }))));
                     })());
             }); })(),
-            allSites.length === 0 && React.createElement("div", { style: { textAlign: "center", padding: "30px 0", color: "#64748B", fontSize: 13 } }, "No data available.")));
+            allSites.length === 0 && React.createElement("div", { style: { textAlign: "center", padding: "30px 0", color: "#64748B", fontSize: 13 } }, "No data available.")),
+        monthlyOpen && React.createElement(MonthlyReportModal, { onClose: () => setMonthlyOpen(false) }));
 }
 /* ===== MAIN APP ===== */
 /* ===== PDU POWER MONITORING ===== */

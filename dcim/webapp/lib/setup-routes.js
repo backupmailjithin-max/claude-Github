@@ -332,14 +332,14 @@ module.exports = function registerSetupRoutes(app, deps) {
   }
   // Notification framework: mails `html` to every saved notification recipient (or to `to`, when given) through the saved SMTP
   // settings. Never throws - callers fire-and-forget; the outcome is { sent, reason }.
-  async function sendNotification({ subject, html, to } = {}) {
+  async function sendNotification({ subject, html, to, attachments } = {}) {
     try {
       const smtp = await readSmtpSettings();
       if (!smtp || !smtp.host) return { sent: false, reason: 'SMTP is not configured' };
       const list = to ? [].concat(to) : (await readNotifyRecipients()).map((r) => r && r.email);
       const addrs = [...new Set(list.map((x) => String(x || '').trim()).filter((x) => /^[^\s@<>]+@[^\s@<>]+$/.test(x)))];
       if (!addrs.length) return { sent: false, reason: 'no notification recipients configured' };
-      const r = await sendMail({ host: smtp.host, port: smtp.port, secure: smtp.secure, user: smtp.user, pass: decryptSecret(JWT_SECRET, smtp.passEnc), fromAddress: smtp.fromAddress || smtp.user, toAddresses: addrs, subject, html });
+      const r = await sendMail({ host: smtp.host, port: smtp.port, secure: smtp.secure, user: smtp.user, pass: decryptSecret(JWT_SECRET, smtp.passEnc), fromAddress: smtp.fromAddress || smtp.user, toAddresses: addrs, subject, html, attachments });
       return { sent: true, accepted: r.accepted };
     } catch (e) {
       log.warn('[notify] email not sent: ' + e.message);
