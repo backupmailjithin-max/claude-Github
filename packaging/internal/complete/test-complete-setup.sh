@@ -12,7 +12,7 @@ cleanup(){ [ -n "$PID" ] && kill "$PID" 2>/dev/null; $ROOTCMD -e "drop database 
 ok(){ echo "PASS  $1"; PASS=$((PASS+1)); }; no(){ echo "FAIL  $1"; FAILN=$((FAILN+1)); }
 chk(){ if eval "$2" >/dev/null 2>&1; then ok "$1"; else no "$1"; fi; }
 mkdir -p "$W/pkg" && (cd "$W/pkg" && unzip -q "$ZIP")
-chk "checksums verify" "cd $W/pkg && sha256sum -c SHA256SUMS | grep -v ': OK' | wc -l | grep -qx 0"
+chk "checksums verify" "cd $W/pkg && test \"\$(sha256sum -c SHA256SUMS | grep -vc ': OK')\" = 0"
 chk "has install-new, cutover, rollback, README" "test -x $W/pkg/install-new.sh -a -x $W/pkg/cutover.sh -a -x $W/pkg/rollback.sh -a -f $W/pkg/README.txt"
 chk "no .env, keys, vendor tools in package" "! (cd $W/pkg && find . \( -name '.env' -o -name '*.pem' -o -name 'license-keygen*' -o -name 'license-issue*' -o -name 'seed-defaults*' \) -not -path '*/node_modules/*' | grep -q .)"
 chk "licence key is the internal null key" "grep -q 'LICENSE_PUBLIC_KEY_PEM: *null' $W/pkg/webapp/lib/license-public-key.js"
@@ -27,17 +27,18 @@ H="http://127.0.0.1:$PORT"
 chk "health answers" "curl -fsS $H/api/health"
 chk ".env is private and has a secret" "test \$(stat -c %a $DEST/.env) = 600 && grep -Eq '^JWT_SECRET=.{32,}' $DEST/.env"
 chk "database tables were created" "$ROOTCMD -N -e \"select count(*) from information_schema.tables where table_schema='$DBN'\" | awk '{exit !(\$1>20)}'"
-R="$(curl -s -X POST $H/api/login -H 'Content-Type: application/json' -d '{"username":"admin","password":"admin"}')"
+R="$(curl -s -X POST $H/api/auth/login -H 'Content-Type: application/json' -d '{"username":"admin","password":"admin"}')"
 chk "default admin can sign in" "echo '$R' | grep -q token"
 chk "default admin is forced to change password" "TOK=\$(echo '$R' | sed -n 's/.*\"token\":\"\\([^\"]*\\)\".*/\\1/p'); curl -s -H \"Authorization: Bearer \$TOK\" $H/api/assets | grep -q PASSWORD_CHANGE_REQUIRED"
-chk "branding seeded (Airtel logo + footer)" "$ROOTCMD -N -e \"select v from \`$DBN\`.app_settings where k='org.footerText'\" | grep -q 'Internal Official Use Only'"
+chk "branding seeded (Airtel logo + footer)" "$ROOTCMD -N -e \"select v from $DBN.app_settings where k='org.footerText'\" | grep -q 'Internal Official Use Only'"
 chk "logo file in place" "test -s $DEST/uploads/branding/logo.png"
 chk "licensing not configured (no trial lock)" "curl -s $H/api/setup/status | grep -q setupComplete"
 # restart keeps data
 kill "$PID"; sleep 1; (cd "$DEST" && set -a && . ./.env && set +a && nohup node server.js > "$W/app2.log" 2>&1 & echo $! > "$W/pid"); PID="$(cat $W/pid)"
 for i in $(seq 1 30); do curl -fsS $H/api/health >/dev/null 2>&1 && break; sleep 1; done
 chk "restart keeps the data and starts healthy" "curl -fsS $H/api/health"
-chk "no runtime errors in log" "! grep -Ei 'TypeError|ReferenceError|Unhandled|ER_[A-Z_]+' $W/app.log $W/app2.log"
+grep -Ei 'TypeError|ReferenceError|Unhandled|ER_[A-Z_]+' $W/app.log $W/app2.log | head -3 | cut -c1-200
+chk "no runtime errors in log" "! grep -Eiq 'TypeError|ReferenceError|Unhandled|ER_[A-Z_]+' $W/app.log $W/app2.log"
 OUT2="$(cd "$W/pkg" && DB_NAME=${DBN}_2 PORT=$((PORT+1)) MYSQL_ROOT_CMD="$ROOTCMD" START_CMD=true ./install-new.sh "$DEST" 2>&1)"; RC2=$?
 [ $RC2 -ne 0 ] && echo "$OUT2" | grep -q "already holds a webapp" && ok "second install over it is refused" || no "second install over it is refused"
 echo; echo "RESULT: $PASS passed, $FAILN failed"; [ $FAILN -eq 0 ] && echo "COMPLETE SETUP PASSED" || { echo "COMPLETE SETUP FAILED"; exit 1; }
