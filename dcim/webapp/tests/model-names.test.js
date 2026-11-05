@@ -37,3 +37,10 @@ test('stored-data helper only rewrites when the make agrees', () => {
   assert.strictEqual(canonicalModelFor('Cisco', 'C240'), 'C240');
   assert.strictEqual(canonicalModelFor('', 'R750'), 'R750');
 });
+
+test('trailing word "server" and a missing series letter do not create a different model', () => {
+  ['PowerEdgeR750 server', 'Dell PowerEdge750', 'Dell PowerEdge 750', 'PowerEdge R750 Rack Server', 'Dell PowerEdge R750 server', 'Dell PowerEdgeR750']
+    .forEach((s) => assert.strictEqual(canonicalModel(s), 'PowerEdge R750', s));
+  assert.strictEqual(canonicalModel('PowerEdge R760'), 'PowerEdge R760');
+  assert.strictEqual(canonicalModel('Application server'), 'Application server');
+});

@@ -785,7 +785,7 @@ async function relaxLegacyRequiredColumns(conn, tableName, knownColumns) {
 // Only rows whose make agrees are touched (see canonicalModelFor). The original text of every changed row is kept in
 // app_settings ("migrations.modelNames.v1.backup") so it can be put back if ever needed.
 async function migrateModelNames() {
-  const KEY = 'migrations.modelNames.v1';
+  const KEY = 'migrations.modelNames.v2';   // v2: also covers spellings without spaces/series letter ("PowerEdgeR750", "Dell PowerEdge750") and rows with no manufacturer
   if (await getSetting(KEY, '') === 'done') return;
   const [rows] = await pool.query("SELECT id, manufacturer, model FROM assets WHERE model IS NOT NULL AND model <> ''");
   const changes = [];

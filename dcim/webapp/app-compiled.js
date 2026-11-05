@@ -709,13 +709,17 @@ function accentBoxStyle(hex) { return accentVars(hex); }
 // Same rules as lib/model-names.js: "Dell PowerEdge R750", "Dell Power EdgeR750", "Dell PER750", "R750" -> "PowerEdge R750"
 // (and the HPE ProLiant equivalents). Anything that is not clearly a Dell/HPE server model is only whitespace-tidied.
 const CANON_DELL_RE = /^(?:DELLEMC|DELL|EMC)?(?:POWEREDGE|PE)?(XE|MX|FC|R|T|M|C)(\d{3,4})([A-Z]{0,3})$/;
+const CANON_DELL_NOLETTER_RE = /^(?:DELLEMC|DELL|EMC)?POWEREDGE([2-9]\d{2})([A-Z]{0,3})$/;
 const CANON_HPE_RE = /^(?:HEWLETTPACKARDENTERPRISE|HEWLETTPACKARD|HPE|HP)?(?:PROLIANT)?(DL|ML|BL|SL|XL|RL)(\d{2,4})(P|S|E)?(?:GEN|G)?(\d{1,2})?(PLUS)?$/;
 function canonModel(raw) {
     const tidy = String(raw == null ? "" : raw).trim().replace(/\s+/g, " ");
     if (!tidy) return tidy;
-    const n = tidy.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    // a trailing description such as "server" / "rack server" is not part of the model ("PowerEdgeR750 server")
+    const n = tidy.toUpperCase().replace(/\b(?:RACK|TOWER|BLADE|MODULAR)?\s*SERVER\b/g, "").replace(/[^A-Z0-9]/g, "");
     let m = CANON_DELL_RE.exec(n);
     if (m) return "PowerEdge " + m[1] + m[2] + m[3].toLowerCase();
+    m = CANON_DELL_NOLETTER_RE.exec(n);
+    if (m) return "PowerEdge R" + m[1] + m[2].toLowerCase();
     m = CANON_HPE_RE.exec(n);
     if (m) return "ProLiant " + m[1] + m[2] + (m[3] ? m[3].toLowerCase() : "") + (m[4] ? " Gen" + m[4] : "") + (m[5] ? " Plus" : "");
     return tidy;
@@ -727,8 +731,8 @@ function canonModelFor(make, raw) {
     const c = canonModel(tidy);
     if (c === tidy) return tidy;
     const mk = String(make || "");
-    if (/^PowerEdge /.test(c)) return /dell/i.test(mk) ? c : tidy;
-    if (/^ProLiant /.test(c)) return /\bhpe?\b|hewlett|^hp/i.test(mk) ? c : tidy;
+    if (/^PowerEdge /.test(c)) return (/dell/i.test(mk) || /dell|power\s*edge|^per\d/i.test(tidy)) ? c : tidy;
+    if (/^ProLiant /.test(c)) return (/\bhpe?\b|hewlett|^hp/i.test(mk) || /\bhpe?\b|hewlett|pro\s*liant/i.test(tidy)) ? c : tidy;
     return tidy;
 }
 function hwKey(name) { return String(name || "Unknown").trim().toLowerCase(); }
@@ -8162,7 +8166,7 @@ const FLOATING_HSCROLL_ARROW_BTN_STYLE = { flexShrink: 0, width: 24, height: 24,
 // but had no usable way to actually do it. This draws its own always-visible track + thumb
 // (plain colored divs, not a native scrollbar) plus explicit left/right buttons, so scrolling
 // the table never depends on the OS's or browser's scrollbar visibility settings at all.
-function FloatingHScroll({ wrapRef }) {
+function FloatingHScroll({ wrapRef, inline }) {
     const [state, setState] = useState({ visible: false, left: 0, width: 0, scrollLeft: 0, scrollWidth: 0, clientWidth: 0 });
     useEffect(() => {
         const recompute = () => {
@@ -8178,7 +8182,7 @@ function FloatingHScroll({ wrapRef }) {
             // header/sidebar shell, or simply a table short enough to fit on screen without the
             // page growing taller). This way the bar shows whenever it's actually useful,
             // regardless of how the surrounding page scrolls.
-            const visible = needsScroll && rect.bottom > 0 && rect.top < window.innerHeight;
+            const visible = needsScroll && (inline || (rect.bottom > 0 && rect.top < window.innerHeight));
             setState({ visible, left: rect.left, width: rect.width, scrollLeft: wrap.scrollLeft, scrollWidth: wrap.scrollWidth, clientWidth: wrap.clientWidth });
         };
         recompute();
@@ -8220,6 +8224,13 @@ function FloatingHScroll({ wrapRef }) {
     };
     if (!state.visible)
         return null;
+    const bar = (style) => React.createElement("div", { style, "data-rf": "list-hscroll" },
+        React.createElement("button", { onClick: () => scrollByAmount(-240), style: FLOATING_HSCROLL_ARROW_BTN_STYLE, title: "Scroll left", "aria-label": "Scroll table left" }, "‹"),
+        React.createElement("div", { onPointerDown: onTrackPointerDown, style: { position: "relative", flex: 1, height: 10, borderRadius: 6, background: "#E2E8F0", cursor: "pointer" } },
+            React.createElement("div", { style: { position: "absolute", top: 0, left: thumbLeft, width: thumbWidth, height: 10, borderRadius: 6, background: "#64748B" } })),
+        React.createElement("button", { onClick: () => scrollByAmount(240), style: FLOATING_HSCROLL_ARROW_BTN_STYLE, title: "Scroll right", "aria-label": "Scroll table right" }, "›")
+    );
+    if (inline) return bar({ display: "flex", alignItems: "center", gap: 8, padding: "8px 0 2px", userSelect: "none" });
     return ReactDOM.createPortal(React.createElement("div", { style: { position: "fixed", left: state.left, width: state.width, bottom: (typeof document !== "undefined" && document.querySelector(".dcim-official-use-footer")) ? 46 : 0, zIndex: 60, background: "rgba(255,255,255,0.97)", borderTop: "1px solid #E2E8F0", boxShadow: "0 -4px 10px rgba(15,23,42,0.1)", display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", boxSizing: "border-box" } },
         React.createElement("button", { onClick: () => scrollByAmount(-240), style: FLOATING_HSCROLL_ARROW_BTN_STYLE, title: "Scroll left", "aria-label": "Scroll table left" }, "‹"),
         React.createElement("div", { onPointerDown: onTrackPointerDown, style: { position: "relative", flex: 1, height: 10, borderRadius: 6, background: "#E2E8F0", cursor: "pointer" } },
@@ -8561,6 +8572,9 @@ function RedfishTab({ canEdit, allowedSites }) {
     const [syncState, setSyncState] = useState(null); // { running, processed, total, msg }
     const [hwModalAsset, setHwModalAsset] = useState(null);
     const [hwState, setHwState] = useState(null); // { running, done, total, failed, msg }
+    // Completion messages ("Synced 3 of 3 ...", "hardware read ...") disappear by themselves after 5 seconds.
+    useEffect(() => { if (syncState && !syncState.running && syncState.msg) { const t = setTimeout(() => setSyncState(null), 5000); return () => clearTimeout(t); } }, [syncState]);
+    useEffect(() => { if (hwState && !hwState.running && hwState.msg) { const t = setTimeout(() => setHwState(null), 5000); return () => clearTimeout(t); } }, [hwState]);
     const [sortKey, setSortKey] = useState(null);
     const [sortDir, setSortDir] = useState(null);
     const handleSort = (key) => { if (sortKey !== key) { setSortKey(key); setSortDir("asc"); } else if (sortDir === "asc") setSortDir("desc"); else { setSortKey(null); setSortDir(null); } };
@@ -8570,7 +8584,7 @@ function RedfishTab({ canEdit, allowedSites }) {
     useEffect(() => { api.getFirmwareModelTargets().then(setFwTargets).catch(() => setFwTargets({ ome: [], oneview: [] })); }, []);
     // Adds the firmware target + Compliant / Outdated / Unknown to Dell and HPE servers (same rule as Firmware Compliance); other devices stay blank.
     const assets = useMemo(() => (rawAssets ? rawAssets.map((a0) => {
-        const a = { ...a0, vendor: (/dell/i.test(a0.vendor || "") ? "Dell" : /\bhpe?\b|hewlett/i.test(a0.vendor || "") ? "HPE" : a0.vendor), syncState: a0.monitorIgnored ? "Ignored" : !a0.redfishConfigured ? "No credentials" : a0.lastError ? "Failed" : a0.lastSyncAt ? "Synced" : "Not synced yet" };
+        const a = { ...a0, vendor: (/dell/i.test(a0.vendor || "") ? "Dell" : /\bhpe?\b|hewlett/i.test(a0.vendor || "") ? "HPE" : a0.vendor), model: canonModelFor(a0.vendor, a0.model), syncState: a0.monitorIgnored ? "Ignored" : !a0.redfishConfigured ? "No credentials" : a0.lastError ? "Failed" : a0.lastSyncAt ? "Synced" : "Not synced yet" };
         const v = String(a.vendor || "").toLowerCase();
         const isDell = v.includes("dell"), isHpe = v.includes("hp") || v.includes("hewlett");
         if (!fwTargets || !(isDell || isHpe) || (a.hardwareType && !/server/i.test(a.hardwareType))) return { ...a, fwTarget: "", fwStatus: "" };
@@ -8704,7 +8718,7 @@ function RedfishTab({ canEdit, allowedSites }) {
         err && React.createElement("div", { style: { padding: "9px 12px", borderRadius: 9, background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.25)", color: "#B91C1C", fontFamily: "Inter", fontSize: 12, marginBottom: 14 } }, err),
         !assets && !err && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 13, color: "#64748B", padding: 20 } }, "Loading…"),
         assets && !assets.length && React.createElement("div", { style: { padding: "40px 20px", textAlign: "center", fontFamily: "Inter", fontSize: 13, color: "#64748B" } }, "No assets with a management IP yet. Add one from Asset Inventory, or click \"Discover\" to scan assets that already have one."),
-        assets && assets.length > 0 && React.createElement(React.Fragment, null, React.createElement("div", { ref: tableWrapRef, style: { overflowX: "auto" } }, React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12.5 } },
+        assets && assets.length > 0 && React.createElement(React.Fragment, null, React.createElement("div", { ref: tableWrapRef, "data-rf": "list-scroll", style: { overflow: "auto", maxHeight: "calc(100vh - 290px)", minHeight: 260 } }, React.createElement("style", null, '[data-rf="list-scroll"]::-webkit-scrollbar{height:0}[data-rf="list-scroll"] thead th{position:sticky;top:0;z-index:3;background:#EEF2F8;box-shadow:0 1px 0 rgba(163,177,198,.45)}'), React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12.5 } },
             React.createElement("thead", null, React.createElement("tr", null,
                 canEdit && React.createElement("th", { style: { ...thBase, width: 34 } },
                     React.createElement("input", { type: "checkbox", checked: filtered.length > 0 && filtered.every((a) => selectedIds.has(a.id)), ref: (el) => { if (el)
@@ -8720,7 +8734,7 @@ function RedfishTab({ canEdit, allowedSites }) {
                     REDFISH_COLUMNS.map((col) => React.createElement("td", { key: col.key, style: { padding: "8px 9px", whiteSpace: "nowrap" } }, renderCell(col, a), col.key === "hardwareType" && a.monitorIgnored && React.createElement("span", { style: { marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#92400E", background: "#FEF3C7", borderRadius: 5, padding: "1px 6px" } }, "IGNORED"))),
                     React.createElement("td", { style: { padding: "8px 9px", textAlign: "right", whiteSpace: "nowrap" } },
                         canEdit && React.createElement("button", { onClick: () => toggleIgnore(a), className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px", marginRight: 6 }, title: a.monitorIgnored ? "Include this device in Redfish monitoring again" : "Exclude this device from Redfish monitoring (e.g. storage/network/firewall gear that doesn't need it)" }, a.monitorIgnored ? "Un-ignore" : "Ignore from Monitor"),
-                        a.redfishConfigured && React.createElement("button", { onClick: () => setModalAsset(a), className: "neu-btn-secondary", title: "Open the device: Load Firmware Inventory and (Admin / Operator) start a firmware update", "data-rf": "firmware-btn", style: { fontSize: 11, padding: "4px 10px", marginRight: 6 } }, "Firmware"), React.createElement("button", { onClick: () => setModalAsset(a), className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px" } }, a.redfishConfigured ? "View / Sync" : "Configure"))))))), React.createElement(FloatingHScroll, { wrapRef: tableWrapRef })),
+                        a.redfishConfigured && React.createElement("button", { onClick: () => setModalAsset(a), className: "neu-btn-secondary", title: "Open the device: Load Firmware Inventory and (Admin / Operator) start a firmware update", "data-rf": "firmware-btn", style: { fontSize: 11, padding: "4px 10px", marginRight: 6 } }, "Firmware"), React.createElement("button", { onClick: () => setModalAsset(a), className: "neu-btn-secondary", style: { fontSize: 11, padding: "4px 10px" } }, a.redfishConfigured ? "View / Sync" : "Configure"))))))), React.createElement(FloatingHScroll, { wrapRef: tableWrapRef, inline: true })),
         modalAsset !== undefined && React.createElement(RedfishDetectModal, { asset: modalAsset, onClose: () => setModalAsset(undefined), onSaved: load }),
         hwModalAsset && React.createElement(RfHwDetailModal, { asset: hwModalAsset, canEdit: canEdit, onClose: () => setHwModalAsset(null), onChanged: load }),
         discoverOpen && React.createElement(RedfishDiscoverModal, { onClose: () => setDiscoverOpen(false), onApplied: load }),
