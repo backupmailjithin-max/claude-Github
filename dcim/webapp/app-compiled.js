@@ -14188,11 +14188,9 @@ function DashboardOverview({ issues, assets, rackComponents = [], activities, ov
                         var _a;
                         const inward = m.movementType === "Inward";
                         const date = m.movementDate || m.createdAt || "";
-                        // Inward rows are tinted green and outward rows red (with a coloured edge), so the two directions read apart at a glance.
-                        const rowTint = inward ? { background: "linear-gradient(90deg, rgba(16,185,129,.16), rgba(16,185,129,.04) 70%, #FAFCFF)", borderColor: "rgba(16,185,129,.35)", boxShadow: "inset 3px 0 0 #10B981" } : { background: "linear-gradient(90deg, rgba(239,68,68,.15), rgba(239,68,68,.04) 70%, #FAFCFF)", borderColor: "rgba(239,68,68,.32)", boxShadow: "inset 3px 0 0 #EF4444" };
                         const fullName = String(m.itemName || "Material").replace(/\s+/g, " ").trim();
                         const shortName = fullName.length > 64 ? fullName.slice(0, 62).trimEnd() + "\u2026" : fullName;
-                        return React.createElement("button", { key: m.id, className: "sample-movement-row " + (inward ? "mv-in" : "mv-out"), title: fullName, onClick: () => goTo("movements", m.site || "all"), style: { width: "100%", textAlign: "left", cursor: "pointer", ...rowTint } },
+                        return React.createElement("button", { key: m.id, className: "sample-movement-row", title: fullName, onClick: () => goTo("movements", m.site || "all"), style: { width: "100%", textAlign: "left", cursor: "pointer" } },
                             React.createElement("span", { className: "sample-movement-dot", style: { background: inward ? "#10B981" : "#EF4444" } }),
                             React.createElement("span", { className: "sample-movement-copy", style: { minWidth: 0 } },
                                 React.createElement("strong", { style: { display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, shortName),
