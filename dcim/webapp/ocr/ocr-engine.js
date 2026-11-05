@@ -58,11 +58,11 @@ function enqueue(fn) {
 // Words from pass 2 are added where pass 1 read nothing usable; weak pass 1 words are replaced by better pass 2 words.
 // Every word keeps its position, so the parser can read table columns and "label above value" layouts.
 const PASSES = [
-  { tessedit_pageseg_mode: '3', thresholding_method: '0' },
-  { tessedit_pageseg_mode: '11', thresholding_method: '2' },
-];
+  { tessedit_pageseg_mode: '3', thresholding_method: '0', tessedit_char_whitelist: '' },
+  { tessedit_pageseg_mode: '11', thresholding_method: '2', tessedit_char_whitelist: '' },
+];   // whitelist '' = every character allowed; the serial / ID re-reads below restrict it and a pass must never inherit that
 // pass 3 runs only when the first two left unreliable words (blurred photos, grid lines through the text): Leptonica Otsu + sparse layout
-const PASS_RESCUE = { tessedit_pageseg_mode: '11', thresholding_method: '1' };
+const PASS_RESCUE = { tessedit_pageseg_mode: '11', thresholding_method: '1', tessedit_char_whitelist: '' };
 function linesFromData(data) {
   const lines = [];
   for (const b of data.blocks || []) for (const p of b.paragraphs || []) for (const ln of p.lines || []) {
@@ -128,8 +128,15 @@ async function readPasses(worker, buf, t0) {
   try { await worker.setParameters(PASSES[0]); } catch (e) { /* worker will be reset by the idle timer */ }
   return out;
 }
+// The cell / ID re-reads restrict the worker to letters + digits; the worker is shared by every later scan, so it is always put back to
+// the normal settings when a picture is finished (otherwise the NEXT document was read with that restriction and came back garbled).
 async function recognizeImage(buf, ext) {
-  const worker = await getWorker(); const t0 = Date.now();
+  const worker = await getWorker();
+  try { return await recognizeImageInner(worker, buf, ext); }
+  finally { try { await worker.setParameters({ ...PASSES[0] }); } catch (e) { /* worker was dropped (timeout) - a fresh one starts clean */ } }
+}
+async function recognizeImageInner(worker, buf, ext) {
+  const t0 = Date.now();
   const base = prep && ext ? prep.prepare(buf, ext, {}) : null;          // upright (EXIF), grey, never huge
   let out = await readPasses(worker, base ? base.buf : buf, t0);
   let cur = base;                                                         // the picture the current line coordinates belong to
