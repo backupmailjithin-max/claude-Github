@@ -706,6 +706,31 @@ function accentVars(hex) {
     return { '--accent': hex, '--accent-soft': accentA(hex, 0.13), '--accent-faint': accentA(hex, 0.09), '--accent-strong': accentA(hex, 0.30) };
 }
 function accentBoxStyle(hex) { return accentVars(hex); }
+// Same rules as lib/model-names.js: "Dell PowerEdge R750", "Dell Power EdgeR750", "Dell PER750", "R750" -> "PowerEdge R750"
+// (and the HPE ProLiant equivalents). Anything that is not clearly a Dell/HPE server model is only whitespace-tidied.
+const CANON_DELL_RE = /^(?:DELLEMC|DELL|EMC)?(?:POWEREDGE|PE)?(XE|MX|FC|R|T|M|C)(\d{3,4})([A-Z]{0,3})$/;
+const CANON_HPE_RE = /^(?:HEWLETTPACKARDENTERPRISE|HEWLETTPACKARD|HPE|HP)?(?:PROLIANT)?(DL|ML|BL|SL|XL|RL)(\d{2,4})(P|S|E)?(?:GEN|G)?(\d{1,2})?(PLUS)?$/;
+function canonModel(raw) {
+    const tidy = String(raw == null ? "" : raw).trim().replace(/\s+/g, " ");
+    if (!tidy) return tidy;
+    const n = tidy.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    let m = CANON_DELL_RE.exec(n);
+    if (m) return "PowerEdge " + m[1] + m[2] + m[3].toLowerCase();
+    m = CANON_HPE_RE.exec(n);
+    if (m) return "ProLiant " + m[1] + m[2] + (m[3] ? m[3].toLowerCase() : "") + (m[4] ? " Gen" + m[4] : "") + (m[5] ? " Plus" : "");
+    return tidy;
+}
+function canonModelKey(raw) { return canonModel(raw).toLowerCase(); }
+// For inventory rows: only standardise when the make agrees, so e.g. a Cisco "C240" is never shown as a PowerEdge.
+function canonModelFor(make, raw) {
+    const tidy = String(raw == null ? "" : raw).trim().replace(/\s+/g, " ");
+    const c = canonModel(tidy);
+    if (c === tidy) return tidy;
+    const mk = String(make || "");
+    if (/^PowerEdge /.test(c)) return /dell/i.test(mk) ? c : tidy;
+    if (/^ProLiant /.test(c)) return /\bhpe?\b|hewlett|^hp/i.test(mk) ? c : tidy;
+    return tidy;
+}
 function hwKey(name) { return String(name || "Unknown").trim().toLowerCase(); }
 function hwEquals(a, b) { return hwKey(a) === hwKey(b); }
 // Server family for the Inventory "Servers" module. Names are matched loosely (case, spaces, dashes and
@@ -8543,13 +8568,14 @@ function RedfishTab({ canEdit, allowedSites }) {
     useEffect(() => { api.getFirmwareModelTargets().then(setFwTargets).catch(() => setFwTargets({ ome: [], oneview: [] })); }, []);
     // Adds the firmware target + Compliant / Outdated / Unknown to Dell and HPE servers (same rule as Firmware Compliance); other devices stay blank.
     const assets = useMemo(() => (rawAssets ? rawAssets.map((a0) => {
-        const a = { ...a0, syncState: a0.monitorIgnored ? "Ignored" : !a0.redfishConfigured ? "No credentials" : a0.lastError ? "Failed" : a0.lastSyncAt ? "Synced" : "Not synced yet" };
+        const a = { ...a0, vendor: (/dell/i.test(a0.vendor || "") ? "Dell" : /\bhpe?\b|hewlett/i.test(a0.vendor || "") ? "HPE" : a0.vendor), syncState: a0.monitorIgnored ? "Ignored" : !a0.redfishConfigured ? "No credentials" : a0.lastError ? "Failed" : a0.lastSyncAt ? "Synced" : "Not synced yet" };
         const v = String(a.vendor || "").toLowerCase();
         const isDell = v.includes("dell"), isHpe = v.includes("hp") || v.includes("hewlett");
         if (!fwTargets || !(isDell || isHpe) || (a.hardwareType && !/server/i.test(a.hardwareType))) return { ...a, fwTarget: "", fwStatus: "" };
         const tg = ((isDell ? fwTargets.ome : fwTargets.oneview) || []).find((t) => fwcModelKey(t.model) === fwcModelKey(a.model));
         const st = fwcStatusOf(a.biosVersion, tg && tg.targetVersion);
-        return { ...a, fwTarget: (tg && tg.targetVersion) || "", fwStatus: (FWC_META[st.status] || FWC_META.UNKNOWN).label };
+        // BIOS read but no target set for this model = "No target" (set one in Monitoring); "Unknown" only when the BIOS itself was not read.
+        return { ...a, fwTarget: (tg && tg.targetVersion) || "", fwStatus: st.status === "UNKNOWN" && String(a.biosVersion || "").trim() && !(tg && tg.targetVersion) ? "No target" : (FWC_META[st.status] || FWC_META.UNKNOWN).label };
     }) : null), [rawAssets, fwTargets]);
     const sel = { padding: "6px 10px", borderRadius: 8, border: "1px solid #CBD5E1", background: "#fff", fontFamily: "Inter", fontSize: 12, color: "#0F172A" };
     // Category options reflect whatever is actually in Inventory for devices with a
@@ -8624,7 +8650,7 @@ function RedfishTab({ canEdit, allowedSites }) {
             case "alertCount": return a.alertCount == null ? React.createElement("span", { style: { color: "#94A3B8" } }, "—") : a.alertCount === 0 ? React.createElement("span", { style: { color: "#059669", fontWeight: 700 } }, "0") : React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 5, color: "#DC2626", fontWeight: 700 } }, React.createElement("span", { style: { width: 6, height: 6, borderRadius: "50%", background: "#DC2626" } }), a.alertCount);
             case "biosVersion": return React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontSize: 11.5 } }, a.biosVersion || "—");
             case "lastSyncAt": return React.createElement("span", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748B" } }, a.lastSyncAt ? new Date(a.lastSyncAt).toLocaleString() : "Never");
-            case "fwStatus": return a.fwStatus ? React.createElement(FwcStatusPill, { s: String(a.fwStatus).toUpperCase() }) : React.createElement("span", { style: { color: "#94A3B8" } }, "—");
+            case "fwStatus": return a.fwStatus === "No target" ? React.createElement("span", { title: "BIOS was read, but no target firmware is set for this model. Set one in Monitoring to get Compliant / Outdated.", style: { display: "inline-block", padding: "2px 8px", borderRadius: 999, background: "rgba(100,116,139,.14)", color: "#475569", fontFamily: "Inter", fontSize: 10.5, fontWeight: 800, letterSpacing: ".02em", whiteSpace: "nowrap" } }, "No target") : a.fwStatus ? React.createElement(FwcStatusPill, { s: String(a.fwStatus).toUpperCase() }) : React.createElement("span", { style: { color: "#94A3B8" } }, "—");
             case "hwSummary": return React.createElement("span", { title: a.hwSummary || "", style: { fontFamily: "Inter", fontSize: 11.5, display: "inline-block", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "bottom" } }, a.hwSummary || "—");
             case "cpuSummary": case "memSummary": case "diskSummary": case "nicSummary": {
                 const v = a[col.key];
@@ -8856,7 +8882,7 @@ function MonitorVendorPanel({ vendorLabel, icon, result, canEdit, selectedIds, o
     const normVer = (s) => String(s || '').trim();
     const fwCompliant = (cur, tgt) => { if (normVer(cur) === normVer(tgt)) return true; const c = compareFirmwareVersions(cur, tgt); return c !== null && c >= 0; };
     const fwStatusText = (cur, tgt) => normVer(cur) === normVer(tgt) || compareFirmwareVersions(cur, tgt) === 0 ? "Compliant" : compareFirmwareVersions(cur, tgt) === 1 ? "Above target" : "Outdated";
-    const modelKey = (s) => String(s || '').trim().replace(/\s+/g, ' ').toLowerCase();
+    const modelKey = (s) => canonModelKey(s);
     const targetForDevice = (d) => {
         const k = modelKey(d && d.model);
         return (firmwareTargets || []).find((t) => modelKey(t.model) === k) || null;
@@ -13512,7 +13538,7 @@ function fwcCount(rows) {
 function fwcWhen(ts) { if (!ts) return ""; try { return new Date(ts).toLocaleString([], { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }); } catch (e) { return ""; } }
 function fwcTarget(r) { return r.target || ""; }
 // Same rule as the Monitoring page (MonitorVendorPanel): the target is the per-model firmware target kept for Monitoring; at or above it = Compliant, behind = Outdated.
-function fwcModelKey(s) { return String(s || "").trim().replace(/\s+/g, " ").toLowerCase(); }
+function fwcModelKey(s) { return canonModelKey(s); }
 function fwcStatusOf(current, target) {
     const cur = String(current || "").trim(), tgt = String(target || "").trim();
     if (!cur) return { status: "UNKNOWN", reason: "Firmware version not read from the appliance yet" };
@@ -13595,13 +13621,13 @@ function DashFirmwareCompliance({ assets = [] }) {
         const list = (targets && ((r.targetVendor || r.vendor) === "OME" ? targets.ome : targets.oneview)) || [];
         const tg = list.find((t) => fwcModelKey(t.model) === fwcModelKey(r.model));
         const st = fwcStatusOf(r.current, tg && tg.targetVersion);
-        return { ...r, target: (tg && tg.targetVersion) || "", status: st.status, reason: st.reason, src: FWC_SRC_LABEL[r.vendor] || r.vendor, hwType: (a && String(a.hardwareType || "").trim()) || "Not in DCIM", manufacturer: a ? (a.manufacturer || "") : "", rackNo: a ? (a.rackNo || "") : "", position: a ? (a.position || "") : "", invName: a ? (a.deviceName || "") : "", assetTag: a ? (a.assetTag || "") : "", invSite: a ? (a.site || "") : "", invZone: a ? (a.zone || "") : "", aSite: r.site, aZone: r.zone, site: (a && a.site) || r.site, zone: (a && a.zone) || r.zone };
+        return { ...r, model: canonModel(r.model), target: (tg && tg.targetVersion) || "", status: st.status, reason: st.reason, src: FWC_SRC_LABEL[r.vendor] || r.vendor, hwType: (a && String(a.hardwareType || "").trim()) || "Not in DCIM", manufacturer: a ? (a.manufacturer || "") : "", rackNo: a ? (a.rackNo || "") : "", position: a ? (a.position || "") : "", invName: a ? (a.deviceName || "") : "", assetTag: a ? (a.assetTag || "") : "", invSite: a ? (a.site || "") : "", invZone: a ? (a.zone || "") : "", aSite: r.site, aZone: r.zone, site: (a && a.site) || r.site, zone: (a && a.zone) || r.zone };
     }), [data, invIdx, targets]);
     // Asset inventory side - same basis as Inventory Reconciliation: active, non-component assets located in a zone that has Dell OME / HPE OneView configured and reported; a serial found in either appliance counts as present.
     const zoneInfo = useMemo(() => { const m = new Map(); ((data && data.zones) || []).forEach((z) => { const k = z.site + "|" + z.zone; const e = m.get(k) || { ok: true, vendors: [] }; if (!z.reported) e.ok = false; e.vendors.push(z.vendor); m.set(k, e); }); return m; }, [data]);
     const seenSerials = useMemo(() => { const h = new Set(); ((data && data.rows) || []).forEach((r) => { const k = String(r.serial || "").trim().toUpperCase(); if (k) h.add(k); }); return h; }, [data]);
     // Inventory in any location / zone is included automatically (new sites and zones need no change): assets of zones with an appliance, plus any asset whose serial the appliances report from another zone.
-    const invAll = useMemo(() => (Array.isArray(assets) ? assets : []).filter((a) => { if (!a) return false; const t = String(a.hardwareType || "").trim(); return !!t && !isComponentHwType(t); }).map((a) => { const z = zoneInfo.get(a.site + "|" + a.zone); const mk = dashMakeLabel(a.manufacturer); const v = z && z.vendors.length === 1 ? z.vendors[0] : (mk === "HP" ? "ONEVIEW" : "OME"); return { ...a, src: FWC_SRC_LABEL[v] || v, monitored: !!(z && z.ok), noAppliance: !z }; }), [assets, zoneInfo]);
+    const invAll = useMemo(() => (Array.isArray(assets) ? assets : []).filter((a) => { if (!a) return false; const t = String(a.hardwareType || "").trim(); return !!t && !isComponentHwType(t); }).map((a) => { const z = zoneInfo.get(a.site + "|" + a.zone); const mk = dashMakeLabel(a.manufacturer); const v = z && z.vendors.length === 1 ? z.vendors[0] : (mk === "HP" ? "ONEVIEW" : "OME"); return { ...a, model: canonModelFor(a.manufacturer, a.model), src: FWC_SRC_LABEL[v] || v, monitored: !!(z && z.ok), noAppliance: !z }; }), [assets, zoneInfo]);
     const missAll = useMemo(() => {
         const have = new Set();
         allRows.forEach((r) => { const k = String(r.serial || "").trim().toUpperCase(); if (k) have.add(k); });
@@ -13692,7 +13718,7 @@ function FwcDetails({ rows, inv, missing, zones, lastSync, types, typeCounts, se
     };
     const byType = useMemo(() => group((r) => r.hwType, (a) => String(a.hardwareType).trim()), [locRows, locInv, locMissing]);
     const bySource = useMemo(() => group((r) => r.src, (a) => a.src), [locRows, locInv, locMissing]);
-    const byModel = useMemo(() => group((r) => r.model || "Unspecified", (a) => a.model || "Unspecified"), [locRows, locInv, locMissing]);
+    const byModel = useMemo(() => group((r) => canonModel(r.model) || "Unspecified", (a) => canonModelFor(a.manufacturer, a.model) || "Unspecified"), [locRows, locInv, locMissing]);
     const zoneRows = useMemo(() => {
         const m = new Map(); const get = (site, zone) => { const k = site + "\u0001" + zone; if (!m.has(k)) m.set(k, { site, zone, ...zeroT() }); return m.get(k); };
         locRows.forEach((r) => { const z = get(r.site, r.zone); z.total++; z[r.src === "Dell OME" ? "dell" : r.src === "HPE OneView" ? "hpe" : "bmc"]++; z[r.status]++; if (r.hwType === "Not in DCIM") z.extra++; });
@@ -14162,10 +14188,14 @@ function DashboardOverview({ issues, assets, rackComponents = [], activities, ov
                         var _a;
                         const inward = m.movementType === "Inward";
                         const date = m.movementDate || m.createdAt || "";
-                        return React.createElement("button", { key: m.id, className: "sample-movement-row", onClick: () => goTo("movements", m.site || "all"), style: { width: "100%", textAlign: "left", cursor: "pointer" } },
+                        // Inward rows are tinted green and outward rows red (with a coloured edge), so the two directions read apart at a glance.
+                        const rowTint = inward ? { background: "linear-gradient(90deg, rgba(16,185,129,.16), rgba(16,185,129,.04) 70%, #FAFCFF)", borderColor: "rgba(16,185,129,.35)", boxShadow: "inset 3px 0 0 #10B981" } : { background: "linear-gradient(90deg, rgba(239,68,68,.15), rgba(239,68,68,.04) 70%, #FAFCFF)", borderColor: "rgba(239,68,68,.32)", boxShadow: "inset 3px 0 0 #EF4444" };
+                        const fullName = String(m.itemName || "Material").replace(/\s+/g, " ").trim();
+                        const shortName = fullName.length > 64 ? fullName.slice(0, 62).trimEnd() + "\u2026" : fullName;
+                        return React.createElement("button", { key: m.id, className: "sample-movement-row " + (inward ? "mv-in" : "mv-out"), title: fullName, onClick: () => goTo("movements", m.site || "all"), style: { width: "100%", textAlign: "left", cursor: "pointer", ...rowTint } },
                             React.createElement("span", { className: "sample-movement-dot", style: { background: inward ? "#10B981" : "#EF4444" } }),
-                            React.createElement("span", { className: "sample-movement-copy" },
-                                React.createElement("strong", null, m.itemName || "Material"),
+                            React.createElement("span", { className: "sample-movement-copy", style: { minWidth: 0 } },
+                                React.createElement("strong", { style: { display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, shortName),
                                 React.createElement("small", null,
                                     m.site || "—",
                                     " \u00B7 ",

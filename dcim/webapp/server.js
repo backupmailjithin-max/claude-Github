@@ -9,6 +9,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const license = require('./lib/license');
+const { canonicalModel, canonicalModelKey, canonicalModelFor } = require('./lib/model-names');
 const zlib = require('zlib'); // also used by BACKUP & RESTORE further down
 
 const app = express();
@@ -780,6 +781,33 @@ async function relaxLegacyRequiredColumns(conn, tableName, knownColumns) {
 }
 
 // Initialize database tables
+// One-time standardisation of stored Dell / HPE server model names ("Dell Power EdgeR750", "Dell PER750" ... -> "PowerEdge R750").
+// Only rows whose make agrees are touched (see canonicalModelFor). The original text of every changed row is kept in
+// app_settings ("migrations.modelNames.v1.backup") so it can be put back if ever needed.
+async function migrateModelNames() {
+  const KEY = 'migrations.modelNames.v1';
+  if (await getSetting(KEY, '') === 'done') return;
+  const [rows] = await pool.query("SELECT id, manufacturer, model FROM assets WHERE model IS NOT NULL AND model <> ''");
+  const changes = [];
+  for (const r of rows) {
+    const to = canonicalModelFor(r.manufacturer, r.model);
+    if (to && to !== r.model) changes.push({ id: r.id, from: r.model, to });
+  }
+  // Save the originals FIRST (in chunks that fit the settings column), then change the rows.
+  for (let i = 0; i < changes.length; i += 300) await setSetting(`${KEY}.backup.${i / 300}`, JSON.stringify(changes.slice(i, i + 300).map((c) => ({ id: c.id, model: c.from }))));
+  for (const c of changes) await pool.query('UPDATE assets SET model = ? WHERE id = ?', [c.to, c.id]);
+  // Firmware targets typed with different spellings now match on the standard model key.
+  try {
+    const [tg] = await pool.query('SELECT vendor, model_key, model_name FROM firmware_model_targets');
+    for (const t of tg) {
+      const k = canonicalModelKey(t.model_name);
+      if (k && k !== t.model_key) await pool.query('UPDATE IGNORE firmware_model_targets SET model_key = ? WHERE vendor = ? AND model_key = ?', [k, t.vendor, t.model_key]);
+    }
+  } catch (e) { log.warn('[models] firmware target keys not updated: ' + e.message); }
+  await setSetting(KEY, 'done');
+  log.info(`[models] standardised ${changes.length} Dell/HPE server model name(s).`);
+}
+
 async function initDB() {
   let conn;
   try {
@@ -3451,7 +3479,8 @@ async function fetchOneviewAlertCounts(site, zone) {
 // ROM against whatever is set here. Any authenticated user can read it;
 // only Admin/Operator can change it.
 function normalizeFirmwareModelKey(raw) {
-  return String(raw || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  // "Dell PowerEdge R750" / "Dell PER750" / "R750" are one model, so they share one firmware target.
+  return canonicalModelKey(raw);
 }
 
 // Manual BIOS targets per vendor/model. These are the only values used for
@@ -4971,7 +5000,7 @@ async function runReconciliationJob(allowedSites) {
         const suggestions = {};
         if (hwType !== canonicalHwType) suggestions.hardwareType = { from: hwType || '(blank)', to: canonicalHwType };
         const liveModel = liveDevice.model && liveDevice.model !== '—' ? liveDevice.model : null;
-        if (liveModel && normalizeModelText(a.model) !== normalizeModelText(liveModel)) {
+        if (liveModel && canonicalModelKey(a.model) !== canonicalModelKey(liveModel)) {
           suggestions.model = { from: a.model || '(blank)', to: liveModel };
         }
         if (Object.keys(suggestions).length) {
@@ -5823,6 +5852,7 @@ app.post('/api/assets', authenticateToken, requireRole(['Admin','Operator']), as
   try {
     const a = { ...req.body };
     { const nf = normalizeUFormat(a.position, a.height); a.position = nf.position; a.height = nf.height; }
+    a.model = canonicalModelFor(a.manufacturer, a.model);
     await assertSiteAccess(req.user, a.site);
     const id = genId('AST');
     const initialLifecycleStatus = String(a.initialLifecycleStatus || 'Active').trim() === 'In Store' ? 'In Store' : 'Active';
@@ -5918,6 +5948,7 @@ app.patch('/api/assets/:id', authenticateToken, requireRole(['Admin','Operator']
   try {
     const a = req.body;
     { const nf = normalizeUFormat(a.position, a.height); a.position = nf.position; a.height = nf.height; }
+    a.model = canonicalModelFor(a.manufacturer, a.model);
     const id = req.params.id;
     const [existingRows] = await pool.query(
       `SELECT id, site, zone, rack_type, rack_no, position, hardware_type, height, manufacturer, model, serial_number,
@@ -6149,6 +6180,7 @@ app.post('/api/assets/bulk-upsert', authenticateToken, requireRole(['Admin','Ope
     for (let idx = 0; idx < items.length; idx++) {
       const item = { ...items[idx] };
       { const nf = normalizeUFormat(item.position, item.height); item.position = nf.position; item.height = nf.height; }
+      item.model = canonicalModelFor(item.manufacturer, item.model);
       const row = idx + 2;
       const rowErrors = [];
 
@@ -6584,6 +6616,7 @@ app.post('/api/rack-components/bulk-upsert', authenticateToken, requireRole(['Ad
     for (let idx = 0; idx < items.length; idx++) {
       const item = { ...items[idx] };
       { const nf = normalizeUFormat(item.position, item.height); item.position = nf.position; item.height = nf.height; }
+      item.model = canonicalModelFor(item.manufacturer, item.model);
       const row = idx + 2;
       const rowErrors = [];
       const site = item.site;
@@ -9583,7 +9616,7 @@ async function buildFwCompliancePayload(user) {
       if (!getMonitorConfig(vk, z.site, z.zone)) return;
       const snap = fwComplianceCache[snapshotKey(vk, z.site, z.zone)];
       zones.push({ vendor: vk, site: z.site, zone: z.zone, reported: !!snap, fetchedAt: snap ? snap.fetchedAt : null, count: snap ? snap.items.length : 0 });
-      if (snap) snap.items.forEach((it) => rows.push({ vendor: vk, site: z.site, zone: z.zone, ...it, fetchedAt: snap.fetchedAt }));
+      if (snap) snap.items.forEach((it) => rows.push({ vendor: vk, site: z.site, zone: z.zone, ...it, model: canonicalModel(it.model), fetchedAt: snap.fetchedAt }));
     });
   });
   // Direct-BMC (Redfish) source: Dell / HPE servers that have Redfish credentials but are NOT reported by OME / OneView
@@ -9603,7 +9636,7 @@ async function buildFwCompliancePayload(user) {
       const sn = String(a.serial_number || a.redfish_serial_number || '').trim();
       if (!sn || seen.has(sn.toUpperCase()) || (a.redfish_serial_number && seen.has(String(a.redfish_serial_number).trim().toUpperCase()))) return;
       const ts = a.last_redfish_sync_at ? new Date(a.last_redfish_sync_at).getTime() : null;
-      rows.push({ vendor: 'REDFISH', targetVendor: /dell/i.test(a.manufacturer) ? 'OME' : 'ONEVIEW', site: a.site, zone: a.zone || '', name: a.device_name || sn, serial: sn, model: a.model || '',
+      rows.push({ vendor: 'REDFISH', targetVendor: /dell/i.test(a.manufacturer) ? 'OME' : 'ONEVIEW', site: a.site, zone: a.zone || '', name: a.device_name || sn, serial: sn, model: canonicalModel(a.model || ''),
         current: a.bios_version || '', ip: a.mgmt_ip || '', health: a.health_status || '', power: a.power_state || '', fetchedAt: ts });
       const zk = a.site + '\u0001' + (a.zone || '');
       const z = zmap.get(zk) || { vendor: 'REDFISH', site: a.site, zone: a.zone || '', reported: false, fetchedAt: null, count: 0 };
@@ -9896,6 +9929,7 @@ async function startServer() {
       log.error('[startup] INTEGRITY ENFORCED - refusing normal startup (migrations and background jobs skipped). See the [integrity] message above for the reference ID and recovery steps.');
     } else {
       await initDB();
+      try { await migrateModelNames(); } catch (e) { log.warn('[models] model-name standardisation skipped: ' + e.message); }
       await setupRoutesModule.applyIntegrationEnv();
       await pduRoutesModule.ensureSchema();
       await visitorRoutesModule.ensureSchema();

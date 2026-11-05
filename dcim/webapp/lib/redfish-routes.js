@@ -1,4 +1,5 @@
 'use strict';
+const { canonicalModelFor } = require('./model-names');
 // Vendor-agnostic hardware monitoring via DMTF Redfish - talks directly to
 // any server's BMC (Dell iDRAC, HPE iLO, Lenovo XCC, Cisco standalone IMC,
 // NVIDIA DGX BMC, or any other Redfish-conformant management controller),
@@ -610,7 +611,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
   const assetPreview = (a) => ({
     id: a.id, site: a.site, zone: a.zone, rackNo: a.rack_no, deviceName: a.device_name, assetTag: a.asset_tag,
     hardwareType: a.hardware_type,
-    mgmtIp: a.mgmt_ip, vendor: a.manufacturer, model: a.model, serialNumber: a.serial_number, firmware: a.firmware,
+    mgmtIp: a.mgmt_ip, vendor: a.manufacturer, model: canonicalModelFor(a.manufacturer, a.model), serialNumber: a.serial_number, firmware: a.firmware,
     // redfishSerialNumber is the serial the BMC itself just reported - kept separate from
     // serialNumber (Asset Inventory's own field) above. See the redfish_serial_number column
     // comment in initDB() for why: Asset Inventory's Serial Number is often a site's own
@@ -732,12 +733,12 @@ module.exports = function registerRedfishRoutes(app, deps) {
     await pool.query(
       `UPDATE assets SET
          manufacturer = COALESCE(NULLIF(manufacturer, ''), ?), model = COALESCE(NULLIF(model, ''), ?),
-         serial_number = COALESCE(NULLIF(serial_number, ''), ?), firmware = COALESCE(NULLIF(firmware, ''), ?),
+         serial_number = COALESCE(NULLIF(serial_number, ''), ?), firmware_source = IF((COALESCE(firmware, '') = '' OR firmware_source = 'redfish') AND ? IS NOT NULL, 'redfish', firmware_source), firmware = IF(COALESCE(firmware, '') = '' OR firmware_source = 'redfish', COALESCE(?, firmware), firmware),
          redfish_serial_number = ?,
          bmc_firmware = ?, bios_version = COALESCE(?, bios_version), redfish_version = ?, health_status = ?, power_state = ?, redfish_alert_count = ?,
          redfish_power_watts = ?, last_redfish_sync_at = NOW(), last_redfish_error = NULL
        WHERE id = ?`,
-      [r.vendor, r.model, r.serialNumber, r.biosVersion, r.serialNumber, r.bmcFirmware, r.biosVersion, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
+      [r.vendor, canonicalModelFor(r.vendor, r.model), r.serialNumber, r.biosVersion, r.biosVersion, r.serialNumber, r.bmcFirmware, r.biosVersion, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
     );
     try { await pool.query('UPDATE assets SET redfish_hw_summary = ?, redfish_cpu = IF(redfish_hw_at IS NULL, ?, redfish_cpu), redfish_mem = IF(redfish_hw_at IS NULL, ?, redfish_mem) WHERE id = ?', [r.hwSummary || null, r.cpuQuick || null, r.memQuick || null, asset.id]); } catch (e) { /* cosmetic column - never fails a sync */ }
     return { reachable: true, ...r };
@@ -996,12 +997,12 @@ module.exports = function registerRedfishRoutes(app, deps) {
             await pool.query(
               `UPDATE assets SET redfish_username = ?, redfish_password = ?, redfish_port = 443,
                  manufacturer = COALESCE(NULLIF(manufacturer, ''), ?), model = COALESCE(NULLIF(model, ''), ?),
-                 serial_number = COALESCE(NULLIF(serial_number, ''), ?), firmware = COALESCE(NULLIF(firmware, ''), ?),
+                 serial_number = COALESCE(NULLIF(serial_number, ''), ?), firmware_source = IF((COALESCE(firmware, '') = '' OR firmware_source = 'redfish') AND ? IS NOT NULL, 'redfish', firmware_source), firmware = IF(COALESCE(firmware, '') = '' OR firmware_source = 'redfish', COALESCE(?, firmware), firmware),
                  redfish_serial_number = ?,
                  bmc_firmware = ?, bios_version = COALESCE(?, bios_version), redfish_version = ?, health_status = ?, power_state = ?, redfish_alert_count = ?,
                  redfish_power_watts = ?, last_redfish_sync_at = NOW(), last_redfish_error = NULL
                WHERE id = ?`,
-              [r.credential.username, r.credential.password || '', r.vendor, r.model, r.serialNumber, r.biosVersion, r.serialNumber, r.bmcFirmware, r.biosVersion, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
+              [r.credential.username, r.credential.password || '', r.vendor, canonicalModelFor(r.vendor, r.model), r.serialNumber, r.biosVersion, r.biosVersion, r.serialNumber, r.bmcFirmware, r.biosVersion, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
             );
             try { await pool.query('UPDATE assets SET redfish_hw_summary = ?, redfish_cpu = IF(redfish_hw_at IS NULL, ?, redfish_cpu), redfish_mem = IF(redfish_hw_at IS NULL, ?, redfish_mem) WHERE id = ?', [r.hwSummary || null, r.cpuQuick || null, r.memQuick || null, asset.id]); } catch (e) { /* cosmetic column */ }
             job.applied++;
