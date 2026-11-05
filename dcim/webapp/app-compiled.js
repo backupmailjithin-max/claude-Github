@@ -15357,7 +15357,7 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                             " activities")),
                     React.createElement("div", { style: { display: "grid", gridTemplateColumns: singleLoc ? "1fr" : "1fr 1fr", gap: 14, marginBottom: 14 } },
                         React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 16, border: "1px solid #334155", display: singleLoc ? "none" : undefined } },
-                            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, marginBottom: 10, color: "#fff" } }, "Hardware Types"),
+                            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, marginBottom: 10, color: "#fff" } }, "Hardware Mix"),
                             HorizontalBars(sd.byHw, maxHw, 16)),
                         React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 16, border: "1px solid #334155" } },
                             React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, marginBottom: 10, color: "#fff" } }, singleLoc ? "Material Movements Summary" : "Items Moved"),
@@ -15459,9 +15459,9 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                         const allRows = [...pivotRows, grandTotal];
                         const colW = Math.max(110, 220 / (zoneNames.length + 1));
                         return (React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 16, border: "1px solid #334155", marginTop: 14 } },
-                            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, marginBottom: 12, color: "#fff" } }, "Assets by Zone & Hardware Type"),
+                            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, marginBottom: 12, color: "#fff" } }, "Assets by Zone & Hardware Mix"),
                             React.createElement("div", { style: { display: "grid", gridTemplateColumns: `1.4fr ${zoneNames.map(() => colW + "px").join(" ")} 80px`, gap: 0, borderRadius: 8, overflow: "hidden", border: "1px solid #334155" } },
-                                React.createElement("div", { style: { padding: "8px 10px", background: "#0F172A", fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.5, borderBottom: "1px solid #334155", borderRight: "1px solid #334155" } }, "Hardware Type"),
+                                React.createElement("div", { style: { padding: "8px 10px", background: "#0F172A", fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.5, borderBottom: "1px solid #334155", borderRight: "1px solid #334155" } }, "Hardware Mix"),
                                 zoneNames.map(zn => (React.createElement("div", { key: zn, style: { padding: "8px 10px", background: "#0F172A", fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.5, textAlign: "center", borderBottom: "1px solid #334155", borderRight: "1px solid #334155" } }, zn))),
                                 React.createElement("div", { style: { padding: "8px 10px", background: "#0F172A", fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.5, textAlign: "center", borderBottom: "1px solid #334155" } }, "Total"),
                                 allRows.map((r, ri) => {
