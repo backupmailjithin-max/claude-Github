@@ -14843,7 +14843,9 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                 ...siteRacks.map(r => r.zone),
             ].filter(Boolean))];
         const siteDevices = deviceAssets.filter(a => a.site === site);
-        const byHw = groupByHardwareType(siteDevices);
+        // Hardware Mix = by hardware make (Dell / HP / Cisco ...), same grouping as the main Dashboard
+        const byHw = {};
+        siteDevices.forEach(a => { const k = dashMakeLabel(a.manufacturer); byHw[k] = (byHw[k] || 0) + 1; });
         const bySeverity = {
             // "Open" means the same thing here as in Issue Tracker / Dashboard (isIssueOpen), not just "no completed date".
             Critical: siteIssues.filter(i => i.severity === 'critical' && isIssueOpen(i)).length,
@@ -15432,11 +15434,7 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                                 "."))),
                     (() => {
                         const hwTypesSeen = {};
-                        sd.siteDevices.forEach(a => { if (a.hardwareType) {
-                            const k = hwKey(a.hardwareType);
-                            if (!hwTypesSeen[k])
-                                hwTypesSeen[k] = a.hardwareType;
-                        } });
+                        sd.siteDevices.forEach(a => { const mk = dashMakeLabel(a.manufacturer); hwTypesSeen[mk.toLowerCase()] = mk; });
                         const hwTypes = Object.values(hwTypesSeen).sort();
                         const zoneNames = sd.siteZones.length ? sd.siteZones : ["AZ-1", "AZ-2"];
                         if (hwTypes.length === 0)
@@ -15445,7 +15443,7 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                             const row = { hw };
                             let total = 0;
                             zoneNames.forEach(zn => {
-                                const cnt = sd.siteDevices.filter(a => hwEquals(a.hardwareType, hw) && (a.zone || "AZ-1") === zn).length;
+                                const cnt = sd.siteDevices.filter(a => dashMakeLabel(a.manufacturer) === hw && (a.zone || "AZ-1") === zn).length;
                                 row[zn] = cnt;
                                 total += cnt;
                             });
