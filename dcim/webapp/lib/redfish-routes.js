@@ -200,6 +200,27 @@ async function mapLimit(list, limit, fn) {
 }
 const memberLinks = (coll) => ((coll && coll.Members) || []).map((m) => m && m['@odata.id']).filter(Boolean);
 
+// Where a network port physically is. Dell iDRAC names every port "System Ethernet Interface" and keeps the position in the
+// Id ("NIC.Slot.2-1-1", "NIC.Integrated.1-1-1", "NIC.Embedded.1-1-1") and in the Description ("NIC in Slot 2 Port 1 Partition 1");
+// HPE iLO and others use other fields (Oem.Hpe.StructuredName, Name, UEFI path), so every source is tried and
+// the raw Id is always kept as a fallback.
+function nicLocation(n) {
+  const cand = [n.Id, n.Oem && n.Oem.Hpe && n.Oem.Hpe.StructuredName, n.Oem && n.Oem.Dell && n.Oem.Dell.DellNIC && n.Oem.Dell.DellNIC.Id, n.Description, n.Name].filter((v) => v != null && String(v).trim()).map(String);
+  const kind = (k) => { const t = k.toLowerCase(); return t === 'slot' ? 'Slot' : t === 'integrated' ? 'Integrated' : t === 'embedded' ? 'Embedded' : t === 'lom' ? 'LOM' : t === 'flexlom' ? 'FlexLOM' : t === 'mezz' || t === 'mezzanine' ? 'Mezzanine' : t === 'ocp' ? 'OCP' : k; };
+  const fmt = (k, a, p, part) => kind(k) + ' ' + a + ' \u00B7 Port ' + p + (part && Number(part) > 1 ? ' (partition ' + part + ')' : '');
+  for (const c of cand) { // structured id, e.g. NIC.Slot.2-1-1 or NIC.LOM.1.1
+    const m = /NIC\.(Slot|Integrated|Embedded|LOM|FlexLOM|Mezz(?:anine)?|OCP)\.?(\d+)[-.](\d+)(?:[-.](\d+))?/i.exec(c);
+    if (m) return fmt(m[1], m[2], m[3], m[4]);
+  }
+  for (const c of cand) { // sentence, e.g. "NIC in Slot 2 Port 1 Partition 1" / "Embedded LOM 1 Port 2"
+    const m = /(Slot|Integrated|Embedded|FlexLOM|LOM|Mezz(?:anine)?|OCP)\D{0,12}?(\d+)\D{0,12}?Port\s*(\d+)(?:\D{0,12}?Partition\s*(\d+))?/i.exec(c);
+    if (m) return fmt(m[1], m[2], m[3], m[4]);
+  }
+  const generic = /^(system ethernet interface|ethernet interface|manager ethernet interface)$/i;
+  const named = [n.Name, n.Description].map((v) => String(v || '').trim()).find((v) => v && !generic.test(v));
+  return named || (n.Id != null ? String(n.Id) : null);
+}
+
 async function collectHardware(monitorFetch, ip, port, username, password, systemPath) {
   const get = (path) => redfishGet(monitorFetch, ip, port, username, password, path);
   const sysPath = systemPath || '/redfish/v1/Systems/System.Embedded.1';
@@ -268,9 +289,10 @@ async function collectHardware(monitorFetch, ip, port, username, password, syste
   try {
     const items = await mapLimit(memberLinks(await get(link('EthernetInterfaces'))).slice(0, 48), 6, (l) => get(l));
     res.nics = items.filter((n) => n && (!n.Status || n.Status.State !== 'Absent')).map((n) => ({
-      name: n.Name || n.Id, mac: n.MACAddress || n.PermanentMACAddress || null, speedMbps: n.SpeedMbps || null,
+      name: n.Name || n.Id, slot: nicLocation(n), ifId: n.Id != null ? String(n.Id) : null, mac: n.MACAddress || n.PermanentMACAddress || null, speedMbps: n.SpeedMbps || null,
       link: /up|linkup/i.test(String(n.LinkStatus || '')) || (n.Status && n.Status.State === 'Enabled' && !n.LinkStatus && !!n.SpeedMbps), linkStatus: n.LinkStatus || null,
       ip: (n.IPv4Addresses && n.IPv4Addresses[0] && n.IPv4Addresses[0].Address) || null }));
+    res.nics.sort((a, b) => String(a.slot || a.ifId || '').localeCompare(String(b.slot || b.ifId || ''), undefined, { numeric: true }) || String(a.mac || '').localeCompare(String(b.mac || '')));
   } catch (e) { res.notes.push('Network ports not available'); }
 
   const quickCpu = sys.ProcessorSummary || null;
@@ -1140,6 +1162,7 @@ async function getRedfishTaskStatusForDevice(pool, monitorFetch, deviceId, taskU
 module.exports.pickSerial = pickSerial;
 module.exports.buildHwSummary = buildHwSummary;
 module.exports.collectHardware = collectHardware;
+module.exports.nicLocation = nicLocation;
 module.exports.summariseDisks = summariseDisks;
 module.exports.summariseNics = summariseNics;
 module.exports.summariseMemory = summariseMemory;
