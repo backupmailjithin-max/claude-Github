@@ -68,17 +68,25 @@ module.exports = function registerReportRoutes(app, deps) {
 
   function mailHtml(rep, extra) {
     const m = rep.meta;
-    const t = (x) => {
-      const v = x.cur == null ? '-' : `${Math.round(x.cur * 10) / 10}${x.unit || ''}`;
-      const d = x.delta == null ? '' : x.delta === 0 ? 'no change' : `${x.delta > 0 ? '+' : '−'}${Math.abs(x.delta)}${(x.unit || '').trim() === '%' ? ' pts' : ''} vs ${esc(m.prevShort)}`;
-      return `<td style="padding:8px 12px;border:1px solid #E2E8F0;background:#F8FAFC;vertical-align:top"><div style="font-size:11px;color:#64748B;text-transform:uppercase;letter-spacing:.5px">${esc(x.label)}</div><div style="font-size:20px;font-weight:700;color:#0F172A">${esc(v)}</div><div style="font-size:12px;color:#475569">${esc(d)}</div></td>`;
+    const tile = (label, x, unit, good) => {
+      const v = x.cur == null ? '-' : `${Math.round(x.cur * 10) / 10}${unit || ''}`;
+      const d = x.cur == null || x.prev == null || x.first ? '' : (x.cur - x.prev === 0 ? 'no change' : `${x.cur - x.prev > 0 ? '+' : '\u2212'}${Math.round(Math.abs(x.cur - x.prev) * 10) / 10}${unit === '%' ? ' pts' : ''} vs ${esc(m.prevShort)}`);
+      return `<td style="padding:8px 12px;border:1px solid #E2E8F0;background:#F8FAFC;vertical-align:top"><div style="font-size:11px;color:#64748B;text-transform:uppercase;letter-spacing:.5px">${esc(label)}</div><div style="font-size:20px;font-weight:700;color:#0F172A">${esc(v)}</div><div style="font-size:12px;color:#475569">${esc(d)}</div></td>`;
     };
-    const rows = []; for (let i = 0; i < rep.tiles.length; i += 3) rows.push(`<tr>${rep.tiles.slice(i, i + 3).map(t).join('')}</tr>`);
-    const top = rep.ranked.slice(0, 3).map((r) => `<li>${esc(r.what)}: ${esc(r.prev)} → ${esc(r.cur)}${esc(r.unit || '')}</li>`).join('');
-    return `<div style="font-family:Segoe UI,Arial,sans-serif;color:#0F172A;max-width:640px"><h2 style="margin:0 0 4px">DCIM monthly report – ${esc(m.label)}</h2>
-      <div style="color:#64748B;margin-bottom:12px">${esc(m.scope)} · compared with ${esc(m.prevLabel)}${m.isCurrent ? ' · month to date' : ''}</div>
+    const find = (rows, re) => (rows || []).find((r) => re.test(r.label)) || { cur: null, prev: null };
+    const tiles = [
+      tile('Installed devices', find(rep.assets.rows, /installed devices/i), ''),
+      tile('Rack U used', find(rep.assets.rows, /utilization/i), '%'),
+      tile('Open issues', find(rep.issues.rows, /^open/i), ''),
+      tile('Material received', { cur: rep.materials.inwardTotals.cur, prev: rep.materials.inwardTotals.prev }, ''),
+      tile('Material sent out', { cur: rep.materials.outwardTotals.cur, prev: rep.materials.outwardTotals.prev }, ''),
+      tile('DC activities', { cur: rep.activities.total.cur, prev: rep.activities.total.prev }, ''),
+    ];
+    const rows = [`<tr>${tiles.slice(0, 3).join('')}</tr>`, `<tr>${tiles.slice(3).join('')}</tr>`];
+    return `<div style="font-family:Segoe UI,Arial,sans-serif;color:#0F172A;max-width:640px"><h2 style="margin:0 0 4px">DCIM monthly report \u2013 ${esc(m.label)}</h2>
+      <div style="color:#64748B;margin-bottom:12px">${esc(m.scope)} \u00B7 compared with ${esc(m.prevLabel)}${m.isCurrent ? ' \u00B7 month to date' : ''}</div>
       <table style="border-collapse:collapse;width:100%">${rows.join('')}</table>
-      ${top ? `<p style="margin:14px 0 4px"><b>Biggest changes</b></p><ul style="margin:0;padding-left:18px">${top}</ul>` : ''}
+      ${m.firstRecord ? `<p style="margin:12px 0 0;color:#92400E;font-size:12px">First report: stock figures start from ${esc(m.firstRecord.asOf)}; their change appears from the next report.</p>` : ''}
       ${extra ? `<p style="margin:14px 0 0">${esc(extra)}</p>` : ''}
       <p style="margin:14px 0 0;color:#475569">The full report is attached as a PDF.</p>
       <p style="margin:14px 0 0;font-size:11px;color:#94A3B8">Sent automatically by the DCIM dashboard.</p></div>`;

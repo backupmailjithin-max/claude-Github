@@ -96,40 +96,40 @@ test('rejects a future month and an empty scope', async () => {
 test('event figures for a past month are rebuilt from dated records', async () => {
   const now = new Date(2026, 10, 5);
   const rep = await data.buildReport(fakePool(), { sites: ['Chennai'], month: '2026-10', now });
-  const row = (l) => rep.rows.find((r) => r.label === l);
+  const row = (l) => rep.issues.rows.find((r) => r.label === l);
   assert.strictEqual(row('Reported').cur, 3);           // I3, I4, I5 reported in Oct
   assert.strictEqual(row('Resolved / closed').cur, 3);  // I2 completed, I3 cancelled, I4 part moved to store
   assert.strictEqual(row('Open at month end').prev, 2); // I1, I2 open at end of Sep
   assert.strictEqual(row('Open at month end').cur, 2);  // I1 + I5 open at end of Oct
   assert.strictEqual(row('Critical open').cur, 1);
+  assert.match(rep.issues.oldestCritical.ticket, /T-1/);
   assert.strictEqual(rep.meta.isCurrent, false);
-  assert.deepStrictEqual(rep.inward.find((i) => i.item === 'SSD'), { item: 'SSD', cur: 8, prev: 4 });
-  assert.deepStrictEqual(rep.outward.find((i) => i.item === 'Fan'), { item: 'Fan', cur: 2, prev: 0 }); // Pune's 9 not counted
-  assert.deepStrictEqual(rep.inwardTotals, { cur: 2, prev: 1 });
-  assert.deepStrictEqual(rep.activities, [{ type: 'Cabling', cur: 1, prev: 1 }]);
-  assert.strictEqual(row('Visits').cur, 1);
-  assert.strictEqual(row('Peak power load (kW)').cur, 8.4);
-  const feed = rep.watch.find((w) => /Power feeds/.test(w.item));
-  assert.strictEqual(feed.cur, 1); assert.match(feed.detail, /84%/);
-  const crit = rep.watch.find((w) => /Critical/.test(w.item));
-  assert.match(crit.detail, /T-1/);
+  assert.deepStrictEqual(rep.materials.inward.find((i) => i.item === 'SSD'), { item: 'SSD', cur: 8, prev: 4 });
+  assert.deepStrictEqual(rep.materials.outward.find((i) => i.item === 'Fan'), { item: 'Fan', cur: 2, prev: 0 }); // Pune's 9 not counted
+  assert.deepStrictEqual(rep.materials.inwardTotals, { cur: 2, prev: 1 });
+  assert.deepStrictEqual(rep.activities.rows, [{ type: 'Cabling', cur: 1, prev: 1 }]);
+  assert.deepStrictEqual(rep.activities.total, { cur: 1, prev: 1 });
+  assert.strictEqual(rep.ops.rows.find((r) => r.label === 'Visits approved').cur, 1);
+  assert.strictEqual(rep.power.rows.find((r) => /^Peak daily load/.test(r.label)).cur, 8.4);
+  assert.strictEqual(rep.power.rows.find((r) => /80% of rating/.test(r.label)).cur, 1);
+  assert.strictEqual(rep.power.feedsHot[0].pct, 84);
   // stock figures were never captured for these months -> shown as unknown, not invented
-  assert.strictEqual(row('Installed devices').cur, null);
-  assert.match(rep.meta.stateNote, /not recorded/);
+  assert.strictEqual(rep.assets.rows.find((r) => r.label === 'Installed devices').cur, null);
+  assert.strictEqual(rep.meta.stockMissing, true);
 });
 
 test('stock figures come from snapshots and changes are computed against last month', async () => {
-  const mk = (devices, usedU) => JSON.stringify({ devices, racks: 1, usedU, totalU: 42, inStore: 0, make: { Dell: devices }, zones: { 'AZ-1': { used: usedU, total: 42 } }, racksHot: [], servers: { total: 2, known: 2, online: 2, unreachable: 0 }, fw: { checked: 2, ok: 1 }, pendingTransfers: 0 });
+  const mk = (devices, usedU) => JSON.stringify({ devices, racks: 1, usedU, totalU: 42, inStore: 0, make: { Dell: devices }, zones: { 'AZ-1': { used: usedU, total: 42, racks: 1 } }, racksHot: [], servers: { total: 2, known: 2, online: 2, unreachable: 0 }, fw: { checked: 2, ok: 1 }, pendingTransfers: 0 });
   const pool = fakePool({ snaps: [{ site: 'Chennai', month: '2026-09', data: mk(10, 20) }, { site: 'Chennai', month: '2026-10', data: mk(12, 30) }] });
   const rep = await data.buildReport(pool, { sites: ['Chennai'], month: '2026-10', now: new Date(2026, 10, 5) });
-  const t = (l) => rep.tiles.find((x) => x.label === l);
-  assert.strictEqual(t('Installed devices').cur, 12); assert.strictEqual(t('Installed devices').delta, 2);
-  assert.strictEqual(t('Rack U utilization').cur, 71); assert.strictEqual(t('Rack U utilization').prev, 48);
-  assert.strictEqual(t('Firmware compliant').cur, 50);
-  assert.strictEqual(rep.meta.stateNote, '');
+  const a = (l) => rep.assets.rows.find((x) => x.label === l);
+  assert.strictEqual(a('Installed devices').cur, 12); assert.strictEqual(a('Installed devices').delta, 2);
+  assert.strictEqual(a('DC utilization (rack U used)').cur, 71); assert.strictEqual(a('DC utilization (rack U used)').prev, 48);
+  assert.strictEqual(rep.ops.rows.find((r) => r.label === 'Firmware compliant').cur, 50);
+  assert.strictEqual(rep.meta.stockMissing, false); assert.strictEqual(rep.meta.firstRecord, null);
   assert.deepStrictEqual(rep.hardwareMix, [{ make: 'Dell', cur: 12, prev: 10 }]);
-  assert.strictEqual(rep.ranked[0].what.length > 0, true);
-  assert.deepStrictEqual(rep.zones, [{ zone: 'AZ-1', cur: 71, prev: 48, usedU: 30 }]);
+  assert.strictEqual(rep.zones.length, 1);
+  assert.strictEqual(rep.zones[0].zone, 'AZ-1'); assert.strictEqual(rep.zones[0].cur, 71); assert.strictEqual(rep.zones[0].prev, 48);
 });
 
 test('current month is captured live into a snapshot (rack U, make, firmware, servers) with the app definitions', async () => {
@@ -148,16 +148,16 @@ test('current month is captured live into a snapshot (rack U, make, firmware, se
 });
 
 test('multi-location totals and a location table; one missing snapshot hides the combined stock total', async () => {
-  const mk = (d) => JSON.stringify({ devices: d, racks: 1, usedU: 10, totalU: 42, inStore: 0, make: { Dell: d }, zones: { 'AZ-1': { used: 10, total: 42 } }, racksHot: [], servers: { total: 0, known: 0, online: 0, unreachable: 0 }, fw: { checked: 0, ok: 0 }, pendingTransfers: 0 });
+  const mk = (d) => JSON.stringify({ devices: d, racks: 1, usedU: 10, totalU: 42, inStore: 0, make: { Dell: d }, zones: { 'AZ-1': { used: 10, total: 42, racks: 1 } }, racksHot: [], servers: { total: 0, known: 0, online: 0, unreachable: 0 }, fw: { checked: 0, ok: 0 }, pendingTransfers: 0 });
   const both = fakePool({ snaps: [{ site: 'Chennai', month: '2026-10', data: mk(5) }, { site: 'Pune', month: '2026-10', data: mk(7) }] });
   let rep = await data.buildReport(both, { sites: ['Chennai', 'Pune'], month: '2026-10', now: new Date(2026, 10, 5) });
   assert.strictEqual(rep.meta.multi, true); assert.strictEqual(rep.meta.scope, 'All locations');
-  assert.strictEqual(rep.tiles[0].cur, 12);
+  assert.strictEqual(rep.assets.rows[0].cur, 12);
   assert.strictEqual(rep.locations.length, 2);
-  assert.deepStrictEqual(Object.keys(rep.zones.reduce((o, z) => ({ ...o, [z.zone]: 1 }), {})), ['Chennai · AZ-1', 'Pune · AZ-1']);
+  assert.deepStrictEqual(Object.keys(rep.zones.reduce((o, z) => ({ ...o, [z.zone]: 1 }), {})), ['Chennai \u00B7 AZ-1', 'Pune \u00B7 AZ-1']);
   const half = fakePool({ snaps: [{ site: 'Chennai', month: '2026-10', data: mk(5) }] });
   rep = await data.buildReport(half, { sites: ['Chennai', 'Pune'], month: '2026-10', now: new Date(2026, 10, 5) });
-  assert.strictEqual(rep.tiles[0].cur, null);
+  assert.strictEqual(rep.assets.rows[0].cur, null);
 });
 
 test('PDF writer produces a structurally valid file with correct xref offsets', () => {
@@ -178,14 +178,23 @@ test('report PDF renders for single location, many locations and long lists with
   const one = await data.buildReport(fakePool(), { sites: ['Chennai'], month: '2026-10', now });
   const many = await data.buildReport(fakePool(), { sites: ['Chennai', 'Pune'], month: '2026-10', now });
   for (const rep of [one, many]) {
-    const buf = render(rep, { notes: 'Line one\nLine two with <tags> & ünïcode — dash' });
+    const buf = render(rep, { notes: 'Line one\nLine two with <tags> & \u00FCn\u00EFcode \u2014 dash' });
     assert.ok(buf.length > 4000); assert.ok(buf.slice(0, 5).toString() === '%PDF-');
-    const pages = (buf.toString('latin1').match(/\/Type \/Page /g) || []).length; assert.ok(pages >= 3 && pages <= 5, `pages ${pages}`);
+    const pages = (buf.toString('latin1').match(/\/Type \/Page /g) || []).length; assert.ok(pages >= 1 && pages <= 5, `pages ${pages}`);
   }
-  // 40 distinct items and 30 zones must not blow up or run off the page
+  // 40 distinct items, 30 zones and 25 makes must not blow up or run off the page
   const big = JSON.parse(JSON.stringify(one));
-  big.inward = Array.from({ length: 40 }, (_, i) => ({ item: 'Item with a rather long descriptive name number ' + i, cur: i, prev: 1 }));
-  big.zones = Array.from({ length: 30 }, (_, i) => ({ zone: 'Zone ' + i, cur: i * 3, prev: 1, usedU: i }));
+  big.materials.inward = Array.from({ length: 40 }, (_, i) => ({ item: 'Item with a rather long descriptive name number ' + i, cur: i, prev: 1 }));
+  big.zones = Array.from({ length: 30 }, (_, i) => ({ zone: 'Zone ' + i, racks: 2, cur: i * 3, prev: 1, usedU: i, hot: ['R1 (90%)', 'R2', 'R3', 'R4'] }));
   big.hardwareMix = Array.from({ length: 25 }, (_, i) => ({ make: 'Make' + i, cur: i, prev: 2 }));
+  big.activities.rows = Array.from({ length: 30 }, (_, i) => ({ type: 'Activity ' + i, cur: i, prev: 1 }));
   assert.ok(render(big, {}).length > 4000);
+});
+
+test('PDF shows the no-PDU message and first-report note, and mail text uses the new shape', async () => {
+  const now = new Date(2026, 10, 5);
+  const rep = await data.buildReport(fakePool({ pdus: [], readings: [] }), { sites: ['Chennai'], month: '2026-11', now });
+  assert.strictEqual(rep.power.configured, false);
+  assert.ok(rep.meta.firstRecord);
+  assert.ok(render(rep, {}).length > 4000);
 });

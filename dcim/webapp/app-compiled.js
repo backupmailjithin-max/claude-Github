@@ -15372,19 +15372,27 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                                     React.createElement("div", { style: { fontSize: 16, fontWeight: 800, color: "#EF4444" } }, sd.siteMovements.filter(m => m.movementType === 'Outward').length),
                                     React.createElement("div", { style: { fontSize: 8, color: "#64748B", textTransform: "uppercase" } }, "Outward"))),
                             (() => {
-                                const itemCounts = {};
-                                sd.siteMovements.forEach(m => { const k = m.itemName || "Others"; itemCounts[k] = (itemCounts[k] || 0) + (parseInt(m.quantity, 10) || 1); });
-                                const entries = Object.entries(itemCounts).sort((a, b) => b[1] - a[1]);
-                                const max = Math.max(...entries.map(e => e[1]), 1);
-                                if (entries.length === 0)
-                                    return React.createElement("div", { style: { fontSize: 10, color: '#64748B' } },
-                                        "No material movement records for ",
-                                        site,
-                                        ".");
-                                return entries.slice(0, 4).map(([k, v]) => (React.createElement("div", { key: k, style: { display: "flex", alignItems: "center", gap: 7, marginBottom: 5 } },
-                                    React.createElement("div", { style: { width: 80, fontSize: 9, color: "#94A3B8", textAlign: "right", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, title: k }, k),
-                                    React.createElement("div", { style: { flex: 1, height: 15, background: "#0F172A", borderRadius: 4, overflow: "hidden" } },
-                                        React.createElement("div", { style: { width: `${Math.round(v / max * 100)}%`, height: "100%", background: "#0EA5E9", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 5, fontSize: 8, fontWeight: 700, color: "#fff" } }, v)))));
+                                // Items moved, split by direction so a received item is never mixed with a sent-out one.
+                                const section = (type, title, color) => {
+                                    const rows = sd.siteMovements.filter(m => m.movementType === type);
+                                    const counts = {};
+                                    rows.forEach(m => { const k = m.itemName || "Others"; counts[k] = (counts[k] || 0) + (parseInt(m.quantity, 10) || 1); });
+                                    const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+                                    const max = Math.max(...entries.map(e => e[1]), 1);
+                                    return React.createElement("div", { key: type, style: { marginTop: 8 } },
+                                        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 } },
+                                            React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: "#E2E8F0" } }, title),
+                                            React.createElement("span", { style: { fontSize: 9, fontWeight: 700, color } }, rows.length + (rows.length === 1 ? " entry" : " entries"))),
+                                        entries.length === 0
+                                            ? React.createElement("div", { style: { fontSize: 10, color: "#64748B" } }, "No " + type.toLowerCase() + " records for " + site + ".")
+                                            : entries.slice(0, 4).map(([k, v]) => (React.createElement("div", { key: k, style: { display: "flex", alignItems: "center", gap: 7, marginBottom: 5 } },
+                                                React.createElement("div", { style: { width: 80, fontSize: 9, color: "#94A3B8", textAlign: "right", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, title: k }, k),
+                                                React.createElement("div", { style: { flex: 1, height: 15, background: "#0F172A", borderRadius: 4, overflow: "hidden" } },
+                                                    React.createElement("div", { style: { width: `${Math.round(v / max * 100)}%`, height: "100%", background: color, borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 5, fontSize: 8, fontWeight: 700, color: "#fff" } }, v))))));
+                                };
+                                return React.createElement("div", null,
+                                    section("Inward", "Material Received (Inward)", "#10B981"),
+                                    section("Outward", "Material Sent Out (Outward)", "#EF4444"));
                             })())),
                     React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 16, border: "1px solid #334155" } },
                         React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, marginBottom: 4, color: "#fff" } }, "Zone-wise Rack Overview"),

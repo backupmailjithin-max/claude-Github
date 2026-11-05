@@ -81,6 +81,7 @@ async function computeState(pool, sites) {
        FROM assets WHERE site IN (${qs(sites)})`, sites);
   const [comps] = await pool.query(`SELECT site, zone, rack_no, position, height FROM rack_components WHERE site IN (${qs(sites)})`, sites).catch(() => [[]]);
   const [targets] = await pool.query('SELECT vendor, model_key, target_version FROM firmware_model_targets').catch(() => [[]]);
+  const [pduRows] = await pool.query(`SELECT site, zone, rack_no, status, last_power_kw, max_load_kw FROM pdus WHERE site IN (${qs(sites)})`, sites).catch(() => [[]]);
   const [pend] = await pool.query(`SELECT site, COUNT(*) c FROM material_movements WHERE status = 'Pending Approval' AND site IN (${qs(sites)}) GROUP BY site`, sites).catch(() => [[]]);
   let canonKey = (x) => String(x || '').toLowerCase();
   try { canonKey = require('./model-names').canonicalModelKey; } catch (e) { /* keep fallback */ }
@@ -104,7 +105,7 @@ async function computeState(pool, sites) {
     const rl = Object.values(rackMap);
     rl.forEach((r) => { r.used = Math.min(r.used, r.cap); });
     const zones = {};
-    for (const r of rl) { const z = zones[r.zone] || (zones[r.zone] = { used: 0, total: 0 }); z.used += r.used; z.total += r.cap; }
+    for (const r of rl) { const z = zones[r.zone] || (zones[r.zone] = { used: 0, total: 0, racks: 0 }); z.used += r.used; z.total += r.cap; z.racks += 1; }
     const make = {};
     for (const a of act) { const m = makeLabel(a.manufacturer); make[m] = (make[m] || 0) + 1; }
     const servers = act.filter((a) => /server/i.test(a.hardware_type || '') && a.mgmt_ip && !num(a.redfish_monitor_ignored));
@@ -131,9 +132,28 @@ async function computeState(pool, sites) {
         unreachable: servers.filter((a) => a.last_redfish_error).length },
       fw: { checked: fwChecked.length, ok: fwOk },
       pendingTransfers: num((pend.find((p) => p.site === site) || {}).c),
+      power: powerState(pduRows.filter((p) => p.site === site)),
     };
   }
   return out;
+}
+
+
+// Same definitions as the PDU Capacity page: a rack is the group of PDU feeds with the same site/zone/rack; "fully redundant" = more than
+// one feed and none offline; rack load % = load of its feeds / rated load of its feeds.
+function powerState(rows) {
+  if (!rows.length) return null;
+  const racks = new Map();
+  for (const p of rows) { const k = `${p.zone}|${p.rack_no}`; (racks.get(k) || racks.set(k, { rack: p.rack_no, feeds: [] }).get(k)).feeds.push(p); }
+  let highest = null, redundant = 0;
+  for (const r of racks.values()) {
+    const kw = r.feeds.reduce((n, f) => n + num(f.last_power_kw), 0), rated = r.feeds.reduce((n, f) => n + num(f.max_load_kw), 0);
+    const pct = rated > 0 ? Math.round(kw / rated * 100) : 0;
+    if (!highest || pct > highest.pct) highest = { rack: r.rack, pct, kw: +kw.toFixed(1), rated: +rated.toFixed(1) };
+    if (r.feeds.length > 1 && !r.feeds.some((f) => f.status === 'offline')) redundant++;
+  }
+  return { pdus: rows.length, online: rows.filter((p) => p.status === 'online').length, totalKw: +rows.reduce((n, p) => n + num(p.last_power_kw), 0).toFixed(2),
+    ratedKw: +rows.reduce((n, p) => n + num(p.max_load_kw), 0).toFixed(2), racks: racks.size, redundant, highest };
 }
 
 async function ensureTable(pool) {
@@ -159,9 +179,9 @@ async function takeSnapshot(pool, sites, now = new Date()) {
 async function loadSnapshots(pool, sites, keys) {
   await ensureTable(pool);
   if (!sites.length) return {};
-  const [rows] = await pool.query(`SELECT site, month, data FROM ${SNAP_TABLE} WHERE site IN (${qs(sites)}) AND month IN (${qs(keys)})`, [...sites, ...keys]);
+  const [rows] = await pool.query(`SELECT site, month, data, taken_at FROM ${SNAP_TABLE} WHERE site IN (${qs(sites)}) AND month IN (${qs(keys)})`, [...sites, ...keys]);
   const m = {};
-  for (const r of rows) { try { (m[r.month] || (m[r.month] = {}))[r.site] = JSON.parse(r.data); } catch (e) { /* ignore */ } }
+  for (const r of rows) { try { const d = JSON.parse(r.data); d._takenAt = dstr(r.taken_at); (m[r.month] || (m[r.month] = {}))[r.site] = d; } catch (e) { /* ignore */ } }
   return m;
 }
 
@@ -260,21 +280,30 @@ function mergeState(snapByLoc, sites) {
   if (!snapByLoc) return null;
   const parts = sites.map((s) => snapByLoc[s]);
   if (!parts.length || parts.some((p) => !p)) return null;
-  const o = { devices: 0, racks: 0, usedU: 0, totalU: 0, inStore: 0, make: {}, zones: {}, racksHot: [], servers: { total: 0, known: 0, online: 0, unreachable: 0 }, fw: { checked: 0, ok: 0 }, pendingTransfers: 0, perSite: {} };
+  const o = { devices: 0, racks: 0, usedU: 0, totalU: 0, inStore: 0, make: {}, zones: {}, racksHot: [], servers: { total: 0, known: 0, online: 0, unreachable: 0 }, fw: { checked: 0, ok: 0 }, pendingTransfers: 0, power: { pdus: 0, online: 0, totalKw: 0, ratedKw: 0, racks: 0, redundant: 0, highest: null }, hasPower: false, perSite: {} };
   sites.forEach((s, idx) => {
     const p = parts[idx]; o.perSite[s] = p;
     o.devices += p.devices; o.racks += p.racks; o.usedU += p.usedU; o.totalU += p.totalU; o.inStore += p.inStore; o.pendingTransfers += p.pendingTransfers || 0;
     for (const [k, v] of Object.entries(p.make || {})) o.make[k] = (o.make[k] || 0) + v;
-    for (const [z, v] of Object.entries(p.zones || {})) { const key = sites.length > 1 ? `${s} · ${z}` : z; o.zones[key] = { used: v.used, total: v.total }; }
+    for (const [z, v] of Object.entries(p.zones || {})) { const key = sites.length > 1 ? `${s} · ${z}` : z; o.zones[key] = { used: v.used, total: v.total, racks: v.racks || 0 }; }
     for (const r of p.racksHot || []) o.racksHot.push({ ...r, site: s });
     for (const k of Object.keys(o.servers)) o.servers[k] += (p.servers || {})[k] || 0;
     o.fw.checked += (p.fw || {}).checked || 0; o.fw.ok += (p.fw || {}).ok || 0;
+    if (p.power) {
+      o.hasPower = true;
+      for (const k of ['pdus', 'online', 'racks', 'redundant']) o.power[k] += p.power[k] || 0;
+      o.power.totalKw = +(o.power.totalKw + p.power.totalKw).toFixed(2); o.power.ratedKw = +(o.power.ratedKw + p.power.ratedKw).toFixed(2);
+      if (p.power.highest && (!o.power.highest || p.power.highest.pct > o.power.highest.pct)) o.power.highest = { ...p.power.highest, site: s };
+    }
+    o.takenAt = o.takenAt && o.takenAt > (p._takenAt || '') ? o.takenAt : (p._takenAt || o.takenAt);
   });
   return o;
 }
 
+
 const pctOf = (a, b) => (b ? Math.round(a / b * 100) : null);
-const chg = (cur, prev) => (cur == null || prev == null ? null : +(cur - prev).toFixed(1));
+const chg = (cur, prev, dec = 0) => (cur == null || prev == null ? null : +(cur - prev).toFixed(dec));
+const FALLBACK_DAYS = 15; // a month-end position may be taken from the first snapshot saved within this many days after the month
 
 // ------------------------------------------------------------------ main builder ------------------------------------------------------------------
 async function buildReport(pool, { sites, month, scopeLabel, now = new Date() }) {
@@ -283,104 +312,82 @@ async function buildReport(pool, { sites, month, scopeLabel, now = new Date() })
   const curKey = monthKeyOf(now);
   if (month > curKey) throw Object.assign(new Error('That month has not started yet'), { statusCode: 400 });
   const isCurrent = month === curKey;
-  const prevKey = addMonths(month, -1);
+  const prevKey = addMonths(month, -1), nextKey = addMonths(month, 1);
   const keys = []; for (let i = MONTHS_BACK - 1; i >= 0; i--) keys.push(addMonths(month, -i));
 
-  // The current month is always captured live, so a report for it (and the next month's "opening" figures) is exact.
-  if (isCurrent) await takeSnapshot(pool, sites, now);
-  const snaps = await loadSnapshots(pool, sites, keys);
+  // Every report captures today's position first, so the following month always has a starting point.
+  await takeSnapshot(pool, sites, now);
+  const snaps = await loadSnapshots(pool, sites, [...keys, nextKey]);
   const ev = await loadEvents(pool, sites, keys[0], month);
   const E = {}; for (const k of keys) E[k] = monthEvents(ev, sites, k);
   const S = {}; for (const k of keys) S[k] = mergeState(snaps[k], sites);
-  const cur = E[month], prv = E[prevKey], sCur = S[month], sPrv = S[prevKey];
+  const cur = E[month], prv = E[prevKey];
+  let sCur = S[month], approx = false;
+  // First report: no month-end snapshot exists yet. Use the first position recorded just after the month and say so.
+  if (!sCur && !isCurrent) {
+    const nx = mergeState(snaps[nextKey], sites);
+    if (nx && nx.takenAt && Number(nx.takenAt.slice(8, 10)) <= FALLBACK_DAYS) { sCur = nx; approx = true; S[month] = null; }
+  }
+  const sPrv = S[prevKey];
   const multi = sites.length > 1;
 
-  const series = (fn) => keys.map((k) => { try { const v = fn(E[k], S[k]); return v == null || Number.isNaN(v) ? null : v; } catch (e) { return null; } });
-  const rows = [];
-  const add = (group, label, fn, o = {}) => { const s = series(fn); rows.push({ group, label, series: s, prev: s[s.length - 2], cur: s[s.length - 1], good: o.good == null ? null : o.good, unit: o.unit || '', dec: o.dec || 0 }); };
-  add('Assets and space', 'Installed devices', (e, s) => s && s.devices, { good: null });
-  add('Assets and space', 'Total racks', (e, s) => s && s.racks);
-  add('Assets and space', 'Rack U utilization', (e, s) => s && pctOf(s.usedU, s.totalU), { unit: '%' });
-  add('Assets and space', 'Assets in store', (e, s) => s && s.inStore);
-  add('Power and servers', 'Peak power load (kW)', (e) => e.peakKw, { dec: 1 });
-  add('Power and servers', 'Servers online', (e, s) => s && s.servers.known ? pctOf(s.servers.online, s.servers.known) : null, { unit: '%', good: true });
-  add('Power and servers', 'Firmware compliant', (e, s) => s && s.fw.checked ? pctOf(s.fw.ok, s.fw.checked) : null, { unit: '%', good: true });
-  add('Issues', 'Reported', (e) => e.reported);
-  add('Issues', 'Resolved / closed', (e) => e.resolved, { good: true });
-  add('Issues', 'Open at month end', (e) => e.openEnd, { good: false });
-  add('Issues', 'Critical open', (e) => e.criticalEnd, { good: false });
-  add('Material movements', 'Received (inward) - entries', (e) => e.inwardCount);
-  add('Material movements', 'Sent out (outward) - entries', (e) => e.outwardCount);
-  add('Activities and visitors', 'DC activities', (e) => e.actTotal);
-  add('Activities and visitors', 'Visits', (e) => e.visits);
-  const row = (label) => rows.find((r) => r.label === label);
+  const rows = {};
+  const add = (mod, label, fn, o = {}) => {
+    const series = keys.map((k, i) => { try { const v = fn(E[k], i === keys.length - 1 ? sCur : S[k], k); return v == null || Number.isNaN(v) ? null : v; } catch (e) { return null; } });
+    const exactSeries = series.slice(0, -1).concat([o.kind === 'stock' && approx ? null : series[series.length - 1]]);
+    const prev = series[series.length - 2], curV = series[series.length - 1];
+    const delta = chg(curV, prev, o.dec || 0);
+    const good = o.good == null ? null : o.good;
+    const watch = !!o.watch && curV != null && curV > 0 && (prev == null || curV > prev);
+    (rows[mod] || (rows[mod] = [])).push({ label: typeof label === 'function' ? label(sCur) : label, prev, cur: curV, delta, unit: o.unit || '', dec: o.dec || 0, good, kind: o.kind || 'event',
+      series: exactSeries, first: o.kind === 'stock' && prev == null && curV != null, approx: o.kind === 'stock' && approx && curV != null, watch });
+  };
+  const st = (fn) => (e, s) => (s ? fn(s) : null);
 
-  // headline tiles
-  const tile = (label, r, note) => ({ label, prev: r.prev, cur: r.cur, unit: r.unit, good: r.good, delta: chg(r.cur, r.prev), note: note || '' });
-  const tiles = [
-    tile('Installed devices', row('Installed devices'), sCur && sPrv ? `${cur.added} added · ${cur.removed} moved out` : `${cur.added} added · ${cur.removed} moved out`),
-    tile('Rack U utilization', row('Rack U utilization'), sCur ? `${sCur.usedU} of ${sCur.totalU} U used` : ''),
-    tile('Peak power load', { ...row('Peak power load (kW)'), unit: ' kW' }, ''),
-    tile('Open issues', row('Open at month end'), `${cur.reported} raised · ${cur.resolved} closed`),
-    tile('Firmware compliant', row('Firmware compliant'), sCur && sCur.fw.checked ? `${sCur.fw.ok} of ${sCur.fw.checked} servers` : 'No firmware targets set'),
-    tile('Servers online', row('Servers online'), sCur && sCur.servers.known ? `${sCur.servers.online} of ${sCur.servers.known} reporting` : 'Needs Redfish sync'),
-  ];
-  tiles[0].good = null; tiles[1].good = null; tiles[2].good = null; tiles[3].good = false;
+  add('assets', 'Installed devices', st((s) => s.devices), { kind: 'stock' });
+  add('assets', 'Total racks', st((s) => s.racks), { kind: 'stock' });
+  add('assets', 'DC utilization (rack U used)', st((s) => pctOf(s.usedU, s.totalU)), { kind: 'stock', unit: '%' });
+  add('assets', 'Assets in store', st((s) => s.inStore), { kind: 'stock' });
 
-  // ranked "biggest changes" (relative size; only measures with both months known)
-  const rank = [];
-  const push = (what, a, b, good, why, unit = '') => { if (a == null || b == null || a === b) return; rank.push({ what, prev: a, cur: b, unit, good, delta: +(b - a).toFixed(1), score: a ? Math.abs(b - a) / Math.abs(a) : Math.abs(b - a), why }); };
-  push('Material sent out (outward) - entries', prv.outwardCount, cur.outwardCount, null, 'Check what left the site and why');
-  push('Material received (inward) - entries', prv.inwardCount, cur.inwardCount, null, 'Goods that came in this month');
-  push('Installed devices', sPrv && sPrv.devices, sCur && sCur.devices, null, `${cur.added} added, ${cur.removed} moved out`);
-  push('Peak power load (kW)', prv.peakKw, cur.peakKw, null, 'Highest combined daily feed peak', ' kW');
-  push('Open issues', prv.openEnd, cur.openEnd, false, `${cur.reported} raised, ${cur.resolved} closed`);
-  push('Critical issues open', prv.criticalEnd, cur.criticalEnd, false, cur.oldestCritical ? `Oldest: ${cur.oldestCritical.ticket}` : 'No critical issue open');
-  push('Rack U utilization', sPrv && pctOf(sPrv.usedU, sPrv.totalU), sCur && pctOf(sCur.usedU, sCur.totalU), null, sCur ? `${sCur.usedU} U used of ${sCur.totalU} U` : '', '%');
-  push('DC activities', prv.actTotal, cur.actTotal, null, 'Work recorded in DC Activity Record');
-  push('Visits', prv.visits, cur.visits, null, 'Approved / completed visitor requests');
-  rank.sort((a, b) => b.score - a.score);
+  const pw = sCur && sCur.hasPower ? sCur.power : null;
+  add('power', pw ? `Total load (kW) of ${pw.ratedKw} kW rated` : 'Total load (kW)', st((s) => (s.hasPower ? s.power.totalKw : null)), { kind: 'stock', dec: 1 });
+  add('power', 'Capacity used', st((s) => (s.hasPower && s.power.ratedKw ? pctOf(s.power.totalKw, s.power.ratedKw) : null)), { kind: 'stock', unit: '%' });
+  add('power', pw ? `Online PDUs (of ${pw.pdus})` : 'Online PDUs', st((s) => (s.hasPower ? s.power.online : null)), { kind: 'stock', good: true });
+  add('power', 'Racks monitored', st((s) => (s.hasPower ? s.power.racks : null)), { kind: 'stock' });
+  add('power', 'Highest rack load', st((s) => (s.hasPower && s.power.highest ? s.power.highest.pct : null)), { kind: 'stock', unit: '%', good: false });
+  add('power', 'Racks fully redundant (A+B)', st((s) => (s.hasPower ? s.power.redundant : null)), { kind: 'stock', good: true });
+  add('power', 'Peak daily load in the month (kW)', (e) => e.peakKw, { dec: 1 });
+  add('power', 'Power feeds at 80% of rating or more', (e) => (e.peakKw == null ? null : e.feedsHot.length), { good: false, watch: true });
 
-  // flows
-  const flows = [
-    { title: 'Devices: how the closing count came about', open: sPrv ? sPrv.devices : null, close: sCur ? sCur.devices : null,
-      steps: [{ label: 'Added (installed)', n: cur.added }, { label: 'Removed / moved out', n: -cur.removed }] },
-    { title: 'Issues: how the open count moved', open: prv.openEnd, close: cur.openEnd, steps: [{ label: 'Raised', n: cur.reported }, { label: 'Closed', n: -cur.resolved }] },
-  ];
+  add('ops', 'Servers online', st((s) => (s.servers.known ? pctOf(s.servers.online, s.servers.known) : null)), { kind: 'stock', unit: '%', good: true });
+  add('ops', 'Servers unreachable', st((s) => (s.servers.total ? s.servers.unreachable : null)), { kind: 'stock', good: false, watch: true });
+  add('ops', 'Firmware compliant', st((s) => (s.fw.checked ? pctOf(s.fw.ok, s.fw.checked) : null)), { kind: 'stock', unit: '%', good: true });
+  add('ops', 'Visits approved', (e) => e.visits);
+  add('ops', 'Transfers waiting for approval', st((s) => s.pendingTransfers), { kind: 'stock', good: false });
 
-  // hardware mix by make
+  add('issues', 'Reported', (e) => e.reported);
+  add('issues', 'Resolved / closed', (e) => e.resolved, { good: true });
+  add('issues', 'Open at month end', (e) => e.openEnd, { good: false });
+  add('issues', 'Critical open', (e) => e.criticalEnd, { good: false, watch: true });
+
   const makes = new Set([...Object.keys((sCur || {}).make || {}), ...Object.keys((sPrv || {}).make || {})]);
   const hardwareMix = [...makes].map((m) => ({ make: m, cur: sCur ? (sCur.make[m] || 0) : null, prev: sPrv ? (sPrv.make[m] || 0) : null }))
     .sort((a, b) => (b.cur || 0) - (a.cur || 0));
 
-  // material lines
   const itemList = (type) => {
     const names = new Set([...cur[type].keys(), ...prv[type].keys()]);
     return [...names].map((n) => ({ item: n, cur: cur[type].get(n) || 0, prev: prv[type].get(n) || 0 })).sort((a, b) => b.cur - a.cur || b.prev - a.prev || a.item.localeCompare(b.item));
   };
-  const activities = (() => {
-    const names = new Set([...cur.acts.keys(), ...prv.acts.keys()]);
-    return [...names].map((n) => ({ type: n, cur: cur.acts.get(n) || 0, prev: prv.acts.get(n) || 0 })).sort((a, b) => b.cur - a.cur || a.type.localeCompare(b.type));
-  })();
-
-  // watch list
-  const watch = [];
-  const w = (item, prev, curV, good, detail) => watch.push({ item, prev, cur: curV, delta: chg(curV, prev), good, detail });
-  w('Racks 85% full or more', sPrv ? sPrv.racksHot.length : null, sCur ? sCur.racksHot.length : null, false,
-    sCur ? (sCur.racksHot.slice(0, 4).map((r) => `${multi ? r.site + ' ' : ''}${r.rack} ${r.pct}%`).join(', ') || 'None') : 'Needs a month-end snapshot');
-  w('Power feeds at 80% of rating or more', prv.feedsHot.length, cur.feedsHot.length, false, cur.feedsHot.slice(0, 3).map((f) => `${f.name} ${f.pct}%`).join(', ') || 'None');
-  w('Servers with firmware off target', sPrv && sPrv.fw.checked ? sPrv.fw.checked - sPrv.fw.ok : null, sCur && sCur.fw.checked ? sCur.fw.checked - sCur.fw.ok : null, false,
-    sCur && sCur.fw.checked ? `${sCur.fw.ok} of ${sCur.fw.checked} on target` : 'Set targets in Firmware Compliance');
-  w('Critical issues open', prv.criticalEnd, cur.criticalEnd, false, cur.oldestCritical ? `Oldest ${cur.oldestCritical.ticket} since ${cur.oldestCritical.since}` : 'None');
-  w('Transfers waiting for approval', sPrv ? sPrv.pendingTransfers : null, sCur ? sCur.pendingTransfers : null, false, 'Material movements in Pending Approval');
-  w('Servers unreachable (monitoring)', sPrv ? sPrv.servers.unreachable : null, sCur ? sCur.servers.unreachable : null, false, 'Redfish sync reports an error');
+  const actNames = new Set([...cur.acts.keys(), ...prv.acts.keys()]);
+  const activities = [...actNames].map((n) => ({ type: n, cur: cur.acts.get(n) || 0, prev: prv.acts.get(n) || 0 })).sort((a, b) => b.cur - a.cur || a.type.localeCompare(b.type));
 
   const zoneNames = new Set([...Object.keys((sCur || {}).zones || {}), ...Object.keys((sPrv || {}).zones || {})]);
-  const zones = [...zoneNames].sort().map((z) => ({ zone: z,
-    cur: sCur && sCur.zones[z] ? pctOf(sCur.zones[z].used, sCur.zones[z].total) : null, prev: sPrv && sPrv.zones[z] ? pctOf(sPrv.zones[z].used, sPrv.zones[z].total) : null,
-    usedU: sCur && sCur.zones[z] ? sCur.zones[z].used : null }));
+  const zones = [...zoneNames].sort().map((z) => {
+    const c = sCur && sCur.zones[z], p = sPrv && sPrv.zones[z];
+    const hot = sCur ? sCur.racksHot.filter((r) => (multi ? `${r.site} · ${r.zone}` : r.zone) === z).map((r) => `${r.rack} (${r.pct}%)`) : [];
+    return { zone: z, racks: c ? c.racks : (p ? p.racks : null), cur: c ? pctOf(c.used, c.total) : null, prev: p ? pctOf(p.used, p.total) : null, usedU: c ? c.used : null, hot, approx };
+  });
 
-  // location-wise table (multi-location reports)
   let locations = null;
   if (multi) {
     locations = [];
@@ -392,21 +399,23 @@ async function buildReport(pool, { sites, month, scopeLabel, now = new Date() })
     }
   }
 
-  const haveOpening = !!sPrv, haveClosing = !!sCur;
+  const stockKnown = !!sCur;
   return {
     meta: {
       month, prevMonth: prevKey, label: monthLabel(month), prevLabel: monthLabel(prevKey), shortLabel: monthShort(month), prevShort: monthShort(prevKey),
-      scope: scopeLabel || (multi ? 'All locations' : sites[0]), sites, multi, isCurrent,
-      asOf: isCurrent ? `Month to date, up to ${dstr(now)}` : `Full month, ${monthLabel(month)}`,
-      generatedAt: now.toISOString(), monthsShown: keys.map(monthShort),
-      stateNote: haveOpening && haveClosing ? '' : !haveClosing
-        ? 'Stock figures (devices, racks, hardware mix, firmware) were not recorded for this month. Event figures below are complete.'
-        : 'Stock figures for the previous month were not recorded yet - changes in devices, racks and hardware mix start from next month.',
+      scope: scopeLabel || (multi ? 'All locations' : sites[0]), sites, multi, isCurrent, generatedAt: now.toISOString(), monthsShown: keys.map(monthShort),
+      firstRecord: stockKnown && !sPrv ? { asOf: approx ? sCur.takenAt : (isCurrent ? dstr(now) : (sCur.takenAt || '')), approx } : null,
+      stockMissing: !stockKnown,
     },
-    tiles, ranked: rank.slice(0, 8), flows, hardwareMix, rows, inward: itemList('inward'), outward: itemList('outward'),
-    inwardTotals: { cur: cur.inwardCount, prev: prv.inwardCount }, outwardTotals: { cur: cur.outwardCount, prev: prv.outwardCount },
-    activities, watch, zones, locations,
-    notes: ['Not captured by DCIM today: cooling temperature and humidity, energy cost, uptime / SLA, change-request counts, project budgets.'],
+    assets: { rows: rows.assets, note: `${cur.added} installed and ${cur.removed} moved out during ${monthLabel(month).split(' ')[0]}` },
+    hardwareMix,
+    zones,
+    materials: { inward: itemList('inward'), outward: itemList('outward'), inwardTotals: { cur: cur.inwardCount, prev: prv.inwardCount }, outwardTotals: { cur: cur.outwardCount, prev: prv.outwardCount } },
+    activities: { rows: activities, total: { cur: cur.actTotal, prev: prv.actTotal } },
+    issues: { rows: rows.issues, oldestCritical: cur.oldestCritical },
+    power: { rows: rows.power, configured: !!pw || rows.power.some((r) => r.cur != null), feedsHot: cur.feedsHot, highest: pw && pw.highest },
+    ops: { rows: rows.ops },
+    locations,
   };
 }
 
