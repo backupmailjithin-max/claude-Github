@@ -2741,7 +2741,7 @@ function ListFilterHeader({ column, filter, onOpen, style = {} }) {
 const WRAP_COLS = new Set(["description", "itemName", "remarks", "receiverName", "senderName"]);
 function wrapCellStyle(open) {
     return open ? { whiteSpace: "pre-wrap", wordBreak: "break-word", overflowWrap: "anywhere", minWidth: 220, maxWidth: 380 }
-        : { whiteSpace: "normal", wordBreak: "break-word", overflowWrap: "anywhere", minWidth: 220, maxWidth: 380, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" };
+        : { whiteSpace: "normal", wordBreak: "break-word", overflowWrap: "anywhere", minWidth: 220, maxWidth: 380, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" };
 }
 function ExpandedDetailRow({ colSpan, title, items }) {
     return React.createElement("tr", { className: "list-detail-row" },
@@ -15380,24 +15380,28 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                                     React.createElement("div", { style: { fontSize: 8, color: "#64748B", textTransform: "uppercase" } }, "Outward"))),
                             (() => {
                                 // Items moved, split by direction so a received item is never mixed with a sent-out one.
+                                const labelW = singleLoc ? 190 : 130;
                                 const section = (type, title, color) => {
                                     const rows = sd.siteMovements.filter(m => m.movementType === type);
                                     const counts = {};
                                     rows.forEach(m => { const k = m.itemName || "Others"; counts[k] = (counts[k] || 0) + (parseInt(m.quantity, 10) || 1); });
                                     const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
                                     const max = Math.max(...entries.map(e => e[1]), 1);
-                                    return React.createElement("div", { key: type, style: { marginTop: 8 } },
-                                        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 } },
-                                            React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: "#E2E8F0" } }, title),
-                                            React.createElement("span", { style: { fontSize: 9, fontWeight: 700, color } }, rows.length + (rows.length === 1 ? " entry" : " entries"))),
+                                    const shown = entries.slice(0, 6);
+                                    return React.createElement("div", { key: type, style: { minWidth: 0 } },
+                                        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8, paddingBottom: 6, borderBottom: "1px solid #334155" } },
+                                            React.createElement("span", { style: { fontSize: 12.5, fontWeight: 700, color: "#E2E8F0" } }, title),
+                                            React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color } }, rows.length + (rows.length === 1 ? " entry" : " entries"))),
                                         entries.length === 0
-                                            ? React.createElement("div", { style: { fontSize: 10, color: "#64748B" } }, "No " + type.toLowerCase() + " records for " + site + ".")
-                                            : entries.slice(0, 4).map(([k, v]) => (React.createElement("div", { key: k, style: { display: "flex", alignItems: "center", gap: 7, marginBottom: 5 } },
-                                                React.createElement("div", { style: { width: 80, fontSize: 9, color: "#94A3B8", textAlign: "right", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, title: k }, k),
-                                                React.createElement("div", { style: { flex: 1, height: 15, background: "#0F172A", borderRadius: 4, overflow: "hidden" } },
-                                                    React.createElement("div", { style: { width: `${Math.round(v / max * 100)}%`, height: "100%", background: color, borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 5, fontSize: 8, fontWeight: 700, color: "#fff" } }, v))))));
+                                            ? React.createElement("div", { style: { fontSize: 11, color: "#64748B" } }, "No " + type.toLowerCase() + " records for " + site + ".")
+                                            : shown.map(([k, v]) => (React.createElement("div", { key: k, style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 7 } },
+                                                React.createElement("div", { style: { width: labelW, flexShrink: 0, fontSize: 11, lineHeight: 1.25, color: "#CBD5E1", textAlign: "right", overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", wordBreak: "break-word" }, title: k }, k),
+                                                React.createElement("div", { style: { flex: 1, height: 9, background: "#0F172A", borderRadius: 5, overflow: "hidden", maxWidth: 260 } },
+                                                    React.createElement("div", { style: { width: `${Math.max(4, Math.round(v / max * 100))}%`, height: "100%", background: color, borderRadius: 5 } })),
+                                                React.createElement("div", { style: { width: 34, flexShrink: 0, fontSize: 11.5, fontWeight: 700, color: "#fff", textAlign: "left" } }, v)))),
+                                        entries.length > shown.length && React.createElement("div", { style: { fontSize: 10, color: "#64748B", marginLeft: labelW + 10 } }, "+ " + (entries.length - shown.length) + " more item" + (entries.length - shown.length === 1 ? "" : "s")));
                                 };
-                                return React.createElement("div", null,
+                                return React.createElement("div", { style: { display: "grid", gridTemplateColumns: singleLoc ? "repeat(auto-fit, minmax(420px, 1fr))" : "1fr", gap: singleLoc ? 24 : 14, marginTop: 12 } },
                                     section("Inward", "Material Received (Inward)", "#10B981"),
                                     section("Outward", "Material Sent Out (Outward)", "#EF4444"));
                             })())),
