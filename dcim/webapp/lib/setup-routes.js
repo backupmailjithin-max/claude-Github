@@ -21,6 +21,7 @@ const SMTP_SETTING_KEY = 'integrations.smtp';
 const NOTIFY_RECIPIENTS_KEY = 'integrations.notifyRecipients';
 const SETUP_COMPLETE_KEY = 'setup.completedAt';
 const APPROVAL_ACCESS_KEY = 'features.approvalAccess';
+const MULTI_VENDOR_KEY = 'features.multiVendor';
 
 const DEFAULT_HARDWARE_TYPES = ['Dell Server', 'HPE Server', 'Storage', 'Switch', 'Firewall', 'Load Balancer', 'HSM', 'PDU', 'ATS', 'Others'];
 const DEFAULT_RACK_TYPES = ['Compute', 'Storage', 'Network', 'Backup', 'Management', 'Custom'];
@@ -84,6 +85,7 @@ module.exports = function registerSetupRoutes(app, deps) {
         faviconUrl: org.faviconPath || '',
         footerText: org.footerText || '',
         approvalAccessEnabled: await isApprovalAccessEnabled(),
+        multiVendorEnabled: await isMultiVendorEnabled(),
       });
     } catch (e) { sendErr(res, e); }
   });
@@ -95,14 +97,22 @@ module.exports = function registerSetupRoutes(app, deps) {
   async function isApprovalAccessEnabled() {
     return (await getSetting(APPROVAL_ACCESS_KEY, '0')) === '1';
   }
+  // Multi-Vendor (Redfish) page inside Monitoring: hidden unless a Global Admin switches it on.
+  async function isMultiVendorEnabled() {
+    return (await getSetting(MULTI_VENDOR_KEY, '0')) === '1';
+  }
+  async function featureState() {
+    return { approvalAccessEnabled: await isApprovalAccessEnabled(), multiVendorEnabled: await isMultiVendorEnabled() };
+  }
   app.get('/api/setup/features', authenticateToken, requireGlobalAdmin, async (req, res) => {
-    try { res.json({ approvalAccessEnabled: await isApprovalAccessEnabled() }); } catch (e) { sendErr(res, e); }
+    try { res.json(await featureState()); } catch (e) { sendErr(res, e); }
   });
   app.put('/api/setup/features', authenticateToken, requireGlobalAdmin, async (req, res) => {
     try {
-      const on = !!(req.body && req.body.approvalAccessEnabled);
-      await setSetting(APPROVAL_ACCESS_KEY, on ? '1' : '0');
-      res.json({ approvalAccessEnabled: on });
+      const b = req.body || {};
+      if (typeof b.approvalAccessEnabled === 'boolean') await setSetting(APPROVAL_ACCESS_KEY, b.approvalAccessEnabled ? '1' : '0');
+      if (typeof b.multiVendorEnabled === 'boolean') await setSetting(MULTI_VENDOR_KEY, b.multiVendorEnabled ? '1' : '0');
+      res.json(await featureState());
     } catch (e) { sendErr(res, e); }
   });
 

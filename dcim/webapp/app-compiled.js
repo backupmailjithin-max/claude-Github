@@ -9287,6 +9287,7 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
     const [zoneLoading, setZoneLoading] = useState(false);
     const syncWasRunningRef = useRef(false);
     const [tab, setTab] = useState(() => { if (typeof window !== "undefined" && window.__dcimOpenFwJobs) { window.__dcimOpenFwJobs = false; return "fwjobs"; } return "status"; }); // "status" | "fwjobs" | "firmware" | "reconciliation"
+    useEffect(() => { if (tab === "redfish" && !MULTI_VENDOR) setTab("status"); }); // tab switched off while open
     useEffect(() => { const h = () => { window.__dcimOpenFwJobs = false; setTab("fwjobs"); }; window.addEventListener("dcim-open-fwjobs", h); return () => window.removeEventListener("dcim-open-fwjobs", h); }, []);
     const [selOme, setSelOme] = useState(new Set());
     const [selOv, setSelOv] = useState(new Set());
@@ -9957,8 +9958,8 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
                 React.createElement("button", { onClick: () => setTab("fwjobs"), style: tabBtnStyle(tab === "fwjobs") }, "Firmware Jobs", activeJobs.some((j) => j.status === "Running") && React.createElement("span", { style: { marginLeft: 6, padding: "1px 7px", borderRadius: 999, background: "#2563EB", color: "#fff", fontSize: 10, fontWeight: 700 } }, activeJobs.filter((j) => j.status === "Running").length)),
                 React.createElement("button", { onClick: () => setTab("firmware"), style: tabBtnStyle(tab === "firmware") }, "Firmware Comparison"),
                 React.createElement("button", { onClick: () => setTab("reconciliation"), style: tabBtnStyle(tab === "reconciliation") }, "Inventory Reconciliation"),
-                React.createElement("button", { onClick: () => setTab("redfish"), style: tabBtnStyle(tab === "redfish") }, "Multi-Vendor (Redfish)")),
-            tab === "redfish" && React.createElement(RedfishTab, { canEdit: canEdit, allowedSites: allowedSites }),
+                MULTI_VENDOR && React.createElement("button", { onClick: () => setTab("redfish"), style: tabBtnStyle(tab === "redfish") }, "Multi-Vendor (Redfish)")),
+            tab === "redfish" && MULTI_VENDOR && React.createElement(RedfishTab, { canEdit: canEdit, allowedSites: allowedSites }),
             tab === "fwjobs" && React.createElement(FirmwareJobsTab, { canEdit: canEdit }),
             tab === "status" && React.createElement(React.Fragment, null,
                 !selected && React.createElement("div", { className: "neu-card anim-in d2", style: { padding: "60px 30px", textAlign: "center" } },
@@ -11972,29 +11973,33 @@ function ActivityLogsPanel({ isAdmin }) {
                 React.createElement("button", { onClick: () => setPage((p) => Math.min(pageCount - 1, p + 1)), disabled: page >= pageCount - 1, className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "6px 12px" } }, "Next"))),
         openFilter && React.createElement(ValueListFilterPopup, { column: openFilter, currentFilter: columnFilters[openFilter.key], optionRows: optionRowsForColumn(openFilter.key), onApply: (value) => setColumnFilters((prev) => ({ ...prev, [openFilter.key]: value })), onClose: () => setOpenFilter(null) }));
 }
+let MULTI_VENDOR = false; // mirrors the App's multiVendor state for Monitoring
 let APPROVAL_ACCESS = false; // mirrors the App's approvalAccess state for the Users screens
 function FeaturesPanel({ onChanged }) {
-    const [on, setOn] = useState(null);
+    const [f, setF] = useState(null); // { approvalAccessEnabled, multiVendorEnabled }
     const [msg, setMsg] = useState("");
-    useEffect(() => { apiFetch('/setup/features').then((d) => setOn(!!d.approvalAccessEnabled)).catch((e) => setMsg(e.message || "Could not load")); }, []);
-    async function toggle(next) {
+    useEffect(() => { apiFetch('/setup/features').then((d) => setF({ approvalAccessEnabled: !!d.approvalAccessEnabled, multiVendorEnabled: !!d.multiVendorEnabled })).catch((e) => setMsg(e.message || "Could not load")); }, []);
+    async function toggle(field, next, okOn, okOff) {
         setMsg("");
         try {
-            const d = await apiFetch('/setup/features', { method: 'PUT', body: JSON.stringify({ approvalAccessEnabled: next }) });
-            setOn(!!d.approvalAccessEnabled);
-            if (onChanged) onChanged(!!d.approvalAccessEnabled);
-            setMsg(next ? "Enabled. Approval flow and Visitor Access are now visible to everyone." : "Disabled. Approval flow and Visitor Access are now hidden.");
+            const d = await apiFetch('/setup/features', { method: 'PUT', body: JSON.stringify({ [field]: next }) });
+            const nf = { approvalAccessEnabled: !!d.approvalAccessEnabled, multiVendorEnabled: !!d.multiVendorEnabled };
+            setF(nf);
+            if (onChanged) onChanged(nf.approvalAccessEnabled, nf.multiVendorEnabled);
+            setMsg(next ? okOn : okOff);
         }
         catch (e) { setMsg(e.message || "Could not save"); }
     }
+    const row = (key, field, title, text, okOn, okOff) => React.createElement("label", { key: key, style: { display: "flex", alignItems: "flex-start", gap: 12, cursor: f === null ? "default" : "pointer", marginBottom: 16 } },
+        React.createElement("input", { type: "checkbox", "data-feature-toggle": key, checked: !!(f && f[field]), disabled: f === null, onChange: (e) => toggle(field, e.target.checked, okOn, okOff), style: { width: 18, height: 18, marginTop: 2, accentColor: "#6366F1" } }),
+        React.createElement("span", null,
+            React.createElement("span", { style: { display: "block", fontFamily: "Inter", fontSize: 14, fontWeight: 700, color: "#0F172A" } }, title),
+            React.createElement("span", { style: { display: "block", fontFamily: "Inter", fontSize: 12, color: "#64748B", marginTop: 3, lineHeight: 1.5 } }, text)));
     return React.createElement("div", { className: "neu-card", "data-features-panel": "1", style: { padding: 22, maxWidth: 720 } },
         React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617" } }, "Features"),
         React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", marginTop: 4, marginBottom: 18 } }, "Optional modules that are switched off until you need them."),
-        React.createElement("label", { style: { display: "flex", alignItems: "flex-start", gap: 12, cursor: on === null ? "default" : "pointer" } },
-            React.createElement("input", { type: "checkbox", "data-feature-toggle": "approvalAccess", checked: !!on, disabled: on === null, onChange: (e) => toggle(e.target.checked), style: { width: 18, height: 18, marginTop: 2, accentColor: "#6366F1" } }),
-            React.createElement("span", null,
-                React.createElement("span", { style: { display: "block", fontFamily: "Inter", fontSize: 14, fontWeight: 700, color: "#0F172A" } }, "Approval flow and Visitor Access"),
-                React.createElement("span", { style: { display: "block", fontFamily: "Inter", fontSize: 12, color: "#64748B", marginTop: 3, lineHeight: 1.5 } }, "When off (default): the Visitor Access page, the approval steps for Material Movements and the Approver option for users are hidden, and new Material Movements get their ticket straight away. When on: they are shown to everyone and new Material Movements wait for approval first."))),
+        row("approvalAccess", "approvalAccessEnabled", "Approval flow and Visitor Access", "When off (default): the Visitor Access page, the approval steps for Material Movements and the Approver option for users are hidden, and new Material Movements get their ticket straight away. When on: they are shown to everyone and new Material Movements wait for approval first.", "Enabled. Approval flow and Visitor Access are now visible to everyone.", "Disabled. Approval flow and Visitor Access are now hidden."),
+        row("multiVendor", "multiVendorEnabled", "Multi-Vendor (Redfish) page", "When off (default): the Multi-Vendor (Redfish) tab in Monitoring is hidden for everyone. Turn it on to show it again.", "Enabled. The Multi-Vendor (Redfish) tab is now visible in Monitoring.", "Disabled. The Multi-Vendor (Redfish) tab is now hidden."),
         msg && React.createElement("div", { "data-features-msg": "1", style: { marginTop: 14, fontFamily: "Inter", fontSize: 12.5, color: "#4F46E5" } }, msg));
 }
 /* ===== Operations, Data Quality, Saved Views, Scan lookup (optional, additive; nothing here runs unless opened) ===== */
@@ -16172,12 +16177,14 @@ function DataCenterDashboard() {
     const [orgBrand, setOrgBrand] = useState({ companyName: "DCIM Dashboard", appName: "DCIM Dashboard", logoUrl: "", footerText: "" });
     useEffect(() => {
         fetch('/api/setup/status').then(r => r.ok ? r.json() : null).then(s => { if (s)
-            { setOrgBrand({ companyName: s.companyName || "DCIM Dashboard", appName: s.appName || "DCIM Dashboard", logoUrl: s.logoUrl || "", footerText: s.footerText || "" }); setApprovalAccess(!!s.approvalAccessEnabled); } }).catch(() => { });
+            { setOrgBrand({ companyName: s.companyName || "DCIM Dashboard", appName: s.appName || "DCIM Dashboard", logoUrl: s.logoUrl || "", footerText: s.footerText || "" }); setApprovalAccess(!!s.approvalAccessEnabled); setMultiVendor(!!s.multiVendorEnabled); } }).catch(() => { });
     }, []);
     // Approval flow + Visitor Access are optional modules (Settings -> Features). Off by default:
     // while off they are removed from the UI entirely, not greyed out.
     const [approvalAccess, setApprovalAccess] = useState(false);
     APPROVAL_ACCESS = approvalAccess;
+    const [multiVendor, setMultiVendor] = useState(false); // Multi-Vendor (Redfish) tab: hidden until a Global Admin enables it (Settings -> Features)
+    MULTI_VENDOR = multiVendor;
     const [auth, setAuth] = useState(() => { const user = getUser(); return user ? { user, loading: false } : null; });
     const [loginError, setLoginError] = useState(() => { try {
         const n = localStorage.getItem('dc_notice');
@@ -16396,7 +16403,7 @@ function DataCenterDashboard() {
         let approvalAccessNow = approvalAccess;
         try {
             const fr = await fetch('/api/setup/status', { cache: 'no-store' });
-            if (fr.ok) { approvalAccessNow = !!(await fr.json()).approvalAccessEnabled; setApprovalAccess(approvalAccessNow); }
+            if (fr.ok) { const st = await fr.json(); approvalAccessNow = !!st.approvalAccessEnabled; setApprovalAccess(approvalAccessNow); setMultiVendor(!!st.multiVendorEnabled); }
         }
         catch (e) { }
         if (!silent) {
@@ -18337,7 +18344,7 @@ function DataCenterDashboard() {
             visitorModalOpen && React.createElement(VisitorRequestModal, { onClose: () => setVisitorModalOpen(false), onSave: createVisitorRequest }),
             multiVisitorModalOpen && React.createElement(MultiVisitorEntryModal, { onClose: () => setMultiVisitorModalOpen(false), onSubmit: createVisitorRequestsBulk }),
             editingVisitor && React.createElement(VisitorRequestModal, { initial: editingVisitor, onClose: () => setEditingVisitor(null), onSave: (f) => updateVisitorRequest({ ...editingVisitor, ...f }) })),
-        !loading && tab === "settings" && React.createElement(SettingsPage, { users: users, onRefresh: loadAll, locations: locations, currentUser: currentUser, isAdmin: !!isAdmin, isGlobalAdmin: isGlobalAdmin, onFeaturesChanged: setApprovalAccess, onChangePassword: () => setPwdModalOpen(true) }),
+        !loading && tab === "settings" && React.createElement(SettingsPage, { users: users, onRefresh: loadAll, locations: locations, currentUser: currentUser, isAdmin: !!isAdmin, isGlobalAdmin: isGlobalAdmin, onFeaturesChanged: (a, m) => { setApprovalAccess(a); setMultiVendor(m); }, onChangePassword: () => setPwdModalOpen(true) }),
         pwdModalOpen && React.createElement(PasswordChangeModal, { onClose: () => setPwdModalOpen(false), isAdmin: false, targetUser: null }),
         reportOpen && React.createElement(ReportModal, { assets: filteredAssets, issues: siteRestrictedIssues, activities: siteRestrictedActivities, movements: siteRestrictedMovements, onClose: () => setReportOpen(false) }),
         summaryModalOpen && React.createElement(OverallSummaryModal, { assets: siteRestrictedAssets, rackComponents: siteRestrictedRackComponents, issues: siteRestrictedIssues, activities: siteRestrictedActivities, movements: siteRestrictedMovements, racks: siteRestrictedRacks, zones: siteRestrictedZones, allowedSites: allowedSites, pduSummary: pduSummary, onClose: () => setSummaryModalOpen(false) }),
