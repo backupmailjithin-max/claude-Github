@@ -423,7 +423,7 @@ const api = {
     saveRedfishCredentials: (assetId, body) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/credentials', { method: 'PUT', body: JSON.stringify(body) }),
     startRedfishSync: (assetIds, site) => apiFetch('/monitoring/redfish/sync', { method: 'POST', body: JSON.stringify({ assetIds, site }) }),
     getRedfishSyncJob: (jobId) => apiFetch('/monitoring/redfish/sync/' + encodeURIComponent(jobId)),
-    syncRedfishAsset: (assetId) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/sync', { method: 'POST', timeoutMs: 35000 }),
+    syncRedfishAsset: (assetId) => apiFetch('/monitoring/redfish/' + encodeURIComponent(assetId) + '/sync', { method: 'POST', timeoutMs: 120000 }),
     // Discover and Apply no longer run as one long held-open request - a scan across a large
     // site (1000s of assets) can legitimately take minutes, and a request held open that long
     // tends to get cut off by whatever reverse proxy/gateway sits in front of this server (most
@@ -8616,7 +8616,7 @@ function RedfishTab({ canEdit, allowedSites }) {
                 if (job.status === "done") break;
             }
             await load();
-            setSyncState({ running: false, msg: job ? `Synced ${job.reachable} of ${job.total} device(s)` + (job.unreachable ? ` · ${job.unreachable} unreachable` : "") + (job.skipped ? ` · ${job.skipped} skipped (already syncing)` : "") + " · " + new Date().toLocaleTimeString() : "" });
+            setSyncState({ running: false, msg: job ? `Synced ${job.reachable} of ${job.total} device(s)` + (job.unreachable ? ` · ${job.unreachable} unreachable` : "") + (job.skipped ? ` · ${job.skipped} skipped (already syncing)` : "") + (job.hwCollected ? ` · hardware read for ${job.hwCollected}` : "") + (job.hwFailed ? ` · hardware not read for ${job.hwFailed}` : "") + " · " + new Date().toLocaleTimeString() : "" });
         } catch (e) { setSyncState({ running: false, msg: e.message || "Sync failed", error: true }); }
     };
     // Collect hardware (CPU / memory / disks / NIC) from the BMCs: selected rows if any are ticked, else every configured device in the current view; three at a time, with progress.

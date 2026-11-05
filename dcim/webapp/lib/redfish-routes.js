@@ -620,6 +620,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
   // concurrent sync requests at once - see syncOneAsset()/the /sync route, and pollAllRedfish()
   // below, which both check it.
   const syncInFlight = new Set();
+  const hwInFlight = new Set();   // devices whose full hardware (CPU / memory / disks / ports) is being read right now
 
   async function loadAssetForUser(req, res, assetId) {
     const [rows] = await pool.query('SELECT * FROM assets WHERE id = ?', [assetId]);
@@ -744,6 +745,18 @@ module.exports = function registerRedfishRoutes(app, deps) {
   // (vendor/model/serial/firmware/bmcFirmware) are COALESCE-safe (filled only if currently
   // blank); health/power/sync time always reflect the latest poll, since they are live state,
   // not identity.
+  // Reads the full hardware inventory from the BMC and stores it (summary columns + the detail JSON shown in "Hardware details").
+  // Shared by the Hardware details "Read from BMC now" button and by every Sync path, so a Sync refreshes the hardware too.
+  async function collectAndStoreHardware(asset) {
+    const hw = await collectHardware(monitorFetch, asset.mgmt_ip, asset.redfish_port, asset.redfish_username, asset.redfish_password, null);
+    const detail = { cpu: hw.cpu, memory: hw.memory, disks: hw.disks, nics: hw.nics, notes: hw.notes, totals: hw.totals };
+    await pool.query('UPDATE assets SET redfish_cpu = ?, redfish_mem = ?, redfish_disk = ?, redfish_nic = ?, redfish_hw_json = ?, redfish_hw_at = NOW() WHERE id = ?',
+      [hw.summary.cpu, hw.summary.memory, hw.summary.disk, hw.summary.nic, JSON.stringify(detail).slice(0, 4000000), asset.id]);
+    return { hw, detail };
+  }
+  // Set REDFISH_SYNC_HARDWARE=0 to make Sync read only health / power / BIOS (faster on very large estates).
+  const SYNC_READS_HARDWARE = String(process.env.REDFISH_SYNC_HARDWARE || '1') !== '0';
+
   async function syncOneAsset(asset) {
     if (!asset.mgmt_ip) { const e = new Error('This asset has no management IP set'); e.statusCode = 400; throw e; }
     if (!asset.redfish_username) { const e = new Error('No Redfish credentials saved for this asset yet - use Test & Detect first'); e.statusCode = 400; throw e; }
@@ -763,7 +776,15 @@ module.exports = function registerRedfishRoutes(app, deps) {
       [r.vendor, canonicalModelFor(r.vendor, r.model), r.serialNumber, r.biosVersion, r.biosVersion, r.serialNumber, r.bmcFirmware, r.biosVersion, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
     );
     try { await pool.query('UPDATE assets SET redfish_hw_summary = ?, redfish_cpu = IF(redfish_hw_at IS NULL, ?, redfish_cpu), redfish_mem = IF(redfish_hw_at IS NULL, ?, redfish_mem) WHERE id = ?', [r.hwSummary || null, r.cpuQuick || null, r.memQuick || null, asset.id]); } catch (e) { /* cosmetic column - never fails a sync */ }
-    return { reachable: true, ...r };
+    // Full hardware inventory in the same pass. A failure here never fails the Sync (health / power / BIOS are already saved).
+    let hwCollected = false, hwError = null;
+    if (SYNC_READS_HARDWARE && !hwInFlight.has(asset.id)) {
+      hwInFlight.add(asset.id);
+      try { await collectAndStoreHardware(asset); hwCollected = true; }
+      catch (e) { hwError = String((e && e.cause && e.cause.code) || (e && e.message) || e).slice(0, 160); }
+      finally { hwInFlight.delete(asset.id); }
+    }
+    return { reachable: true, ...r, hwCollected, hwError };
   }
 
   app.post('/api/monitoring/redfish/:assetId/sync', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
@@ -806,7 +827,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
       }
       const [rows] = await pool.query(`SELECT * FROM assets WHERE ${conditions.join(' AND ')}`, params);
       const jobId = genId ? genId('RFS') : 'RFS-' + Date.now();
-      const job = { jobId, status: 'running', total: rows.length, processed: 0, reachable: 0, unreachable: 0, skipped: 0, startedAt: Date.now(), finishedAt: null };
+      const job = { jobId, status: 'running', total: rows.length, processed: 0, reachable: 0, unreachable: 0, skipped: 0, hwCollected: 0, hwFailed: 0, startedAt: Date.now(), finishedAt: null };
       syncJobs.set(jobId, job);
       scheduleJobCleanup(syncJobs, jobId);
       auditLog(req, 'REDFISH_SYNC', { entity: 'asset', status: 'success' }, { count: rows.length });
@@ -818,7 +839,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
           const asset = rows[idx++];
           if (syncInFlight.has(asset.id)) { job.skipped++; job.processed++; continue; }
           syncInFlight.add(asset.id);
-          try { const r = await syncOneAsset(asset); if (r.reachable) job.reachable++; else job.unreachable++; }
+          try { const r = await syncOneAsset(asset); if (r.reachable) { job.reachable++; if (r.hwCollected) job.hwCollected++; else if (r.hwError) job.hwFailed++; } else job.unreachable++; }
           catch (e) { job.unreachable++; }
           finally { syncInFlight.delete(asset.id); job.processed++; }
         }
@@ -1050,7 +1071,6 @@ module.exports = function registerRedfishRoutes(app, deps) {
   });
 
   // Hardware inventory: read CPU / memory / disks / NIC ports from the BMC now, store the result on the asset (summaries for the table columns, full detail as JSON).
-  const hwInFlight = new Set();
   app.post('/api/monitoring/redfish/:assetId/hardware', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
     try {
       const asset = await loadAssetForUser(req, res, req.params.assetId);
@@ -1059,12 +1079,10 @@ module.exports = function registerRedfishRoutes(app, deps) {
       if (hwInFlight.has(asset.id)) return res.status(409).json({ error: 'Hardware is already being collected for this device' });
       hwInFlight.add(asset.id);
       try {
-        let hw;
-        try { hw = await collectHardware(monitorFetch, asset.mgmt_ip, asset.redfish_port, asset.redfish_username, asset.redfish_password, null); }
+        let out;
+        try { out = await collectAndStoreHardware(asset); }
         catch (e) { return res.status(502).json({ error: e.statusCode === 401 || e.statusCode === 403 ? 'The BMC rejected the saved credentials' : 'Could not read the hardware from the BMC: ' + String((e && e.cause && e.cause.code) || e.message || e).slice(0, 160) }); }
-        const detail = { cpu: hw.cpu, memory: hw.memory, disks: hw.disks, nics: hw.nics, notes: hw.notes, totals: hw.totals };
-        await pool.query('UPDATE assets SET redfish_cpu = ?, redfish_mem = ?, redfish_disk = ?, redfish_nic = ?, redfish_hw_json = ?, redfish_hw_at = NOW() WHERE id = ?',
-          [hw.summary.cpu, hw.summary.memory, hw.summary.disk, hw.summary.nic, JSON.stringify(detail).slice(0, 4000000), asset.id]);
+        const hw = out.hw, detail = out.detail;
         res.json({ ok: true, summary: hw.summary, ...detail, collectedAt: new Date().toISOString() });
       } finally { hwInFlight.delete(asset.id); }
     } catch (e) { sendErr(res, e); }
