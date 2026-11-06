@@ -13040,37 +13040,42 @@ const REJECTED_COLUMNS = [
 // Store stock counted by Hardware Type, then by Make + Model (follows the search / location / column filters of the list below).
 function StoreSummaryPanel({ rows }) {
     const [open, setOpen] = useState(true);
-    const groups = useMemo(() => {
-        const m = new Map();
+    const { types, models, opening } = useMemo(() => {
+        const t = new Map(), m = new Map();
+        let op = 0;
         (rows || []).forEach((r) => {
-            const t = (r.hardwareType || "").trim() || "(No type)";
-            const g = m.get(t) || { type: t, total: 0, opening: 0, models: new Map() };
-            g.total += 1;
-            if (r.openingStock && !r.receivedDate) g.opening += 1;
-            const mk = [(r.manufacturer || "").trim(), (r.model || "").trim()].filter(Boolean).join(" ") || "(No model)";
-            g.models.set(mk, (g.models.get(mk) || 0) + 1);
-            m.set(t, g);
+            const tn = (r.hardwareType || "").trim() || "(No type)";
+            t.set(tn, (t.get(tn) || 0) + 1);
+            const mn = [(r.manufacturer || "").trim(), (r.model || "").trim()].filter(Boolean).join(" ") || "(No model)";
+            m.set(mn, (m.get(mn) || 0) + 1);
+            if (r.openingStock && !r.receivedDate) op += 1;
         });
-        return [...m.values()].sort((a, b) => b.total - a.total || a.type.localeCompare(b.type)).map((g) => ({ ...g, models: [...g.models.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])) }));
+        const sorted = (map) => [...map.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+        return { types: sorted(t), models: sorted(m), opening: op };
     }, [rows]);
     const total = (rows || []).length;
+    const list = (title, sub, items, attr) => React.createElement("div", { style: { border: "1px solid #E2E8F0", borderRadius: 12, padding: "10px 12px", background: "#fff", minWidth: 0 }, [attr]: "1" },
+        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 } },
+            React.createElement("span", { style: { fontFamily: "Inter", fontSize: 12, fontWeight: 800, color: "#0F172A" } }, title),
+            React.createElement("span", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#64748B" } }, sub)),
+        React.createElement("div", { style: { maxHeight: 250, overflowY: "auto" } },
+            items.map(([name, n]) => React.createElement("div", { key: name, "data-summary-row": name, style: { padding: "4px 0", borderTop: "1px solid #F1F5F9" } },
+                React.createElement("div", { style: { display: "flex", justifyContent: "space-between", gap: 8, fontFamily: "Inter", fontSize: 12, color: "#334155" } },
+                    React.createElement("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: name }, name),
+                    React.createElement("b", { style: { color: "#4F46E5" } }, n)),
+                React.createElement("div", { style: { height: 4, borderRadius: 3, background: "#EEF2FF", marginTop: 3 } },
+                    React.createElement("div", { style: { height: 4, borderRadius: 3, background: "#6366F1", width: Math.max(3, Math.round((n / Math.max(total, 1)) * 100)) + "%" } }))))));
     return React.createElement("div", { className: "neu-card", style: { padding: "14px 16px", marginBottom: 14 }, "data-store-summary": "1" },
         React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" } },
             React.createElement("div", null,
-                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 14, fontWeight: 800, color: "#0F172A" } }, "Store stock by Hardware Type and Model"),
-                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748B", marginTop: 2 } }, total + " device(s) in " + groups.length + " hardware type(s). Follows the search, location and column filters below.")),
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 14, fontWeight: 800, color: "#0F172A" } }, "Store stock counts"),
+                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748B", marginTop: 2 } }, total + " device(s) in " + types.length + " hardware type(s) and " + models.length + " model(s)" + (opening ? " · " + opening + " with no received date (Opening stock)" : "") + ". Follows the search, location and column filters below.")),
             React.createElement("button", { onClick: () => setOpen(!open), className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "6px 11px" }, "data-store-summary-toggle": "1" }, open ? "Hide" : "Show")),
-        open && (groups.length === 0
+        open && (total === 0
             ? React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", padding: "14px 2px" } }, "No devices to count.")
-            : React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 10, marginTop: 12 } },
-                groups.map((g) => React.createElement("div", { key: g.type, "data-store-summary-type": g.type, style: { border: "1px solid #E2E8F0", borderRadius: 12, padding: "10px 12px", background: "#fff" } },
-                    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, marginBottom: 6 } },
-                        React.createElement("span", { style: { fontFamily: "Inter", fontSize: 12, fontWeight: 800, color: "#0F172A" } }, g.type),
-                        React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontSize: 20, fontWeight: 800, color: "#4F46E5" } }, g.total)),
-                    g.models.map(([name, n]) => React.createElement("div", { key: name, style: { display: "flex", justifyContent: "space-between", gap: 8, fontFamily: "Inter", fontSize: 11.5, color: "#334155", padding: "2px 0", borderTop: "1px solid #F1F5F9" } },
-                        React.createElement("span", { style: { overflow: "hidden", textOverflow: "ellipsis" } }, name),
-                        React.createElement("b", null, n))),
-                    g.opening > 0 && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#2563EB", marginTop: 5 } }, g.opening + " with no received date (Opening stock)"))))));
+            : React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 12, marginTop: 12 } },
+                list("Count by Hardware Type", types.length + " type(s)", types, "data-store-summary-types"),
+                list("Count by Model", models.length + " model(s)", models, "data-store-summary-models"))));
 }
 function AssetLifecycleHub({ view, onViewChange, assets, canEdit, onAction, pageProps }) {
     const [ov, setOv] = useState(null);
