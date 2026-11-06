@@ -12029,7 +12029,7 @@ function ActivityLogsPanel({ isAdmin }) {
                                 React.createElement("td", { style: { padding: "9px 10px", whiteSpace: "nowrap" } },
                                     React.createElement("div", { style: { color: "#334155" } }, r.entity_type || "—"),
                                     r.site && React.createElement("div", { style: { fontSize: 10, color: "#94A3B8" } }, r.site)),
-                                React.createElement("td", { style: { padding: "9px 10px", maxWidth: 260, color: "#475569" } }, r.details || "—"),
+                                React.createElement("td", { style: { padding: "9px 10px", maxWidth: 260, color: "#475569", wordBreak: "break-word", overflowWrap: "anywhere" } }, r.details || "—"),
                                 React.createElement("td", { style: { padding: "9px 10px", whiteSpace: "nowrap", fontFamily: "'JetBrains Mono'", fontSize: 11, color: "#64748B" } }, r.ip_address || "—"),
                                 React.createElement("td", { style: { padding: "9px 10px", whiteSpace: "nowrap" } },
                                     React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: r.status === "failure" ? "#B91C1C" : "#15803D" } },
