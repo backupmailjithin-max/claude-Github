@@ -189,7 +189,7 @@ const api = {
     getAssetLifecycleBySerial: (serial) => apiFetch('/asset-lifecycle/by-serial/' + encodeURIComponent(serial) + '/history'),
     getAssetLifecycleDestinations: () => apiFetch('/asset-lifecycle/destinations'),
     getTransfersOverview: () => apiFetch('/transfers/overview'),
-    importOpeningStock: (rows, dryRun) => apiFetch('/asset-lifecycle/opening-stock', { method: 'POST', body: JSON.stringify({ rows, dryRun }), timeoutMs: 120000 }),
+    importOpeningStock: (rows, dryRun) => apiFetch('/asset-lifecycle/store-import', { method: 'POST', body: JSON.stringify({ rows, dryRun }), timeoutMs: 120000 }),
     updateAssetMovement: (id, payload) => apiFetch('/asset-movements/' + id, { method: 'PATCH', body: JSON.stringify(payload) }),
     applyAssetLifecycle: (id, payload) => apiFetch('/assets/' + id + '/lifecycle', { method: 'POST', body: JSON.stringify(payload) }),
     createAsset: (a) => apiFetch('/assets', { method: 'POST', body: JSON.stringify(a) }),
@@ -12813,40 +12813,68 @@ function TrfHistoryModal({ asset, onClose }) {
                     React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748B", marginTop: 3 } }, h.movementType, " · By ", h.performedBy || "—", h.reason ? " · " + h.reason : "")))),
             React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#64748B", marginTop: 10 } }, "Newest first.")));
 }
-// Bulk "received date" for devices that were already In Store before receipts were recorded.
-// Serial Number is mandatory; Received Date is optional - when it is blank the device is only tagged "Opening stock"
-// and NO date is stored, so nothing in the data or the reports can be misread as a real receipt date.
-const OPENING_STOCK_COLS = { serial: "Serial Number", date: "Received Date", custody: "Store / Custody Location", remarks: "Remarks" };
-function downloadOpeningStockTemplate(storeRows) {
-    const todo = (storeRows || []).filter((r) => !r.receivedDate);
-    const head = [OPENING_STOCK_COLS.serial, "Make (info only)", "Model (info only)", OPENING_STOCK_COLS.date, OPENING_STOCK_COLS.custody, OPENING_STOCK_COLS.remarks, "Asset Tag (info only)", "Device Name (info only)", "Site (info only)", "Status (info only)"];
-    const aoa = [head].concat(todo.length ? todo.map((r) => [String(r.serialNumber || ""), r.manufacturer || "", r.model || "", "", "", "", r.assetTag || "", r.deviceName || "", r.site || "", r.openingStock ? "Opening stock" : "No received date"]) : [["", "", "", "", "", "", "", "", "", ""]]);
+// Bulk-add OLD devices that are already in the store but not yet in Asset Inventory.
+// Mandatory: Serial Number, Site, Hardware Type, Make, Model. Optional: Received Date, Store / Custody Location, Asset Tag, Device Name, Remarks.
+// A serial that already exists in inventory is never added again. If Received Date is blank the device is tagged
+// "Opening stock" and NO date is stored, so nothing in the data or the reports can be misread as a real receipt date.
+const OS_COLS = [
+    { key: "serialNumber", label: "Serial Number", req: true },
+    { key: "site", label: "Site", req: true },
+    { key: "hardwareType", label: "Hardware Type", req: true },
+    { key: "manufacturer", label: "Make", req: true },
+    { key: "model", label: "Model", req: true },
+    { key: "receivedDate", label: "Received Date", req: false },
+    { key: "custodyLocation", label: "Store / Custody Location", req: false },
+    { key: "assetTag", label: "Asset Tag", req: false },
+    { key: "deviceName", label: "Device Name", req: false },
+    { key: "remarks", label: "Remarks", req: false },
+];
+function downloadOpeningStockTemplate(sites, hwTypes) {
+    const head = OS_COLS.map((x) => x.label + (x.req ? " *" : ""));
+    const site0 = (sites && sites[0]) || "Chennai", hw0 = (hwTypes && hwTypes[0]) || "Server";
+    const aoa = [head,
+        ["EXAMPLE-SERIAL-12345 (delete this row)", site0, hw0, "Dell", "PowerEdge R660", "2026-03-15", "Shelf A", "", "", "Old stock"],
+        ["EXAMPLE-SERIAL-67890 (delete this row)", site0, hw0, "HPE", "DL380 Gen10", "", "", "", "", ""]];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws["!cols"] = [{ wch: 34 }, { wch: 18 }, { wch: 28 }, { wch: 16 }, { wch: 28 }, { wch: 30 }, { wch: 20 }, { wch: 26 }, { wch: 16 }, { wch: 20 }];
+    ws["!cols"] = [{ wch: 38 }, { wch: 18 }, { wch: 20 }, { wch: 16 }, { wch: 24 }, { wch: 16 }, { wch: 26 }, { wch: 18 }, { wch: 22 }, { wch: 28 }];
     const info = [
         ["Column", "Mandatory?", "What to enter"],
-        [OPENING_STOCK_COLS.serial, "YES", "The device's serial number exactly as in Asset Inventory. The device must be In Store at one of your locations."],
-        [OPENING_STOCK_COLS.date, "Optional", "The real date the device was received into the store. Use a real Excel date, or type YYYY-MM-DD or DD-MMM-YYYY (05-Nov-2026). Not in the future. LEAVE BLANK IF YOU DO NOT KNOW IT."],
-        [OPENING_STOCK_COLS.custody, "Optional", "Shelf / room / store name. Blank keeps the current store location."],
-        [OPENING_STOCK_COLS.remarks, "Optional", "Up to 255 characters, saved with the received entry."],
-        ["Make / Model / Asset Tag / Device Name / Site / Status columns", "Ignored", "Only there to help you identify the device. Not imported - changing them has no effect."],
+        ["Serial Number", "YES", "Full serial number of the device. A serial that is already in Asset Inventory is rejected (no duplicates)."],
+        ["Site", "YES", "One of your locations, exactly as in the app (see sheet Allowed values)."],
+        ["Hardware Type", "YES", "An existing hardware type (see sheet Allowed values)."],
+        ["Make", "YES", "Manufacturer, e.g. Dell, HPE, Cisco."],
+        ["Model", "YES", "Model, e.g. PowerEdge R660."],
+        ["Received Date", "Optional", "Real date it was received into the store: Excel date, YYYY-MM-DD or DD-MMM-YYYY (05-Nov-2026). Not in the future. LEAVE BLANK IF YOU DO NOT KNOW IT."],
+        ["Store / Custody Location", "Optional", "Shelf / room / store name. Blank = \"<Site> Store\"."],
+        ["Asset Tag", "Optional", "Must be unique if given."],
+        ["Device Name", "Optional", ""],
+        ["Remarks", "Optional", "Up to 255 characters."],
         [],
         ["What happens"],
-        ["Date given", "", "A 'Received to Store' entry is added with that date and marked 'Received date imported (opening stock)'."],
-        ["Date blank", "", "The device is tagged Opening stock (date not recorded). No date is stored and it is never counted as received in any month."],
-        ["Already has a received / moved-to-store date", "", "Skipped. Existing history is never changed."],
-        ["Not In Store / serial not found / duplicate serial", "", "Reported as an error. Nothing is changed for that row."],
-        ["Preview first", "", "After choosing the file you see a full check. Nothing is saved until you press Apply."],
+        ["Date given", "", "The device is added to Store Inventory with a 'Received to Store' entry on that date."],
+        ["Date blank", "", "The device is added to Store Inventory as Opening stock (date not recorded). No date is stored and it is never counted as received in any month."],
+        ["Serial already in inventory", "", "Not added again; reported as skipped. Existing records are never changed."],
+        ["Any other problem in a row", "", "That row is reported as an error and not added."],
+        ["Preview first", "", "Nothing is saved until you press Apply."],
+        ["Remove the two example rows before importing.", "", ""],
     ];
     const ws2 = XLSX.utils.aoa_to_sheet(info);
-    ws2["!cols"] = [{ wch: 44 }, { wch: 12 }, { wch: 110 }];
+    ws2["!cols"] = [{ wch: 44 }, { wch: 12 }, { wch: 120 }];
+    const n = Math.max((sites || []).length, (hwTypes || []).length, 1);
+    const lists = [["Sites", "Hardware Types"]];
+    for (let i = 0; i < n; i++) lists.push([(sites || [])[i] || "", (hwTypes || [])[i] || ""]);
+    const ws3 = XLSX.utils.aoa_to_sheet(lists);
+    ws3["!cols"] = [{ wch: 28 }, { wch: 30 }];
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Received Dates");
+    XLSX.utils.book_append_sheet(wb, ws, "Store Devices");
     XLSX.utils.book_append_sheet(wb, ws2, "Instructions");
+    XLSX.utils.book_append_sheet(wb, ws3, "Allowed values");
     const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array", compression: true });
-    downloadBlob(new Blob([wbout], { type: "application/octet-stream" }), "opening-stock-received-dates-template.xlsx");
+    downloadBlob(new Blob([wbout], { type: "application/octet-stream" }), "store-devices-import-template.xlsx");
 }
-function OpeningStockImportModal({ storeRows, onClose, onDone }) {
+function OpeningStockImportModal({ sites, onClose, onDone }) {
+    const [hwTypes, setHwTypes] = useState([]);
+    useEffect(() => { let alive = true; api.getHardwareTypes().then((l) => { if (alive) setHwTypes((Array.isArray(l) ? l : []).filter((h) => !(h && h.category === "Component")).map((h) => (typeof h === "string" ? h : (h && h.name) || "")).map((n) => String(n).trim()).filter(Boolean)); }).catch(() => {}); return () => { alive = false; }; }, []);
     const [fileName, setFileName] = useState("");
     const [rows, setRows] = useState(null);
     const [preview, setPreview] = useState(null);
@@ -12865,16 +12893,15 @@ function OpeningStockImportModal({ storeRows, onClose, onDone }) {
             const ws = wb.Sheets[wb.SheetNames[0]];
             const json = XLSX.utils.sheet_to_json(ws, { defval: "", raw: true });
             if (!json.length) throw new Error("No data rows found. The first sheet needs a header row and at least one device row.");
-            const keys = Object.keys(json[0]).reduce((m, k) => { m[String(k).trim().toLowerCase()] = k; return m; }, {});
-            const col = (name) => keys[name.toLowerCase()];
-            if (!col(OPENING_STOCK_COLS.serial)) throw new Error('The column "Serial Number" is missing. Use the template (button above) and keep its header names.');
-            const out = json.map((r, i) => ({
-                row: i + 2,
-                serialNumber: String(r[col(OPENING_STOCK_COLS.serial)] == null ? "" : r[col(OPENING_STOCK_COLS.serial)]).trim(),
-                receivedDate: col(OPENING_STOCK_COLS.date) ? r[col(OPENING_STOCK_COLS.date)] : "",
-                custodyLocation: col(OPENING_STOCK_COLS.custody) ? r[col(OPENING_STOCK_COLS.custody)] : "",
-                remarks: col(OPENING_STOCK_COLS.remarks) ? r[col(OPENING_STOCK_COLS.remarks)] : "",
-            })).filter((r) => r.serialNumber || String(r.receivedDate).trim() || String(r.custodyLocation).trim() || String(r.remarks).trim());
+            const norm = (k) => String(k).replace(/\*/g, "").trim().toLowerCase();
+            const keys = Object.keys(json[0]).reduce((m, k) => { m[norm(k)] = k; return m; }, {});
+            const missing = OS_COLS.filter((x) => x.req && !keys[x.label.toLowerCase()]).map((x) => x.label);
+            if (missing.length) throw new Error("Missing column(s): " + missing.join(", ") + ". Use the template (button above) and keep its header names.");
+            const out = json.map((r, i) => {
+                const o = { row: i + 2 };
+                OS_COLS.forEach((x) => { const k = keys[x.label.toLowerCase()]; const v = k ? r[k] : ""; o[x.key] = x.key === "receivedDate" ? v : String(v == null ? "" : v).trim(); });
+                return o;
+            }).filter((r) => OS_COLS.some((x) => String(r[x.key] == null ? "" : r[x.key]).trim() !== "") && !/^EXAMPLE-SERIAL/i.test(r.serialNumber));
             if (!out.length) throw new Error("All rows are empty.");
             setRows(out);
             setBusy(true);
@@ -12899,29 +12926,30 @@ function OpeningStockImportModal({ storeRows, onClose, onDone }) {
     return React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(14,18,28,0.35)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }, onClick: busy ? undefined : onClose, "data-opening-stock-modal": "1" },
         React.createElement("div", { onClick: (e) => e.stopPropagation(), className: "neu-card anim-in d1", style: { width: 760, maxWidth: "95vw", maxHeight: "90vh", overflowY: "auto", padding: 26 } },
             React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 } },
-                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 19, fontWeight: 700, color: "#020617" } }, "Import received dates (opening stock)"),
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 19, fontWeight: 700, color: "#020617" } }, "Import old devices into Store Inventory"),
                 React.createElement("button", { onClick: onClose, disabled: busy, className: "neu-btn-secondary", style: { fontSize: 12, padding: "6px 12px" } }, "Close")),
             React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#475569", lineHeight: 1.55, marginBottom: 14 } },
-                "For devices that were already in the store before receipts were recorded. ",
-                React.createElement("b", null, "Serial Number"), " is mandatory; ", React.createElement("b", null, "Received Date"),
-                " is optional. If the date is not known, leave it blank - the device is tagged ", React.createElement("b", null, "Opening stock"),
+                "For old devices that are already in the store but not yet in Asset Inventory. ",
+                React.createElement("b", null, "Mandatory: "), "Serial Number, Site, Hardware Type, Make, Model. ",
+                React.createElement("b", null, "Optional: "), "Received Date, Store / Custody Location, Asset Tag, Device Name, Remarks. ",
+                "A serial that is already in inventory is not added again. If Received Date is blank the device is tagged ", React.createElement("b", null, "Opening stock"),
                 " and no date is stored. Nothing is saved until you press Apply."),
             React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 } },
-                React.createElement("button", { onClick: () => downloadOpeningStockTemplate(storeRows), className: "neu-btn-secondary", style: { fontSize: 12, padding: "9px 13px", display: "inline-flex", alignItems: "center", gap: 6 }, "data-os-template": "1" }, React.createElement(Download, { s: 13 }), " Download template"),
+                React.createElement("button", { onClick: () => downloadOpeningStockTemplate(sites, hwTypes), className: "neu-btn-secondary", style: { fontSize: 12, padding: "9px 13px", display: "inline-flex", alignItems: "center", gap: 6 }, "data-os-template": "1" }, React.createElement(Download, { s: 13 }), " Download template"),
                 React.createElement("label", { className: "neu-btn-primary", style: { fontSize: 12, padding: "9px 14px", cursor: busy ? "wait" : "pointer", display: "inline-flex", alignItems: "center", gap: 6 } }, "Choose filled file",
                     React.createElement("input", { type: "file", accept: ".xlsx,.xls,.csv", onChange: onFile, disabled: busy, style: { display: "none" }, "data-os-file": "1" })),
                 fileName && React.createElement("span", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B" } }, fileName)),
-            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#64748B", marginBottom: 12 } }, "The template is pre-filled with the In Store devices that have no received date at your locations."),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#64748B", marginBottom: 12 } }, "The template lists your allowed Sites and Hardware Types on its last sheet."),
             busy && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#4F46E5", marginBottom: 10 } }, "Working\u2026"),
             err && React.createElement("div", { "data-os-error": "1", style: { color: "#DC2626", fontFamily: "Inter", fontSize: 12, background: "rgba(220,38,38,0.08)", padding: "8px 12px", borderRadius: 10, marginBottom: 10 } }, err),
             sm && React.createElement("div", { "data-os-summary": "1" },
-                result && React.createElement("div", { style: { color: "#047857", fontFamily: "Inter", fontSize: 12.5, fontWeight: 700, marginBottom: 8 } }, "Done. " + (sm.withDate + sm.openingStock) + " device(s) updated."),
+                result && React.createElement("div", { style: { color: "#047857", fontFamily: "Inter", fontSize: 12.5, fontWeight: 700, marginBottom: 8 } }, "Done. " + (sm.withDate + sm.openingStock) + " device(s) added to Store Inventory."),
                 React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 } },
-                    chip(result ? "Dates recorded" : "Will get the date", sm.withDate, "#059669"),
-                    chip(result ? "Marked Opening stock" : "Will be Opening stock", sm.openingStock, "#2563EB"),
-                    chip("Skipped (already dated)", sm.skipped, "#D97706"),
+                    chip(result ? "Added with date" : "Will be added with date", sm.withDate, "#059669"),
+                    chip(result ? "Added as Opening stock" : "Will be added as Opening stock", sm.openingStock, "#2563EB"),
+                    chip("Skipped (already in inventory)", sm.skipped, "#D97706"),
                     chip("Errors", sm.errors, sm.errors ? "#DC2626" : "#64748B")),
-                !result && sm.openingStock > 0 && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#1D4ED8", background: "rgba(37,99,235,0.07)", padding: "8px 12px", borderRadius: 10, marginBottom: 10 } }, sm.openingStock + " device(s) have no date: they will be tagged Opening stock (date not recorded). No date is invented."),
+                !result && sm.openingStock > 0 && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#1D4ED8", background: "rgba(37,99,235,0.07)", padding: "8px 12px", borderRadius: 10, marginBottom: 10 } }, sm.openingStock + " device(s) have no date: they will be added as Opening stock (date not recorded). No date is invented."),
                 !result && sm.errors > 0 && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#B45309", marginBottom: 10 } }, "Rows with errors are left out; the other rows can still be applied. Fix the file and import again for the rest."),
                 problems.length > 0 && React.createElement("div", { style: { border: "1px solid #E2E8F0", borderRadius: 12, overflow: "hidden", marginBottom: 12 } },
                     React.createElement("div", { style: { maxHeight: 240, overflowY: "auto" } },
@@ -13010,7 +13038,7 @@ function AssetLifecycleHub({ view, onViewChange, assets, canEdit, onAction, page
         content = React.createElement(React.Fragment, null,
             React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#0F172A", marginBottom: 4 } }, "Store Inventory"),
             React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 12 } }, "Assets held in store. They belong to the DC's inventory but have no zone, rack or U position and are not counted in rack capacity or elevation."),
-            toolbar(React.createElement(React.Fragment, null, canEdit && React.createElement("button", { onClick: () => setOsImport(true), className: "neu-btn-primary", style: { fontSize: 12, padding: "9px 13px", marginRight: 8 }, "data-os-open": "1" }, "Import Received Dates"), React.createElement("button", { onClick: exportStore, className: "neu-btn-secondary", style: { fontSize: 12, padding: "9px 13px", display: "inline-flex", alignItems: "center", gap: 6 } }, React.createElement(Download, { s: 13 }), " Export CSV"))),
+            toolbar(React.createElement(React.Fragment, null, canEdit && React.createElement("button", { onClick: () => setOsImport(true), className: "neu-btn-primary", style: { fontSize: 12, padding: "9px 13px", marginRight: 8 }, "data-os-open": "1" }, "Import Old Store Devices"), React.createElement("button", { onClick: exportStore, className: "neu-btn-secondary", style: { fontSize: 12, padding: "9px 13px", display: "inline-flex", alignItems: "center", gap: 6 } }, React.createElement(Download, { s: 13 }), " Export CSV"))),
             table(["Serial Number", "Asset Tag", "Device Name", "Manufacturer", "Model", "Source DC", "Current Site", "Transfer Date", "Accepted Date", "Received Date", "Store Location", "Status", "Actions"], rows.map((r) => {
                 const full = byId.get(r.id);
                 return React.createElement("tr", { key: r.id, className: "neu-table-row", "data-store-row": r.serialNumber },
@@ -13042,7 +13070,7 @@ function AssetLifecycleHub({ view, onViewChange, assets, canEdit, onAction, page
         ovErr && view !== "all" && React.createElement("div", { style: { color: "#DC2626", fontFamily: "Inter", fontSize: 12, marginBottom: 10 } }, ovErr),
         view === "all" ? React.createElement(AssetLifecyclePage, pageProps) : content,
         histAsset && React.createElement(TrfHistoryModal, { asset: histAsset, onClose: () => setHistAsset(null) }),
-        osImport && React.createElement(OpeningStockImportModal, { storeRows: store, onClose: () => { const was = osImport; setOsImport(false); if (osApplied.current) { osApplied.current = false; if (pageProps.onHistoryChanged) pageProps.onHistoryChanged(); } }, onDone: async () => { osApplied.current = true; try { setOv(await api.getTransfersOverview()); } catch (e) { } } }));
+        osImport && React.createElement(OpeningStockImportModal, { sites: sites, onClose: () => { const was = osImport; setOsImport(false); if (osApplied.current) { osApplied.current = false; if (pageProps.onHistoryChanged) pageProps.onHistoryChanged(); } }, onDone: async () => { osApplied.current = true; try { setOv(await api.getTransfersOverview()); } catch (e) { } } }));
 }
 // ==== DESTINATION ACCEPTANCE:END ====
 

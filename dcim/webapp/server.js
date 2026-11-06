@@ -457,6 +457,7 @@ const AUDIT_RULES = [
   { m: 'DELETE', re: /^\/api\/assets\/([^/]+)$/, action: 'ASSET_DELETE', entity: 'asset' },
   { m: 'POST',   re: /^\/api\/assets\/bulk-upsert$/, action: 'ASSET_IMPORT', entity: 'asset' },
   { m: 'POST',   re: /^\/api\/asset-lifecycle\/opening-stock$/, action: 'STORE_OPENING_STOCK_IMPORT', entity: 'asset' },
+  { m: 'POST',   re: /^\/api\/asset-lifecycle\/store-import$/, action: 'STORE_BULK_IMPORT', entity: 'asset' },
   { m: 'POST',   re: /^\/api\/assets\/validate-import$/, action: 'ASSET_IMPORT_VALIDATE', entity: 'asset', log: true },
   { m: 'POST',   re: /^\/api\/assets\/([^/]+)\/lifecycle$/, action: 'ASSET_LIFECYCLE', entity: 'asset' },
   { m: 'POST',   re: /^\/api\/assets\/([^/]+)\/hardware\/sync$/, action: 'MONITORING_SYNC', entity: 'asset', log: true },
@@ -7099,6 +7100,140 @@ app.post('/api/asset-lifecycle/opening-stock', authenticateToken, requireRole(['
         }
         w.item.status = 'applied';
         w.item.message = w.date ? `Received to Store recorded for ${w.date}.` : 'Marked Opening stock (date not recorded).';
+      }
+      await conn.commit();
+    }
+    const count = (f) => out.filter(f).length;
+    const summary = {
+      total: out.length,
+      withDate: count((x) => (x.status === 'ready' || x.status === 'applied') && x.action === 'date'),
+      openingStock: count((x) => (x.status === 'ready' || x.status === 'applied') && x.action === 'opening'),
+      skipped: count((x) => x.status === 'skipped'),
+      errors: count((x) => x.status === 'error'),
+    };
+    res.locals.auditExtra = { dryRun, ...summary };
+    if (dryRun) res.locals.skipAudit = true;
+    res.json({ dryRun, summary, rows: out });
+  } catch (e) {
+    if (conn) { try { await conn.rollback(); } catch (_) { /* ignore */ } }
+    sendErr(res, e);
+  } finally { if (conn) conn.release(); }
+});
+
+// Bulk-add OLD devices that are physically in the store but not yet in Asset Inventory.
+//  - Mandatory: Serial Number, Site, Hardware Type, Make, Model. Optional: Received Date, Asset Tag, Device Name, Store / Custody Location, Remarks.
+//  - A serial that already exists in inventory is rejected (no duplicates, nothing is overwritten).
+//  - Received Date given -> a normal 'Received to Store' record with that date. Blank -> the device is tagged Opening stock and NO date is stored.
+//  - dryRun=true validates and reports, writes nothing; apply runs in one transaction (all or nothing).
+app.post('/api/asset-lifecycle/store-import', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+  let conn;
+  try {
+    const body = req.body || {};
+    const input = Array.isArray(body.rows) ? body.rows : null;
+    const dryRun = body.dryRun !== false;
+    if (!input || !input.length) return res.status(400).json({ error: 'No rows to import.' });
+    if (input.length > 2000) return res.status(400).json({ error: 'Too many rows (maximum 2000 per import).' });
+    const allowed = await getAllowedSitesForUser(req.user);
+    const siteByLower = new Map(allowed.map((x) => [String(x).toLowerCase(), x]));
+    const [htRows] = await pool.query('SELECT name, category FROM hardware_types');
+    const htByLower = new Map(htRows.map((h) => [String(h.name).toLowerCase(), h]));
+    const today = localTodayStr();
+    const txt = (v) => (v === undefined || v === null ? '' : String(v)).trim();
+    const out = [];
+    const seenSerial = new Map();
+    const seenTag = new Map();
+    const work = [];
+    input.forEach((r, i) => {
+      r = r || {};
+      const rowNo = Number(r.row) || i + 2;
+      const serial = txt(r.serialNumber);
+      const item = { row: rowNo, serialNumber: serial, status: 'error', action: null, message: '', site: null, deviceName: null };
+      out.push(item);
+      if (!serial) { item.message = 'Serial Number is required.'; return; }
+      if (serial.length > 150) { item.message = 'Serial Number is too long (maximum 150 characters).'; return; }
+      const key = serial.toLowerCase();
+      if (seenSerial.has(key)) { item.message = `Duplicate serial - already on row ${seenSerial.get(key)} of this file.`; return; }
+      seenSerial.set(key, rowNo);
+      const siteIn = txt(r.site);
+      if (!siteIn) { item.message = 'Site is required.'; return; }
+      const site = siteByLower.get(siteIn.toLowerCase());
+      if (!site) { item.message = `Site "${siteIn.slice(0, 40)}" is not one of your locations.`; return; }
+      item.site = site;
+      const htIn = txt(r.hardwareType);
+      if (!htIn) { item.message = 'Hardware Type is required.'; return; }
+      const ht = htByLower.get(htIn.toLowerCase());
+      if (!ht) { item.message = `Hardware Type "${htIn.slice(0, 40)}" is not in the catalog. Use an existing type (e.g. ${htRows.filter((h) => h.category !== 'Component').slice(0, 4).map((h) => h.name).join(', ')}).`; return; }
+      if (ht.category === 'Component') { item.message = `"${ht.name}" is a rack component type - add it from the Rack Components tab.`; return; }
+      const make = txt(r.manufacturer);
+      if (!make) { item.message = 'Make is required.'; return; }
+      if (make.length > 100) { item.message = 'Make is too long (maximum 100 characters).'; return; }
+      const modelIn = txt(r.model);
+      if (!modelIn) { item.message = 'Model is required.'; return; }
+      if (modelIn.length > 100) { item.message = 'Model is too long (maximum 100 characters).'; return; }
+      const tag = txt(r.assetTag);
+      if (tag.length > 100) { item.message = 'Asset Tag is too long (maximum 100 characters).'; return; }
+      if (tag) {
+        const tk = tag.toLowerCase();
+        if (seenTag.has(tk)) { item.message = `Asset Tag "${tag}" is already used on row ${seenTag.get(tk)} of this file.`; return; }
+        seenTag.set(tk, rowNo);
+      }
+      const dev = txt(r.deviceName);
+      if (dev.length > 100) { item.message = 'Device Name is too long (maximum 100 characters).'; return; }
+      let date = null;
+      const rawDate = r.receivedDate;
+      if (rawDate !== undefined && rawDate !== null && String(rawDate).trim() !== '') {
+        date = normalizeDateInput(typeof rawDate === 'number' ? rawDate : String(rawDate).trim());
+        if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date) || isNaN(new Date(date + 'T00:00:00Z').getTime())) { item.message = `Received Date "${String(rawDate).slice(0, 30)}" is not a valid date. Use YYYY-MM-DD, DD-MMM-YYYY (05-Nov-2026) or a real Excel date.`; return; }
+        if (date > today) { item.message = `Received Date ${date} is in the future.`; return; }
+        if (date < '2000-01-01') { item.message = `Received Date ${date} is too old (before 2000).`; return; }
+      }
+      const custody = txt(r.custodyLocation);
+      if (custody.length > 100) { item.message = 'Store / Custody Location is too long (maximum 100 characters).'; return; }
+      const remarks = txt(r.remarks);
+      if (remarks.length > 255) { item.message = 'Remarks is too long (maximum 255 characters).'; return; }
+      item.deviceName = dev || modelIn;
+      work.push({ item, key, tag, site, hwType: ht.name, make, model: canonicalModelFor(make, modelIn), dev: dev || null, date, custody: custody || `${site} Store`, remarks: remarks || null });
+    });
+
+    // Duplicate check against the WHOLE inventory (serials are unique across all locations).
+    if (work.length) {
+      for (let i = 0; i < work.length; i += 500) {
+        const chunk = work.slice(i, i + 500);
+        const [rows] = await pool.query('SELECT site, serial_number, lifecycle_status FROM assets WHERE LOWER(TRIM(serial_number)) IN (?)', [chunk.map((w) => w.key)]);
+        const m = new Map(rows.map((a) => [String(a.serial_number).trim().toLowerCase(), a]));
+        chunk.forEach((w) => { const a = m.get(w.key); if (a) { w.dupe = true; w.item.message = allowed.includes(a.site) ? `Already in inventory (${a.site}, ${a.lifecycle_status || 'Active'}). Not added again.` : 'Already in inventory. Not added again.'; w.item.status = 'skipped'; } });
+      }
+      const tagged = work.filter((w) => !w.dupe && w.tag);
+      for (let i = 0; i < tagged.length; i += 500) {
+        const chunk = tagged.slice(i, i + 500);
+        const [rows] = await pool.query('SELECT LOWER(TRIM(asset_tag)) AS t FROM assets WHERE LOWER(TRIM(asset_tag)) IN (?)', [chunk.map((w) => w.tag.toLowerCase())]);
+        const used = new Set(rows.map((x) => x.t));
+        chunk.forEach((w) => { if (used.has(w.tag.toLowerCase())) { w.dupe = true; w.item.status = 'error'; w.item.message = `Asset Tag "${w.tag}" already exists on another asset.`; } });
+      }
+    }
+    const todo = work.filter((w) => !w.dupe);
+    todo.forEach((w) => {
+      w.item.status = 'ready'; w.item.action = w.date ? 'date' : 'opening';
+      w.item.message = w.date ? `Will be added to Store with Received date ${w.date}.` : 'Will be added to Store as Opening stock (date not recorded).';
+    });
+
+    if (!dryRun && todo.length) {
+      conn = await pool.getConnection();
+      await conn.beginTransaction();
+      const who = req.user.name || req.user.username;
+      for (const w of todo) {
+        const id = genId('AST');
+        const when = w.date ? `${w.date} 00:00:00` : null;
+        await conn.query(
+          `INSERT INTO assets (id, site, zone, rack_type, rack_no, position, hardware_type, height, manufacturer, model, serial_number, installation_date, asset_tag, mgmt_ip, firmware, device_name, remarks, firmware_source, created_by, lifecycle_status, custody_location, opening_stock, last_movement_at, last_movement_reason, changed_fields)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [id, w.site, null, null, null, null, w.hwType, '1U', w.make, w.model, w.item.serialNumber, null, w.tag || null, null, null, w.dev, w.remarks, 'manual', who, 'In Store', w.custody, w.date ? 0 : 1, when, w.date ? 'Received into DC store (opening stock import)' : null, w.date ? 'Lifecycle: Received to Store' : 'Lifecycle: Marked Opening stock']);
+        if (w.date) {
+          await conn.query(`INSERT INTO asset_movements (id, asset_id, serial_number, movement_type, from_site, from_zone, from_rack_no, from_position, to_site, to_zone, to_rack_no, to_position, movement_date, reason, reference_no, performed_by, remarks) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            [genId('AMV'), id, w.item.serialNumber, 'Received to Store', null, null, null, null, w.site, null, null, null, when, 'Received into DC store (opening stock import)', 'OPENING-STOCK-IMPORT', who, w.remarks]);
+        }
+        w.item.status = 'applied';
+        w.item.message = w.date ? `Added to Store. Received ${w.date}.` : 'Added to Store as Opening stock (date not recorded).';
       }
       await conn.commit();
     }
