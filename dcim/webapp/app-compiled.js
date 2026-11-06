@@ -189,6 +189,7 @@ const api = {
     getAssetLifecycleBySerial: (serial) => apiFetch('/asset-lifecycle/by-serial/' + encodeURIComponent(serial) + '/history'),
     getAssetLifecycleDestinations: () => apiFetch('/asset-lifecycle/destinations'),
     getTransfersOverview: () => apiFetch('/transfers/overview'),
+    importOpeningStock: (rows, dryRun) => apiFetch('/asset-lifecycle/opening-stock', { method: 'POST', body: JSON.stringify({ rows, dryRun }), timeoutMs: 120000 }),
     updateAssetMovement: (id, payload) => apiFetch('/asset-movements/' + id, { method: 'PATCH', body: JSON.stringify(payload) }),
     applyAssetLifecycle: (id, payload) => apiFetch('/assets/' + id + '/lifecycle', { method: 'POST', body: JSON.stringify(payload) }),
     createAsset: (a) => apiFetch('/assets', { method: 'POST', body: JSON.stringify(a) }),
@@ -12780,6 +12781,7 @@ function AssetLifecyclePage({ assets, allowedSites, zones, racks, canEdit, onAct
 // Destination DC acceptance workflow: Pending Transfer Acceptance queue, Store Inventory and Rejected Transfers.
 // Everything here sits on top of the existing lifecycle actions - nothing in the existing Asset Lifecycle table is changed.
 const trfDate = (v) => { if (!v) return "—"; const d = new Date(v); return isNaN(d.getTime()) ? "—" : d.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" }); };
+const trfDay = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v || "")); if (!m) return "—"; return new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" }); };
 const trfUnit = (p) => { const t = String(p || "").replace(/U$/i, ""); return t ? "U" + t : ""; };
 // Plain-language label for the movement entries that make up a transfer story; null = show the entry as it always was.
 function trfEventLabel(h) {
@@ -12811,12 +12813,138 @@ function TrfHistoryModal({ asset, onClose }) {
                     React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748B", marginTop: 3 } }, h.movementType, " · By ", h.performedBy || "—", h.reason ? " · " + h.reason : "")))),
             React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#64748B", marginTop: 10 } }, "Newest first.")));
 }
+// Bulk "received date" for devices that were already In Store before receipts were recorded.
+// Serial Number is mandatory; Received Date is optional - when it is blank the device is only tagged "Opening stock"
+// and NO date is stored, so nothing in the data or the reports can be misread as a real receipt date.
+const OPENING_STOCK_COLS = { serial: "Serial Number", date: "Received Date", custody: "Store / Custody Location", remarks: "Remarks" };
+function downloadOpeningStockTemplate(storeRows) {
+    const todo = (storeRows || []).filter((r) => !r.receivedDate);
+    const head = [OPENING_STOCK_COLS.serial, OPENING_STOCK_COLS.date, OPENING_STOCK_COLS.custody, OPENING_STOCK_COLS.remarks, "Site (info only - not imported)", "Device (info only - not imported)", "Status (info only - not imported)"];
+    const aoa = [head].concat(todo.length ? todo.map((r) => [r.serialNumber || "", "", "", "", r.site || "", [r.deviceName, r.manufacturer, r.model].filter(Boolean).join(" ") || "", r.openingStock ? "Opening stock" : "No received date"]) : [["", "", "", "", "", "", ""]]);
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = [{ wch: 26 }, { wch: 16 }, { wch: 28 }, { wch: 30 }, { wch: 24 }, { wch: 40 }, { wch: 22 }];
+    const info = [
+        ["Column", "Mandatory?", "What to enter"],
+        [OPENING_STOCK_COLS.serial, "YES", "The device's serial number exactly as in Asset Inventory. The device must be In Store at one of your locations."],
+        [OPENING_STOCK_COLS.date, "Optional", "The real date the device was received into the store. Use a real Excel date, or type YYYY-MM-DD or DD-MMM-YYYY (05-Nov-2026). Not in the future. LEAVE BLANK IF YOU DO NOT KNOW IT."],
+        [OPENING_STOCK_COLS.custody, "Optional", "Shelf / room / store name. Blank keeps the current store location."],
+        [OPENING_STOCK_COLS.remarks, "Optional", "Up to 255 characters, saved with the received entry."],
+        ["Site / Device / Status columns", "Ignored", "Only there to help you identify the device. Not imported - changing them has no effect."],
+        [],
+        ["What happens"],
+        ["Date given", "", "A 'Received to Store' entry is added with that date and marked 'Received date imported (opening stock)'."],
+        ["Date blank", "", "The device is tagged Opening stock (date not recorded). No date is stored and it is never counted as received in any month."],
+        ["Already has a received / moved-to-store date", "", "Skipped. Existing history is never changed."],
+        ["Not In Store / serial not found / duplicate serial", "", "Reported as an error. Nothing is changed for that row."],
+        ["Preview first", "", "After choosing the file you see a full check. Nothing is saved until you press Apply."],
+    ];
+    const ws2 = XLSX.utils.aoa_to_sheet(info);
+    ws2["!cols"] = [{ wch: 44 }, { wch: 12 }, { wch: 110 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Received Dates");
+    XLSX.utils.book_append_sheet(wb, ws2, "Instructions");
+    const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array", compression: true });
+    downloadBlob(new Blob([wbout], { type: "application/octet-stream" }), "opening-stock-received-dates-template.xlsx");
+}
+function OpeningStockImportModal({ storeRows, onClose, onDone }) {
+    const [fileName, setFileName] = useState("");
+    const [rows, setRows] = useState(null);
+    const [preview, setPreview] = useState(null);
+    const [result, setResult] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState("");
+    async function onFile(e) {
+        const f = e.target.files && e.target.files[0];
+        e.target.value = "";
+        if (!f) return;
+        setErr(""); setPreview(null); setResult(null); setRows(null); setFileName(f.name);
+        try {
+            if (typeof XLSX === "undefined") throw new Error("Spreadsheet reader is not loaded.");
+            const buf = await f.arrayBuffer();
+            const wb = f.name.toLowerCase().endsWith(".csv") ? XLSX.read(new TextDecoder().decode(buf), { type: "string" }) : XLSX.read(new Uint8Array(buf), { type: "array" });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            const json = XLSX.utils.sheet_to_json(ws, { defval: "", raw: true });
+            if (!json.length) throw new Error("No data rows found. The first sheet needs a header row and at least one device row.");
+            const keys = Object.keys(json[0]).reduce((m, k) => { m[String(k).trim().toLowerCase()] = k; return m; }, {});
+            const col = (name) => keys[name.toLowerCase()];
+            if (!col(OPENING_STOCK_COLS.serial)) throw new Error('The column "Serial Number" is missing. Use the template (button above) and keep its header names.');
+            const out = json.map((r, i) => ({
+                row: i + 2,
+                serialNumber: String(r[col(OPENING_STOCK_COLS.serial)] == null ? "" : r[col(OPENING_STOCK_COLS.serial)]).trim(),
+                receivedDate: col(OPENING_STOCK_COLS.date) ? r[col(OPENING_STOCK_COLS.date)] : "",
+                custodyLocation: col(OPENING_STOCK_COLS.custody) ? r[col(OPENING_STOCK_COLS.custody)] : "",
+                remarks: col(OPENING_STOCK_COLS.remarks) ? r[col(OPENING_STOCK_COLS.remarks)] : "",
+            })).filter((r) => r.serialNumber || String(r.receivedDate).trim() || String(r.custodyLocation).trim() || String(r.remarks).trim());
+            if (!out.length) throw new Error("All rows are empty.");
+            setRows(out);
+            setBusy(true);
+            setPreview(await api.importOpeningStock(out, true));
+        }
+        catch (ex) { setErr(ex.message || "Could not read the file."); }
+        finally { setBusy(false); }
+    }
+    async function apply() {
+        setBusy(true); setErr("");
+        try { const r = await api.importOpeningStock(rows, false); setResult(r); setPreview(null); if (onDone) await onDone(); }
+        catch (ex) { setErr(ex.message || "Import failed - nothing was saved."); }
+        finally { setBusy(false); }
+    }
+    const data = result || preview;
+    const sm = data && data.summary;
+    const chip = (label, n, color) => React.createElement("div", { style: { flex: "1 1 120px", border: "1px solid #E2E8F0", borderRadius: 12, padding: "9px 12px", background: "#fff" } },
+        React.createElement("div", { style: { fontSize: 10.5, color: "#64748B", fontWeight: 700 } }, label),
+        React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 22, fontWeight: 800, color } }, n));
+    const problems = data ? data.rows.filter((r) => r.status === "error" || r.status === "skipped") : [];
+    const canApply = !!preview && sm && (sm.withDate + sm.openingStock) > 0 && !busy;
+    return React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(14,18,28,0.35)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }, onClick: busy ? undefined : onClose, "data-opening-stock-modal": "1" },
+        React.createElement("div", { onClick: (e) => e.stopPropagation(), className: "neu-card anim-in d1", style: { width: 760, maxWidth: "95vw", maxHeight: "90vh", overflowY: "auto", padding: 26 } },
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 } },
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 19, fontWeight: 700, color: "#020617" } }, "Import received dates (opening stock)"),
+                React.createElement("button", { onClick: onClose, disabled: busy, className: "neu-btn-secondary", style: { fontSize: 12, padding: "6px 12px" } }, "Close")),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#475569", lineHeight: 1.55, marginBottom: 14 } },
+                "For devices that were already in the store before receipts were recorded. ",
+                React.createElement("b", null, "Serial Number"), " is mandatory; ", React.createElement("b", null, "Received Date"),
+                " is optional. If the date is not known, leave it blank - the device is tagged ", React.createElement("b", null, "Opening stock"),
+                " and no date is stored. Nothing is saved until you press Apply."),
+            React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 } },
+                React.createElement("button", { onClick: () => downloadOpeningStockTemplate(storeRows), className: "neu-btn-secondary", style: { fontSize: 12, padding: "9px 13px", display: "inline-flex", alignItems: "center", gap: 6 }, "data-os-template": "1" }, React.createElement(Download, { s: 13 }), " Download template"),
+                React.createElement("label", { className: "neu-btn-primary", style: { fontSize: 12, padding: "9px 14px", cursor: busy ? "wait" : "pointer", display: "inline-flex", alignItems: "center", gap: 6 } }, "Choose filled file",
+                    React.createElement("input", { type: "file", accept: ".xlsx,.xls,.csv", onChange: onFile, disabled: busy, style: { display: "none" }, "data-os-file": "1" })),
+                fileName && React.createElement("span", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B" } }, fileName)),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#64748B", marginBottom: 12 } }, "The template is pre-filled with the In Store devices that have no received date at your locations."),
+            busy && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#4F46E5", marginBottom: 10 } }, "Working\u2026"),
+            err && React.createElement("div", { "data-os-error": "1", style: { color: "#DC2626", fontFamily: "Inter", fontSize: 12, background: "rgba(220,38,38,0.08)", padding: "8px 12px", borderRadius: 10, marginBottom: 10 } }, err),
+            sm && React.createElement("div", { "data-os-summary": "1" },
+                result && React.createElement("div", { style: { color: "#047857", fontFamily: "Inter", fontSize: 12.5, fontWeight: 700, marginBottom: 8 } }, "Done. " + (sm.withDate + sm.openingStock) + " device(s) updated."),
+                React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 } },
+                    chip(result ? "Dates recorded" : "Will get the date", sm.withDate, "#059669"),
+                    chip(result ? "Marked Opening stock" : "Will be Opening stock", sm.openingStock, "#2563EB"),
+                    chip("Skipped (already dated)", sm.skipped, "#D97706"),
+                    chip("Errors", sm.errors, sm.errors ? "#DC2626" : "#64748B")),
+                !result && sm.openingStock > 0 && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#1D4ED8", background: "rgba(37,99,235,0.07)", padding: "8px 12px", borderRadius: 10, marginBottom: 10 } }, sm.openingStock + " device(s) have no date: they will be tagged Opening stock (date not recorded). No date is invented."),
+                !result && sm.errors > 0 && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#B45309", marginBottom: 10 } }, "Rows with errors are left out; the other rows can still be applied. Fix the file and import again for the rest."),
+                problems.length > 0 && React.createElement("div", { style: { border: "1px solid #E2E8F0", borderRadius: 12, overflow: "hidden", marginBottom: 12 } },
+                    React.createElement("div", { style: { maxHeight: 240, overflowY: "auto" } },
+                        React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontFamily: "Inter", fontSize: 11.5 } },
+                            React.createElement("thead", null, React.createElement("tr", null, ["Row", "Serial Number", "Result", "Reason"].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "7px 10px", background: "#F8FAFC", color: "#64748B", fontSize: 10.5, position: "sticky", top: 0 } }, h)))),
+                            React.createElement("tbody", null, problems.slice(0, 300).map((r) => React.createElement("tr", { key: r.row + r.serialNumber },
+                                React.createElement("td", { style: { padding: "6px 10px", borderTop: "1px solid #F1F5F9" } }, r.row),
+                                React.createElement("td", { style: { padding: "6px 10px", borderTop: "1px solid #F1F5F9", fontFamily: "'JetBrains Mono'" } }, r.serialNumber || "\u2014"),
+                                React.createElement("td", { style: { padding: "6px 10px", borderTop: "1px solid #F1F5F9", color: r.status === "error" ? "#DC2626" : "#D97706", fontWeight: 700 } }, r.status === "error" ? "Error" : "Skipped"),
+                                React.createElement("td", { style: { padding: "6px 10px", borderTop: "1px solid #F1F5F9", color: "#334155" } }, r.message)))))),
+                    problems.length > 300 && React.createElement("div", { style: { padding: "6px 10px", fontSize: 10.5, color: "#64748B" } }, "Showing the first 300 of " + problems.length + ".")),
+                React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8 } },
+                    result ? React.createElement("button", { onClick: onClose, className: "neu-btn-primary", style: { fontSize: 12.5 } }, "Close")
+                        : React.createElement("button", { onClick: apply, disabled: !canApply, className: "neu-btn-primary", style: { fontSize: 12.5, opacity: canApply ? 1 : 0.5 }, "data-os-apply": "1" }, busy ? "Applying\u2026" : "Apply " + (sm.withDate + sm.openingStock) + " row(s)")))));
+}
 function AssetLifecycleHub({ view, onViewChange, assets, canEdit, onAction, pageProps }) {
     const [ov, setOv] = useState(null);
     const [ovErr, setOvErr] = useState("");
     const [search, setSearch] = useState("");
     const [siteFilter, setSiteFilter] = useState("all");
     const [histAsset, setHistAsset] = useState(null);
+    const [osImport, setOsImport] = useState(false);
+    const osApplied = useRef(false);
     useEffect(() => {
         let alive = true;
         api.getTransfersOverview().then((d) => { if (alive) { setOv(d); setOvErr(""); } }).catch((e) => { if (alive) setOvErr(e.message || "Could not load transfer data"); });
@@ -12875,20 +13003,21 @@ function AssetLifecycleHub({ view, onViewChange, assets, canEdit, onAction, page
     }
     else if (view === "store") {
         const rows = store.filter(match);
-        const exportStore = () => exportToCSV(rows.map((r) => ({ ...r, sourceDc: r.sourceSite || "", transferDateTxt: r.transferDate ? trfDate(r.transferDate) : "", acceptedDateTxt: r.acceptedDate ? trfDate(r.acceptedDate) : "" })), [
+        const exportStore = () => exportToCSV(rows.map((r) => ({ ...r, sourceDc: r.sourceSite || "", transferDateTxt: r.transferDate ? trfDate(r.transferDate) : "", acceptedDateTxt: r.acceptedDate ? trfDate(r.acceptedDate) : "", receivedDateTxt: r.receivedDate ? trfDay(r.receivedDate) : (r.openingStock ? "Opening stock (date not recorded)" : "") })), [
             { key: "serialNumber", label: "Serial Number" }, { key: "assetTag", label: "Asset Tag" }, { key: "deviceName", label: "Device Name" }, { key: "manufacturer", label: "Manufacturer" }, { key: "model", label: "Model" },
-            { key: "sourceDc", label: "Source DC" }, { key: "site", label: "Current Site" }, { key: "transferDateTxt", label: "Transfer Date" }, { key: "acceptedDateTxt", label: "Accepted Date" }, { key: "custodyLocation", label: "Store Location" }, { key: "lifecycleStatus", label: "Status" }
+            { key: "sourceDc", label: "Source DC" }, { key: "site", label: "Current Site" }, { key: "transferDateTxt", label: "Transfer Date" }, { key: "acceptedDateTxt", label: "Accepted Date" }, { key: "receivedDateTxt", label: "Received Date" }, { key: "custodyLocation", label: "Store Location" }, { key: "lifecycleStatus", label: "Status" }
         ], "store-inventory-" + localDateStr(today) + ".csv");
         content = React.createElement(React.Fragment, null,
             React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#0F172A", marginBottom: 4 } }, "Store Inventory"),
             React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 12 } }, "Assets held in store. They belong to the DC's inventory but have no zone, rack or U position and are not counted in rack capacity or elevation."),
-            toolbar(React.createElement("button", { onClick: exportStore, className: "neu-btn-secondary", style: { fontSize: 12, padding: "9px 13px", display: "inline-flex", alignItems: "center", gap: 6 } }, React.createElement(Download, { s: 13 }), " Export CSV")),
-            table(["Serial Number", "Asset Tag", "Device Name", "Manufacturer", "Model", "Source DC", "Current Site", "Transfer Date", "Accepted Date", "Store Location", "Status", "Actions"], rows.map((r) => {
+            toolbar(React.createElement(React.Fragment, null, canEdit && React.createElement("button", { onClick: () => setOsImport(true), className: "neu-btn-primary", style: { fontSize: 12, padding: "9px 13px", marginRight: 8 }, "data-os-open": "1" }, "Import Received Dates"), React.createElement("button", { onClick: exportStore, className: "neu-btn-secondary", style: { fontSize: 12, padding: "9px 13px", display: "inline-flex", alignItems: "center", gap: 6 } }, React.createElement(Download, { s: 13 }), " Export CSV"))),
+            table(["Serial Number", "Asset Tag", "Device Name", "Manufacturer", "Model", "Source DC", "Current Site", "Transfer Date", "Accepted Date", "Received Date", "Store Location", "Status", "Actions"], rows.map((r) => {
                 const full = byId.get(r.id);
                 return React.createElement("tr", { key: r.id, className: "neu-table-row", "data-store-row": r.serialNumber },
                     React.createElement("td", { style: mono }, r.serialNumber || "—"), React.createElement("td", { style: td }, r.assetTag || "—"), React.createElement("td", { style: td }, r.deviceName || "—"),
                     React.createElement("td", { style: td }, r.manufacturer || "—"), React.createElement("td", { style: td }, r.model || "—"), React.createElement("td", { style: td }, r.sourceSite || "—"),
                     React.createElement("td", { style: td }, r.site), React.createElement("td", { style: { ...td, whiteSpace: "nowrap" } }, trfDate(r.transferDate)), React.createElement("td", { style: { ...td, whiteSpace: "nowrap" } }, trfDate(r.acceptedDate)),
+                    React.createElement("td", { style: { ...td, whiteSpace: "nowrap" }, "data-received-date": r.serialNumber }, r.receivedDate ? trfDay(r.receivedDate) : (r.openingStock ? React.createElement("span", { title: "Already in store before receipts were recorded. The date is not known and is not guessed.", style: { color: "#2563EB", fontWeight: 600 } }, "Opening stock (date not recorded)") : "\u2014")),
                     React.createElement("td", { style: td }, r.custodyLocation || "—"), React.createElement("td", { style: td }, badge("In Store", "#2563EB")),
                     React.createElement("td", { style: { ...td, whiteSpace: "nowrap" } }, canEdit && full && btn("Install Asset", () => onAction(full, "Install from Store"), null, true), histBtn(r)));
             }), ov ? "No assets are in store." : "Loading…"));
@@ -12912,7 +13041,8 @@ function AssetLifecycleHub({ view, onViewChange, assets, canEdit, onAction, page
             pill("rejected", "Rejected Transfers", ov ? rejected.length : (assets || []).filter((a) => a && a.lifecycleStatus === "Transfer Refused").length)),
         ovErr && view !== "all" && React.createElement("div", { style: { color: "#DC2626", fontFamily: "Inter", fontSize: 12, marginBottom: 10 } }, ovErr),
         view === "all" ? React.createElement(AssetLifecyclePage, pageProps) : content,
-        histAsset && React.createElement(TrfHistoryModal, { asset: histAsset, onClose: () => setHistAsset(null) }));
+        histAsset && React.createElement(TrfHistoryModal, { asset: histAsset, onClose: () => setHistAsset(null) }),
+        osImport && React.createElement(OpeningStockImportModal, { storeRows: store, onClose: () => { const was = osImport; setOsImport(false); if (osApplied.current) { osApplied.current = false; if (pageProps.onHistoryChanged) pageProps.onHistoryChanged(); } }, onDone: async () => { osApplied.current = true; try { setOv(await api.getTransfersOverview()); } catch (e) { } } }));
 }
 // ==== DESTINATION ACCEPTANCE:END ====
 

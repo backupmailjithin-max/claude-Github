@@ -456,6 +456,7 @@ const AUDIT_RULES = [
   { m: 'PATCH',  re: /^\/api\/assets\/([^/]+)$/, action: 'ASSET_UPDATE', entity: 'asset' },
   { m: 'DELETE', re: /^\/api\/assets\/([^/]+)$/, action: 'ASSET_DELETE', entity: 'asset' },
   { m: 'POST',   re: /^\/api\/assets\/bulk-upsert$/, action: 'ASSET_IMPORT', entity: 'asset' },
+  { m: 'POST',   re: /^\/api\/asset-lifecycle\/opening-stock$/, action: 'STORE_OPENING_STOCK_IMPORT', entity: 'asset' },
   { m: 'POST',   re: /^\/api\/assets\/validate-import$/, action: 'ASSET_IMPORT_VALIDATE', entity: 'asset', log: true },
   { m: 'POST',   re: /^\/api\/assets\/([^/]+)\/lifecycle$/, action: 'ASSET_LIFECYCLE', entity: 'asset' },
   { m: 'POST',   re: /^\/api\/assets\/([^/]+)\/hardware\/sync$/, action: 'MONITORING_SYNC', entity: 'asset', log: true },
@@ -557,6 +558,7 @@ app.use('/api', (req, res, next) => {
           const body = req.body && typeof req.body === 'object' ? req.body : {};
           const resp = res.locals.auditBody && typeof res.locals.auditBody === 'object' ? res.locals.auditBody : {};
           const ok = res.statusCode < 400;
+          if (res.locals.skipAudit) return; // read-only previews (e.g. import dry runs) are not audit events
           if (rule.log) { // monitoring syncs / validations: application log only
             (ok ? log.info : log.warn)(`[${rule.action}] ${req.method} ${p} -> ${res.statusCode} (${Date.now() - startedAt} ms) user=${(req.user && req.user.username) || '-'}`);
             return;
@@ -1390,6 +1392,8 @@ async function initDB() {
     // Asset lifecycle fields — backward compatible with every existing asset/import.
     try { await conn.query("ALTER TABLE assets ADD COLUMN lifecycle_status VARCHAR(30) NOT NULL DEFAULT 'Active'"); } catch (e) { /* column already exists */ }
     try { await conn.query("ALTER TABLE assets ADD COLUMN custody_location VARCHAR(100)"); } catch (e) { /* column already exists */ }
+    // Opening stock: devices that were already in the store before receipts were recorded. No date is invented for them.
+    try { await conn.query("ALTER TABLE assets ADD COLUMN opening_stock TINYINT(1) NOT NULL DEFAULT 0"); } catch (e) { /* column already exists */ }
     try { await conn.query("ALTER TABLE assets ADD COLUMN last_known_site VARCHAR(50)"); } catch (e) { /* column already exists */ }
     try { await conn.query("ALTER TABLE assets ADD COLUMN last_known_zone VARCHAR(50)"); } catch (e) { /* column already exists */ }
     try { await conn.query("ALTER TABLE assets ADD COLUMN last_known_rack VARCHAR(50)"); } catch (e) { /* column already exists */ }
@@ -6955,7 +6959,7 @@ function lifecycleRowToJson(r) {
     serialNumber: r.serial_number, assetTag: r.asset_tag, deviceName: r.device_name,
     manufacturer: r.manufacturer, model: r.model, hardwareType: r.hardware_type,
     installationDate: dateOnlyStr(r.installation_date),
-    lifecycleStatus: r.lifecycle_status || 'Active', custodyLocation: r.custody_location || null,
+    lifecycleStatus: r.lifecycle_status || 'Active', custodyLocation: r.custody_location || null, openingStock: !!r.opening_stock,
     lastKnownSite: r.last_known_site || null, lastKnownZone: r.last_known_zone || null,
     lastKnownRack: r.last_known_rack || null, lastKnownPosition: r.last_known_position || null,
     lastMovementAt: r.last_movement_at || null, lastMovementReason: r.last_movement_reason || null,
@@ -7001,6 +7005,118 @@ app.get('/api/asset-lifecycle', authenticateToken, async (req, res) => {
     const [rows] = await pool.query(sql, params);
     res.json(rows.map(lifecycleRowToJson));
   } catch (e) { sendErr(res, e); }
+});
+
+// Bulk "received date" for devices that were already In Store before receipts were recorded.
+//  - Serial Number is mandatory; Received Date is optional. With a real date a 'Received to Store' record is added
+//    (marked as imported). Without a date the device is only tagged Opening stock - NO date is ever invented.
+//  - Only In Store assets that have no received / moved-to-store record are touched; anything else is reported and left as it is.
+//  - dryRun=true validates and reports, writes nothing.
+app.post('/api/asset-lifecycle/opening-stock', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+  let conn;
+  try {
+    const body = req.body || {};
+    const input = Array.isArray(body.rows) ? body.rows : null;
+    const dryRun = body.dryRun !== false;
+    if (!input || !input.length) return res.status(400).json({ error: 'No rows to import.' });
+    if (input.length > 5000) return res.status(400).json({ error: 'Too many rows (maximum 5000 per import).' });
+    const allowed = await getAllowedSitesForUser(req.user);
+    const today = localTodayStr();
+    const out = [];
+    const seen = new Map();
+    const work = [];
+    input.forEach((r, i) => {
+      const rowNo = Number(r && r.row) || i + 2;
+      const serial = String((r && r.serialNumber) != null ? r.serialNumber : '').trim();
+      const item = { row: rowNo, serialNumber: serial, status: 'error', action: null, message: '', site: null, deviceName: null };
+      out.push(item);
+      if (!serial) { item.message = 'Serial Number is required.'; return; }
+      if (serial.length > 150) { item.message = 'Serial Number is too long.'; return; }
+      const key = serial.toLowerCase();
+      if (seen.has(key)) { item.message = `Duplicate serial - already on row ${seen.get(key)} of this file.`; return; }
+      seen.set(key, rowNo);
+      const rawDate = r.receivedDate;
+      let date = null;
+      if (rawDate !== undefined && rawDate !== null && String(rawDate).trim() !== '') {
+        date = normalizeDateInput(typeof rawDate === 'number' ? rawDate : String(rawDate).trim());
+        if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date) || isNaN(new Date(date + 'T00:00:00Z').getTime())) { item.message = `Received Date "${String(rawDate).slice(0, 30)}" is not a valid date. Use YYYY-MM-DD, DD-MMM-YYYY (05-Nov-2026) or a real Excel date.`; return; }
+        if (date > today) { item.message = `Received Date ${date} is in the future.`; return; }
+        if (date < '2000-01-01') { item.message = `Received Date ${date} is too old (before 2000).`; return; }
+      }
+      const custody = String(r.custodyLocation || '').trim();
+      if (custody.length > 100) { item.message = 'Store / Custody Location is too long (maximum 100 characters).'; return; }
+      const remarks = String(r.remarks || '').trim();
+      if (remarks.length > 255) { item.message = 'Remarks is too long (maximum 255 characters).'; return; }
+      work.push({ item, key, date, custody: custody || null, remarks: remarks || null });
+    });
+
+    // Look the serials up (only inside the user's own locations).
+    const byKey = new Map();
+    if (work.length && allowed.length) {
+      for (let i = 0; i < work.length; i += 500) {
+        const keys = work.slice(i, i + 500).map((w) => w.key);
+        const [rows] = await pool.query(
+          'SELECT id, site, serial_number, device_name, model, lifecycle_status, custody_location, opening_stock FROM assets WHERE site IN (?) AND LOWER(TRIM(serial_number)) IN (?)', [allowed, keys]);
+        rows.forEach((a) => { const k = String(a.serial_number).trim().toLowerCase(); (byKey.get(k) || byKey.set(k, []).get(k)).push(a); });
+      }
+    }
+    const ids = [].concat(...[...byKey.values()]).map((a) => a.id);
+    const hasMove = new Set();
+    for (let i = 0; i < ids.length; i += 500) {
+      const [mv] = await pool.query("SELECT DISTINCT asset_id FROM asset_movements WHERE asset_id IN (?) AND movement_type IN ('Received to Store','Store')", [ids.slice(i, i + 500)]);
+      mv.forEach((m) => hasMove.add(m.asset_id));
+    }
+    const todo = [];
+    for (const w of work) {
+      const list = byKey.get(w.key) || [];
+      const it = w.item;
+      if (!list.length) { it.message = 'Serial not found in your locations.'; continue; }
+      if (list.length > 1) { it.message = `Serial matches ${list.length} assets (${list.map((a) => a.site).join(', ')}) - cannot tell which one. Fix the duplicate in Asset Inventory first.`; continue; }
+      const a = list[0];
+      it.site = a.site; it.deviceName = a.device_name || a.model || null;
+      if ((a.lifecycle_status || 'Active') !== 'In Store') { it.message = `Not In Store (current status: ${a.lifecycle_status || 'Active'}).`; continue; }
+      if (hasMove.has(a.id)) { it.status = 'skipped'; it.message = 'Already has a received / moved-to-store date on record. Not changed.'; continue; }
+      if (a.opening_stock && !w.date) { it.status = 'skipped'; it.message = 'Already marked as Opening stock. Not changed.'; continue; }
+      it.status = 'ready'; it.action = w.date ? 'date' : 'opening';
+      it.message = w.date ? `Will record Received to Store on ${w.date}.` : 'Will be marked Opening stock (date not recorded).';
+      todo.push({ w, a });
+    }
+
+    if (!dryRun && todo.length) {
+      conn = await pool.getConnection();
+      await conn.beginTransaction();
+      const who = req.user.name || req.user.username;
+      for (const { w, a } of todo) {
+        const custody = w.custody || a.custody_location || `${a.site} Store`;
+        if (w.date) {
+          const when = `${w.date} 00:00:00`;
+          const reason = 'Received date imported (opening stock)';
+          await conn.query(`INSERT INTO asset_movements (id, asset_id, serial_number, movement_type, from_site, from_zone, from_rack_no, from_position, to_site, to_zone, to_rack_no, to_position, movement_date, reason, reference_no, performed_by, remarks) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            [genId('AMV'), a.id, a.serial_number, 'Received to Store', null, null, null, null, a.site, null, null, null, when, reason, 'OPENING-STOCK-IMPORT', who, w.remarks]);
+          await conn.query('UPDATE assets SET opening_stock = 0, custody_location = ?, last_movement_at = ?, last_movement_reason = ?, changed_fields = ? WHERE id = ?', [custody, when, reason, 'Lifecycle: Received date imported', a.id]);
+        } else {
+          await conn.query('UPDATE assets SET opening_stock = 1, custody_location = ?, changed_fields = ? WHERE id = ?', [custody, 'Lifecycle: Marked Opening stock', a.id]);
+        }
+        w.item.status = 'applied';
+        w.item.message = w.date ? `Received to Store recorded for ${w.date}.` : 'Marked Opening stock (date not recorded).';
+      }
+      await conn.commit();
+    }
+    const count = (f) => out.filter(f).length;
+    const summary = {
+      total: out.length,
+      withDate: count((x) => (x.status === 'ready' || x.status === 'applied') && x.action === 'date'),
+      openingStock: count((x) => (x.status === 'ready' || x.status === 'applied') && x.action === 'opening'),
+      skipped: count((x) => x.status === 'skipped'),
+      errors: count((x) => x.status === 'error'),
+    };
+    res.locals.auditExtra = { dryRun, ...summary };
+    if (dryRun) res.locals.skipAudit = true;
+    res.json({ dryRun, summary, rows: out });
+  } catch (e) {
+    if (conn) { try { await conn.rollback(); } catch (_) { /* ignore */ } }
+    sendErr(res, e);
+  } finally { if (conn) conn.release(); }
 });
 
 app.get('/api/assets/:id/lifecycle-history', authenticateToken, async (req, res) => {
@@ -7343,7 +7459,8 @@ app.post('/api/assets/:id/lifecycle', authenticateToken, requireRole(['Admin','O
 // transfers as view-only, global admins see everything.
 const TRANSFER_META_SQL = `
   SELECT a.id, a.site, a.serial_number, a.asset_tag, a.device_name, a.manufacturer, a.model, a.hardware_type, a.height,
-         a.lifecycle_status, a.custody_location, a.last_movement_at,
+         a.lifecycle_status, a.custody_location, a.last_movement_at, a.opening_stock,
+         (SELECT DATE_FORMAT(s.movement_date, '%Y-%m-%d') FROM asset_movements s WHERE s.asset_id = a.id AND s.movement_type IN ('Received to Store','Store') ORDER BY s.movement_date DESC, s.created_at DESC LIMIT 1) AS received_date,
          (SELECT t.from_site FROM asset_movements t WHERE t.asset_id = a.id AND t.movement_type = 'Inter-DC Transfer' ORDER BY t.movement_date DESC, t.created_at DESC LIMIT 1) AS src_site,
          (SELECT t.movement_date FROM asset_movements t WHERE t.asset_id = a.id AND t.movement_type = 'Inter-DC Transfer' ORDER BY t.movement_date DESC, t.created_at DESC LIMIT 1) AS transfer_date,
          (SELECT t.performed_by FROM asset_movements t WHERE t.asset_id = a.id AND t.movement_type = 'Inter-DC Transfer' ORDER BY t.movement_date DESC, t.created_at DESC LIMIT 1) AS transfer_by,
@@ -7358,6 +7475,7 @@ function transferMetaToJson(r) {
     lifecycleStatus: r.lifecycle_status, custodyLocation: r.custody_location || null,
     sourceSite: r.src_site || null, transferDate: r.transfer_date || null, transferBy: r.transfer_by || null,
     acceptedDate: r.accepted_date || null, rejectedDate: r.rejected_date || null, rejectedBy: r.rejected_by || null,
+    receivedDate: r.received_date || null, openingStock: !!r.opening_stock,
   };
 }
 app.get('/api/transfers/overview', authenticateToken, async (req, res) => {
