@@ -2722,18 +2722,43 @@ function RecordActivityModal({ onClose, onSave, initial, zones, hardwareTypes, o
                 React.createElement("button", { onClick: onClose, className: "neu-btn-secondary", style: { flex: 1, padding: "12px 0", fontSize: 14 } }, "Cancel"),
                 React.createElement("button", { disabled: !form.activityType, onClick: () => onSave(form), className: "neu-btn-primary", style: { flex: 1, padding: "12px 0", fontSize: 14, opacity: form.activityType ? 1 : 0.5, cursor: form.activityType ? "pointer" : "not-allowed" } }, initial ? "Save changes" : "Record activity"))));
 }
-function ListFilterHeaderCell({ column, filter, onOpen }) {
+function useListSort() {
+    const [s, setS] = React.useState({ key: null, dir: null });
+    const onSort = (key) => setS((p) => p.key !== key ? { key, dir: "asc" } : (p.dir === "asc" ? { key, dir: "desc" } : { key: null, dir: null }));
+    const apply = (rows, columns) => { const col = s.key ? (columns || []).find((x) => x.key === s.key) : null; return col ? sortListRows(rows, col, s.dir) : rows; };
+    return { key: s.key, dir: s.dir, onSort, apply };
+}
+function ListSortLabel({ column, sortKey, sortDir, onSort }) {
+    if (!onSort) return React.createElement("span", { style: { overflow: "hidden", textOverflow: "ellipsis" } }, column.label);
+    const isSorted = sortKey === column.key;
+    return React.createElement("button", { onClick: () => onSort(column.key), title: `Sort by ${column.label}`, style: { display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", padding: 0, margin: 0, cursor: "pointer", font: "inherit", color: "inherit", textTransform: "inherit", letterSpacing: "inherit", minWidth: 0, textAlign: "left" }, "data-sort": column.key },
+        React.createElement("span", { style: { overflow: "hidden", textOverflow: "ellipsis" } }, column.label),
+        React.createElement("span", { style: { fontSize: 9, flexShrink: 0, opacity: isSorted ? 1 : 0.35 } }, isSorted ? (sortDir === "asc" ? "\u25B2" : "\u25BC") : "\u25BC"));
+}
+const MON_SEARCH_COLUMNS = [
+    { key: "zone", label: "Zone", format: (v, r) => [r.site, r.zone].filter(Boolean).join(" \u00B7 ") || "\u2014" },
+    { key: "vendor", label: "Vendor", format: (v) => v || "\u2014" },
+    { key: "name", label: "Name", format: (v) => v || "\u2014" },
+    { key: "model", label: "Model", format: (v) => v || "\u2014" },
+    { key: "serialNumber", label: "Serial", format: (v) => v || "\u2014" },
+    { key: "healthStatus", label: "Health", format: (v) => v || "Unknown" },
+    { key: "powerState", label: "Power", format: (v) => v || "Unknown" },
+    { key: "ipAddress", label: "IP", format: (v) => v || "\u2014" },
+    { key: "firmwareVersion", label: "System BIOS", format: (v) => v || "\u2014" },
+    { key: "fetchedAt", label: "Last synced", format: (v) => (v ? new Date(v).toLocaleTimeString() : "\u2014"), sortRaw: true },
+];
+function ListFilterHeaderCell({ column, filter, onOpen, sortKey, sortDir, onSort }) {
     const active = listColumnFilterActive(filter);
     return React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4, minWidth: 0 } },
-        React.createElement("span", { style: { overflow: "hidden", textOverflow: "ellipsis" } }, column.label),
+        React.createElement(ListSortLabel, { column, sortKey, sortDir, onSort }),
         React.createElement("button", { onClick: () => onOpen(column), title: `Filter ${column.label}`, className: "neu-icon-btn", style: { width: 22, height: 22, borderRadius: 6, padding: 0, display: "inline-flex", flexShrink: 0, background: active ? "#EEF2FF" : "#F8FAFC", border: active ? "1px solid #C7D2FE" : "1px solid #E2E8F0" } },
             React.createElement(Filter, { s: 11, c: active ? "#4F46E5" : "#64748B" })));
 }
-function ListFilterHeader({ column, filter, onOpen, style = {} }) {
+function ListFilterHeader({ column, filter, onOpen, style = {}, sortKey, sortDir, onSort }) {
     const active = listColumnFilterActive(filter);
     return React.createElement("th", { key: column.key, style: { ...style, position: "relative" } },
         React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 5 } },
-            React.createElement("span", { style: { overflow: "hidden", textOverflow: "ellipsis" } }, column.label),
+            React.createElement(ListSortLabel, { column, sortKey, sortDir, onSort }),
             React.createElement("button", { onClick: () => onOpen(column), title: `Filter ${column.label}`, className: "neu-icon-btn", style: { width: 25, height: 25, borderRadius: 7, padding: 0, display: "inline-flex", flexShrink: 0, background: active ? "#EEF2FF" : "#F8FAFC", border: active ? "1px solid #C7D2FE" : "1px solid #E2E8F0" } },
                 React.createElement(Filter, { s: 12, c: active ? "#4F46E5" : "#64748B" }))));
 }
@@ -2760,6 +2785,7 @@ function DCActivity({ activities, allowedSites, canEdit, onEdit, onDelete, onExp
     const [typeFilter, setTypeFilter] = useState("all");
     const [search, setSearch] = useState("");
     const [columnFilters, setColumnFilters] = useState(() => makeEmptyListColumnFilters(ACTIVITY_COLUMNS));
+    const listSort = useListSort();
     const [openFilter, setOpenFilter] = useState(null);
     const baseRows = (activities || []).filter((a) => {
         if (siteFilter !== "all" && a.site !== siteFilter)
@@ -2773,8 +2799,9 @@ function DCActivity({ activities, allowedSites, canEdit, onEdit, onDelete, onExp
         }
         return true;
     });
-    const filtered = baseRows.filter((row) => ACTIVITY_COLUMNS.every((col) => listColumnFilterMatches(columnFilters[col.key], col, row)))
+    const filteredDefault = baseRows.filter((row) => ACTIVITY_COLUMNS.every((col) => listColumnFilterMatches(columnFilters[col.key], col, row)))
         .sort((a, b) => new Date(b.startDate || 0) - new Date(a.startDate || 0));
+    const filtered = listSort.apply(filteredDefault, ACTIVITY_COLUMNS);
     const optionRowsForColumn = (key) => baseRows.filter((row) => ACTIVITY_COLUMNS.every((col) => col.key === key || listColumnFilterMatches(columnFilters[col.key], col, row)));
     const activeColumnFilterCount = countListColumnFilters(columnFilters);
     const thBase = { textAlign: "left", padding: "12px 10px", borderBottom: "0.5px solid rgba(163,177,198,0.3)", fontFamily: "Inter", fontSize: 11, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap" };
@@ -2809,7 +2836,7 @@ function DCActivity({ activities, allowedSites, canEdit, onEdit, onDelete, onExp
                         canEdit && React.createElement("th", { style: { ...thBase, width: 34 } },
                             React.createElement("input", { type: "checkbox", checked: filtered.length > 0 && filtered.every(a => selectedIds.has(a.id)), ref: el => { if (el)
                                     el.indeterminate = filtered.some(a => selectedIds.has(a.id)) && !filtered.every(a => selectedIds.has(a.id)); }, onChange: e => onSelectAll(e.target.checked, filtered.map(a => a.id)), style: { width: 15, height: 15, accentColor: "#6366F1", cursor: "pointer" } })),
-                        ACTIVITY_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, style: thBase })),
+                        ACTIVITY_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, sortKey: listSort.key, sortDir: listSort.dir, onSort: listSort.onSort, style: thBase })),
                         canEdit && React.createElement("th", { style: { ...thBase, textAlign: "right" } }))),
                 React.createElement("tbody", null,
                     filtered.length === 0 && React.createElement("tr", null,
@@ -3215,6 +3242,7 @@ function MaterialMovements({ movements, allowedSites, canEdit, isAdmin, canAppro
     const [typeFilter, setTypeFilter] = useState("all");
     const [search, setSearch] = useState("");
     const [columnFilters, setColumnFilters] = useState(() => makeEmptyListColumnFilters(MOVEMENT_COLUMNS));
+    const listSort = useListSort();
     const [openFilter, setOpenFilter] = useState(null);
     const baseRows = (movements || []).filter((m) => {
         if (siteFilter !== "all" && m.site !== siteFilter)
@@ -3228,8 +3256,9 @@ function MaterialMovements({ movements, allowedSites, canEdit, isAdmin, canAppro
         }
         return true;
     });
-    const filtered = baseRows.filter((row) => MOVEMENT_COLUMNS.every((col) => listColumnFilterMatches(columnFilters[col.key], col, row)))
+    const filteredDefault = baseRows.filter((row) => MOVEMENT_COLUMNS.every((col) => listColumnFilterMatches(columnFilters[col.key], col, row)))
         .sort((a, b) => new Date(b.movementDate || 0) - new Date(a.movementDate || 0));
+    const filtered = listSort.apply(filteredDefault, MOVEMENT_COLUMNS);
     const optionRowsForColumn = (key) => baseRows.filter((row) => MOVEMENT_COLUMNS.every((col) => col.key === key || listColumnFilterMatches(columnFilters[col.key], col, row)));
     const activeColumnFilterCount = countListColumnFilters(columnFilters);
     const inwardCount = (movements || []).filter((m) => m.movementType === "Inward").length;
@@ -3296,7 +3325,7 @@ function MaterialMovements({ movements, allowedSites, canEdit, isAdmin, canAppro
                         canEdit && React.createElement("th", { style: { ...thBase, width: 34 } },
                             React.createElement("input", { type: "checkbox", checked: filtered.length > 0 && filtered.every(m => selectedIds.has(m.id)), ref: el => { if (el)
                                     el.indeterminate = filtered.some(m => selectedIds.has(m.id)) && !filtered.every(m => selectedIds.has(m.id)); }, onChange: e => onSelectAll(e.target.checked, filtered.map(m => m.id)), style: { width: 15, height: 15, accentColor: "#6366F1", cursor: "pointer" } })),
-                        MOVEMENT_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, style: thBase })),
+                        MOVEMENT_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, sortKey: listSort.key, sortDir: listSort.dir, onSort: listSort.onSort, style: thBase })),
                         React.createElement("th", { style: { ...thBase, textAlign: "right" } }))),
                 React.createElement("tbody", null,
                     filtered.length === 0 && React.createElement("tr", null,
@@ -4049,8 +4078,11 @@ function countListColumnFilters(filters) { return Object.values(filters || {}).r
 // right next to it, reusing the same Excel-style value filter popup.
 function compareListSortValues(a, b) {
     const av = a == null ? "" : a, bv = b == null ? "" : b;
-    const aNum = typeof av === "number" ? av : (av !== "" && !isNaN(Date.parse(av)) ? Date.parse(av) : (av !== "" && !isNaN(Number(av)) ? Number(av) : null));
-    const bNum = typeof bv === "number" ? bv : (bv !== "" && !isNaN(Date.parse(bv)) ? Date.parse(bv) : (bv !== "" && !isNaN(Number(bv)) ? Number(bv) : null));
+    // Only text that really looks like a date is compared as a date (V8 would otherwise read serials such as "SI-2" as dates).
+    const dateLike = (s) => typeof s === "string" && /^(\d{4}-\d{2}-\d{2}|\d{1,2}[ \/.-][A-Za-z]{3,9}[ \/.-]\d{2,4}|\d{1,2}\/\d{1,2}\/\d{2,4}|[A-Za-z]{3,9} \d{1,2},? \d{4})/.test(s.trim());
+    const toNum = (v) => typeof v === "number" ? v : (v !== "" && dateLike(v) && !isNaN(Date.parse(v)) ? Date.parse(v) : (v !== "" && !isNaN(Number(v)) ? Number(v) : null));
+    const aNum = toNum(av);
+    const bNum = toNum(bv);
     if (aNum != null && bNum != null)
         return aNum - bNum;
     return String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: "base" });
@@ -4059,8 +4091,8 @@ function sortListRows(rows, column, dir) {
     if (!column || !dir)
         return rows;
     const sorted = [...rows].sort((a, b) => {
-        const av = column.format ? column.format(a[column.key], a) : a[column.key];
-        const bv = column.format ? column.format(b[column.key], b) : b[column.key];
+        const av = column.format && !column.sortRaw ? column.format(a[column.key], a) : a[column.key];
+        const bv = column.format && !column.sortRaw ? column.format(b[column.key], b) : b[column.key];
         return compareListSortValues(av, bv);
     });
     if (dir === "desc")
@@ -4072,7 +4104,7 @@ function SortableListFilterHeader({ column, filter, onOpenFilter, sortKey, sortD
     const isSorted = sortKey === column.key;
     return React.createElement("th", { key: column.key, style: { ...style, position: "relative" } },
         React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 5 } },
-            React.createElement("button", { onClick: () => onSort(column.key), title: `Sort by ${column.label}`, style: { display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", padding: 0, margin: 0, cursor: "pointer", font: "inherit", color: isSorted ? "#4F46E5" : "inherit", overflow: "hidden", minWidth: 0 } },
+            React.createElement("button", { onClick: () => onSort(column.key), title: `Sort by ${column.label}`, "data-sort": column.key, style: { display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", padding: 0, margin: 0, cursor: "pointer", font: "inherit", color: isSorted ? "#4F46E5" : "inherit", overflow: "hidden", minWidth: 0 } },
                 React.createElement("span", { style: { overflow: "hidden", textOverflow: "ellipsis" } }, column.label),
                 React.createElement("span", { style: { fontSize: 9, flexShrink: 0, opacity: isSorted ? 1 : 0.35 } }, isSorted ? (sortDir === "asc" ? "▲" : "▼") : "▼")),
             React.createElement("button", { onClick: () => onOpenFilter(column), title: `Filter ${column.label}`, className: "neu-icon-btn", style: { width: 25, height: 25, borderRadius: 7, padding: 0, display: "inline-flex", flexShrink: 0, background: active ? "#EEF2FF" : "#F8FAFC", border: active ? "1px solid #C7D2FE" : "1px solid #E2E8F0" } },
@@ -4435,7 +4467,7 @@ function AssetDetailPanel({ asset, canEdit }) {
         React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } }, tabBtn("conn", "Connectivity details"), tabBtn("hw", "Hardware details")),
         body);
 }
-function AssetTable({ assets, allFilteredAssets, filterOptionAssets, startIndex, onDelete, onEdit, canEdit, colFilters, onColFilterChange, selectedIds, onSelectId, onSelectAll, onOpenRack }) {
+function AssetTable({ sortCtl, assets, allFilteredAssets, filterOptionAssets, startIndex, onDelete, onEdit, canEdit, colFilters, onColFilterChange, selectedIds, onSelectId, onSelectAll, onOpenRack }) {
     const filterSource = allFilteredAssets || assets;
     const allIds = filterSource.map(a => a.id);
     const filterRowsForColumn = typeof filterOptionAssets === "function" ? filterOptionAssets : (() => filterOptionAssets || filterSource);
@@ -4456,7 +4488,7 @@ function AssetTable({ assets, allFilteredAssets, filterOptionAssets, startIndex,
                         React.createElement("th", { style: { ...thBase, width: 50 } }, "#"),
                         ASSET_COLUMNS.map(col => { const active = assetColumnFilterActive(colFilters[col.key], col.key); return React.createElement("th", { key: col.key, style: { ...thBase, width: colWidths[col.key] || 100 } },
                             React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 5 } },
-                                React.createElement("span", { style: { overflow: "hidden", textOverflow: "ellipsis" } }, col.label),
+                                React.createElement(ListSortLabel, { column: col, sortKey: sortCtl && sortCtl.key, sortDir: sortCtl && sortCtl.dir, onSort: sortCtl && sortCtl.onSort }),
                                 React.createElement("button", { onClick: () => setOpenFilter(col), title: `Filter ${col.label}`, className: "neu-icon-btn", style: { width: 25, height: 25, borderRadius: 7, padding: 0, display: "inline-flex", flexShrink: 0, background: active ? "#EEF2FF" : "#F8FAFC", border: active ? "1px solid #C7D2FE" : "1px solid #E2E8F0" } },
                                     React.createElement(Filter, { s: 12, c: active ? "#4F46E5" : "#64748B" })))); }),
                         React.createElement("th", { style: { ...thBase, width: 100 } }))),
@@ -5115,13 +5147,14 @@ function RackComponentModal({ onClose, onCreate, onUpdate, initial, assets, rack
             showConflict && uConflict && React.createElement(UConflictPopup, { conflict: uConflict, position: form.position, onClose: () => setShowConflict(false) })));
 }
 /* ===== RACK COMPONENTS TABLE ===== */
-function RackComponentTable({ rows, onDelete, onEdit, canEdit, selectedIds, onSelectId, onSelectAll, startIndex = 0 }) {
+function RackComponentTable({ colFilters, onColFilterChange, optionRowsForColumn, sortCtl, rows, onDelete, onEdit, canEdit, selectedIds, onSelectId, onSelectAll, startIndex = 0 }) {
     const rcListCtl = useProgressiveList();
+    const [openFilter, setOpenFilter] = React.useState(null);
     const allIds = rows.map((c) => c.id);
     const allSelected = allIds.length > 0 && allIds.every((id) => selectedIds.has(id));
     const someSelected = allIds.some((id) => selectedIds.has(id)) && !allSelected;
     const thBase = { textAlign: "left", padding: "12px 10px", borderBottom: "0.5px solid rgba(163,177,198,.3)", fontFamily: "Inter", fontSize: 11, color: "#64748B", textTransform: "uppercase", letterSpacing: .5, whiteSpace: "nowrap", position: "sticky", top: 0, background: "#FFFFFF", zIndex: 2 };
-    return React.createElement("div", { className: "neu-card", style: { overflowX: "auto", padding: "6px 4px" } },
+    return React.createElement(React.Fragment, null, React.createElement("div", { className: "neu-card", style: { overflowX: "auto", padding: "6px 4px" } },
         React.createElement("table", { style: { borderCollapse: "collapse", width: "100%", tableLayout: "fixed" } },
             React.createElement("thead", null,
                 React.createElement("tr", null,
@@ -5129,7 +5162,7 @@ function RackComponentTable({ rows, onDelete, onEdit, canEdit, selectedIds, onSe
                         React.createElement("input", { type: "checkbox", checked: allSelected, ref: (el) => { if (el)
                                 el.indeterminate = someSelected; }, onChange: (e) => onSelectAll(e.target.checked, allIds), style: { width: 16, height: 16, accentColor: "#6366F1", cursor: "pointer" } })),
                     React.createElement("th", { style: { ...thBase, width: 50 } }, "#"),
-                    RACK_COMPONENT_COLUMNS.map((col) => React.createElement("th", { key: col.key, style: { ...thBase, width: col.key === "remarks" ? 200 : 110 } }, col.label)),
+                    RACK_COMPONENT_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: (colFilters || {})[col.key], onOpen: setOpenFilter, sortKey: sortCtl && sortCtl.key, sortDir: sortCtl && sortCtl.dir, onSort: sortCtl && sortCtl.onSort, style: { ...thBase, width: col.key === "remarks" ? 200 : 110 } })),
                     React.createElement("th", { style: { ...thBase, width: 100 } }))),
             React.createElement("tbody", null,
                 rows.length === 0 && React.createElement("tr", null,
@@ -5143,7 +5176,8 @@ function RackComponentTable({ rows, onDelete, onEdit, canEdit, selectedIds, onSe
                         canEdit && React.createElement("button", { onClick: () => onEdit(c), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Edit component" },
                             React.createElement(Edit2, { s: 13, c: "#64748B" })),
                         canEdit && React.createElement("button", { onClick: () => onDelete(c.id), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex" }, title: "Remove component" },
-                            React.createElement(Trash2, { s: 13, c: "#64748B" }))))))));
+                            React.createElement(Trash2, { s: 13, c: "#64748B" })))))))),
+        openFilter && React.createElement(ValueListFilterPopup, { column: openFilter, currentFilter: (colFilters || {})[openFilter.key], optionRows: optionRowsForColumn ? optionRowsForColumn(openFilter.key) : rows, onApply: (value) => onColFilterChange && onColFilterChange(openFilter.key, value), onClose: () => setOpenFilter(null) }));
 }
 /* ===== DC CAPACITY: RACK TILE ===== */
 function RackTile({ rack, onOpen, hasCritical, isAdmin, onDelete, onMove }) {
@@ -8942,8 +8976,9 @@ function MonitorVendorPanel({ vendorLabel, icon, result, canEdit, selectedIds, o
         { key: "_status", label: "Status", format: (v, row) => !targetForDevice(row) ? "No Target" : !row.firmwareVersion ? "Unknown" : fwStatusText(row.firmwareVersion, targetForDevice(row).targetVersion) }
     ];
     const [columnFilters, setColumnFilters] = useState(() => makeEmptyListColumnFilters(MONITOR_LIST_COLUMNS));
+    const listSort = useListSort();
     const [openFilter, setOpenFilter] = useState(null);
-    const filterRows = devices.filter((row) => MONITOR_LIST_COLUMNS.every((col) => listColumnFilterMatches(columnFilters[col.key], col, row)));
+    const filterRows = listSort.apply(devices.filter((row) => MONITOR_LIST_COLUMNS.every((col) => listColumnFilterMatches(columnFilters[col.key], col, row))), MONITOR_LIST_COLUMNS);
     const optionRowsForColumn = (key) => devices.filter((row) => MONITOR_LIST_COLUMNS.every((col) => col.key === key || listColumnFilterMatches(columnFilters[col.key], col, row)));
     const activeColumnFilterCount = countListColumnFilters(columnFilters);
     const thSm = { textAlign: "left", padding: "9px 8px", borderBottom: "0.5px solid rgba(163,177,198,0.3)", fontFamily: "Inter", fontSize: 10, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.4, whiteSpace: "nowrap", position: "sticky", top: 0, background: "#FFFFFF" };
@@ -9052,7 +9087,7 @@ function MonitorVendorPanel({ vendorLabel, icon, result, canEdit, selectedIds, o
                         React.createElement("thead", null,
                             React.createElement("tr", null,
                                 canEdit && React.createElement("th", { style: thSm }),
-                                MONITOR_LIST_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, style: thSm })),
+                                MONITOR_LIST_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, sortKey: listSort.key, sortDir: listSort.dir, onSort: listSort.onSort, style: thSm })),
                                 " ")),
                         React.createElement("tbody", null, filterRows.map((d, i) => {
                             const k = keyOf(d);
@@ -9701,6 +9736,11 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
     // ---- Search servers across ALL zones (reads the snapshots Monitoring / auto-sync already collected; never calls the appliances) ----
     const [gq, setGq] = useState("");
     const [gRes, setGRes] = useState(null);
+    const [monSearchFilters, setMonSearchFilters] = useState(() => makeEmptyListColumnFilters(MON_SEARCH_COLUMNS));
+    const [monSearchOpen, setMonSearchOpen] = useState(null);
+    const monSort = useListSort();
+    const monSearchAll = gRes && Array.isArray(gRes.results) ? gRes.results : [];
+    const monSearchRows = monSort.apply(monSearchAll.filter((r) => MON_SEARCH_COLUMNS.every((col) => listColumnFilterMatches(monSearchFilters[col.key], col, r))), MON_SEARCH_COLUMNS);
     const [gBusy, setGBusy] = useState(false);
     const [gErr, setGErr] = useState("");
     const [gLoad, setGLoad] = useState(null); // { done, total } while loading zones that were never synced
@@ -9939,10 +9979,10 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
                         React.createElement("span", { style: { flex: "1 1 260px" } }, gRes.notLoaded.length, " configured zone(s) have not been synced yet and are not included: ", Array.from(new Set(gRes.notLoaded.map((z) => z.site + " \u00B7 " + z.zone))).join(", ")),
                         React.createElement("button", { type: "button", onClick: loadUnsyncedZones, disabled: !!gLoad, className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "6px 10px" } }, gLoad ? "Loading " + gLoad.done + "/" + gLoad.total + "\u2026" : "Load these zones and search again")),
                     gRes.results.length === 0 ? React.createElement("div", { "data-mon-nomatch": "1", style: { fontFamily: "Inter", fontSize: 12.5, color: "#64748B", padding: "10px 0" } }, "No server matches. Check the spelling, or sync the zone first.") :
-                        React.createElement("div", { style: { overflowX: "auto", border: "1px solid rgba(163,177,198,0.25)", borderRadius: 10 } },
+                        React.createElement(React.Fragment, null, React.createElement("div", { style: { overflowX: "auto", border: "1px solid rgba(163,177,198,0.25)", borderRadius: 10 } },
                             React.createElement("table", { style: { borderCollapse: "collapse", width: "100%", minWidth: 900 } },
-                                React.createElement("thead", null, React.createElement("tr", null, ["Zone", "Vendor", "Name", "Model", "Serial", "Health", "Power", "IP", "System BIOS", "Last synced"].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "7px 9px", background: "#F8FAFC", fontFamily: "Inter", fontSize: 10.5, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: .4, whiteSpace: "nowrap" } }, h)))),
-                                React.createElement("tbody", null, gRes.results.map((r, i) => React.createElement("tr", { key: i, "data-mon-result": r.serialNumber || r.name, onClick: () => openZoneFromSearch(r), title: "Open " + r.site + " \u00B7 " + r.zone + " and select this server", style: { cursor: "pointer", borderTop: i ? "0.5px solid rgba(163,177,198,0.2)" : "none" } },
+                                React.createElement("thead", null, React.createElement("tr", null, MON_SEARCH_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: monSearchFilters[col.key], onOpen: setMonSearchOpen, sortKey: monSort.key, sortDir: monSort.dir, onSort: monSort.onSort, style: { textAlign: "left", padding: "7px 9px", background: "#F8FAFC", fontFamily: "Inter", fontSize: 10.5, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: .4, whiteSpace: "nowrap" } })))),
+                                React.createElement("tbody", null, monSearchRows.map((r, i) => React.createElement("tr", { key: i, "data-mon-result": r.serialNumber || r.name, onClick: () => openZoneFromSearch(r), title: "Open " + r.site + " \u00B7 " + r.zone + " and select this server", style: { cursor: "pointer", borderTop: i ? "0.5px solid rgba(163,177,198,0.2)" : "none" } },
                                     React.createElement("td", { style: { padding: "7px 9px", fontFamily: "Inter", fontSize: 12, fontWeight: 700, color: "#4338CA", whiteSpace: "nowrap" } }, r.site, " \u00B7 ", r.zone),
                                     React.createElement("td", { style: { padding: "7px 9px", fontFamily: "Inter", fontSize: 11.5, color: "#475569", whiteSpace: "nowrap" } }, r.vendor),
                                     React.createElement("td", { style: { padding: "7px 9px", fontFamily: "Inter", fontSize: 12, fontWeight: 600, color: "#0F172A", whiteSpace: "nowrap" } }, r.name || "\u2014"),
@@ -9952,7 +9992,7 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
                                     React.createElement("td", { style: { padding: "7px 9px", fontFamily: "Inter", fontSize: 12, color: "#334155", whiteSpace: "nowrap" } }, r.powerState || "Unknown"),
                                     React.createElement("td", { style: { padding: "7px 9px", fontFamily: "'JetBrains Mono'", fontSize: 11.5, whiteSpace: "nowrap" } }, r.ipAddress || "\u2014"),
                                     React.createElement("td", { style: { padding: "7px 9px", fontFamily: "'JetBrains Mono'", fontSize: 11.5, whiteSpace: "nowrap" } }, r.firmwareVersion || "\u2014"),
-                                    React.createElement("td", { style: { padding: "7px 9px", fontFamily: "Inter", fontSize: 11, color: "#64748B", whiteSpace: "nowrap" } }, r.fetchedAt ? new Date(r.fetchedAt).toLocaleTimeString() : "\u2014")))))))),
+                                    React.createElement("td", { style: { padding: "7px 9px", fontFamily: "Inter", fontSize: 11, color: "#64748B", whiteSpace: "nowrap" } }, r.fetchedAt ? new Date(r.fetchedAt).toLocaleTimeString() : "\u2014"))))))), monSearchOpen && React.createElement(ValueListFilterPopup, { column: monSearchOpen, currentFilter: monSearchFilters[monSearchOpen.key], optionRows: monSearchAll.filter((r) => MON_SEARCH_COLUMNS.every((col) => col.key === monSearchOpen.key || listColumnFilterMatches(monSearchFilters[col.key], col, r))), onApply: (value) => setMonSearchFilters((p) => ({ ...p, [monSearchOpen.key]: value })), onClose: () => setMonSearchOpen(null) }))),
             React.createElement("div", { style: { display: searchActive ? "none" : "block" } },
             React.createElement("div", { style: { display: "flex", gap: 6, padding: 4, background: "#E9ECF6", borderRadius: 11, width: "fit-content", marginBottom: 16 } },
                 React.createElement("button", { onClick: () => setTab("status"), style: tabBtnStyle(tab === "status") }, "Device Status"),
@@ -12430,8 +12470,9 @@ function UserManagement({ users, onRefresh, canAdmin, locations }) {
         { key: "created_at", label: "Created", format: (v) => v ? new Date(v).toLocaleDateString() : "" }
     ].filter((c) => APPROVAL_ACCESS || c.key !== "is_approver");
     const [columnFilters, setColumnFilters] = useState(() => makeEmptyListColumnFilters(USER_COLUMNS));
+    const listSort = useListSort();
     const [openFilter, setOpenFilter] = useState(null);
-    const filteredUsers = (users || []).filter((row) => USER_COLUMNS.every((col) => listColumnFilterMatches(columnFilters[col.key], col, row)));
+    const filteredUsers = listSort.apply((users || []).filter((row) => USER_COLUMNS.every((col) => listColumnFilterMatches(columnFilters[col.key], col, row))), USER_COLUMNS);
     const optionRowsForColumn = (key) => (users || []).filter((row) => USER_COLUMNS.every((col) => col.key === key || listColumnFilterMatches(columnFilters[col.key], col, row)));
     const activeColumnFilterCount = countListColumnFilters(columnFilters);
     return React.createElement(React.Fragment, null,
@@ -12451,7 +12492,7 @@ function UserManagement({ users, onRefresh, canAdmin, locations }) {
             React.createElement("table", { style: { borderCollapse: "collapse", width: "100%" } },
                 React.createElement("thead", null,
                     React.createElement("tr", null,
-                        USER_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, style: { textAlign: "left", padding: "12px 14px", borderBottom: "0.5px solid rgba(163,177,198,0.3)", fontFamily: "Inter", fontSize: 11, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.5 } })),
+                        USER_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, sortKey: listSort.key, sortDir: listSort.dir, onSort: listSort.onSort, style: { textAlign: "left", padding: "12px 14px", borderBottom: "0.5px solid rgba(163,177,198,0.3)", fontFamily: "Inter", fontSize: 11, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.5 } })),
                         React.createElement("th", { style: { textAlign: "left", padding: "12px 14px", borderBottom: "0.5px solid rgba(163,177,198,0.3)", fontFamily: "Inter", fontSize: 11, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.5 } }))),
                 React.createElement("tbody", null, filteredUsers.map((u) => (React.createElement("tr", { key: u.id, className: "neu-table-row" },
                     React.createElement("td", { style: { padding: "11px 14px", borderBottom: "0.5px solid rgba(163,177,198,0.25)", fontFamily: "'JetBrains Mono'", fontSize: 12, color: "#1E293B" } }, u.username),
@@ -12530,6 +12571,7 @@ function AssetLifecyclePage({ assets, allowedSites, zones, racks, canEdit, onAct
         { key: "reused", label: "Reuse", format: (v) => v ? "Reused" : "—" }
     ];
     const [columnFilters, setColumnFilters] = useState(() => makeEmptyListColumnFilters(LIFECYCLE_COLUMNS));
+    const listSort = useListSort();
     const [openFilter, setOpenFilter] = useState(null);
     const lifecycleRows = useMemo(() => {
         // Asset Inventory is the single source of current truth. Lifecycle is only the
@@ -12626,7 +12668,7 @@ function AssetLifecyclePage({ assets, allowedSites, zones, racks, canEdit, onAct
     };
     const previousLoc = (a) => [a.lastKnownSite, a.lastKnownZone, a.lastKnownRack, a.lastKnownPosition].filter(Boolean).join(" / ") || "—";
     const actionAllowed = (a) => canEdit && ["Active", "In Store", "Transferred", "Transfer Refused", "RMA / OEM", "Moved Out / External"].includes(a.lifecycleStatus);
-    const filteredLifecycleRows = rows.filter((row) => LIFECYCLE_COLUMNS.every((col) => listColumnFilterMatches(columnFilters[col.key], col, row)));
+    const filteredLifecycleRows = listSort.apply(rows.filter((row) => LIFECYCLE_COLUMNS.every((col) => listColumnFilterMatches(columnFilters[col.key], col, row))), LIFECYCLE_COLUMNS);
     const lifecycleOptionRowsForColumn = (key) => rows.filter((row) => LIFECYCLE_COLUMNS.every((col) => col.key === key || listColumnFilterMatches(columnFilters[col.key], col, row)));
     const activeColumnFilterCount = countListColumnFilters(columnFilters);
     return React.createElement(React.Fragment, null,
@@ -12708,7 +12750,7 @@ function AssetLifecyclePage({ assets, allowedSites, zones, racks, canEdit, onAct
             React.createElement("table", { style: { borderCollapse: "collapse", width: "100%", minWidth: 1240 } },
                 React.createElement("thead", null,
                     React.createElement("tr", null,
-                        LIFECYCLE_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, style: { textAlign: "left", padding: "11px 12px", fontFamily: "Inter", fontSize: 10.5, color: "#64748B", textTransform: "uppercase", letterSpacing: .4, borderBottom: "1px solid #E2E8F0" } })),
+                        LIFECYCLE_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, sortKey: listSort.key, sortDir: listSort.dir, onSort: listSort.onSort, style: { textAlign: "left", padding: "11px 12px", fontFamily: "Inter", fontSize: 10.5, color: "#64748B", textTransform: "uppercase", letterSpacing: .4, borderBottom: "1px solid #E2E8F0" } })),
                         React.createElement("th", { style: { textAlign: "left", padding: "11px 12px", fontFamily: "Inter", fontSize: 10.5, color: "#64748B", textTransform: "uppercase", letterSpacing: .4, borderBottom: "1px solid #E2E8F0" } }, "Actions"))),
                 React.createElement("tbody", null,
                     filteredLifecycleRows.map(a => React.createElement("tr", { key: a.id, className: "neu-table-row" },
@@ -12965,6 +13007,71 @@ function OpeningStockImportModal({ sites, onClose, onDone }) {
                     result ? React.createElement("button", { onClick: onClose, className: "neu-btn-primary", style: { fontSize: 12.5 } }, "Close")
                         : React.createElement("button", { onClick: apply, disabled: !canApply, className: "neu-btn-primary", style: { fontSize: 12.5, opacity: canApply ? 1 : 0.5 }, "data-os-apply": "1" }, busy ? "Applying\u2026" : "Apply " + (sm.withDate + sm.openingStock) + " row(s)")))));
 }
+const trfDash = (v) => (v == null || String(v).trim() === "" ? "—" : String(v));
+const STORE_COLUMNS = [
+    { key: "serialNumber", label: "Serial Number", format: trfDash },
+    { key: "assetTag", label: "Asset Tag", format: trfDash },
+    { key: "deviceName", label: "Device Name", format: trfDash },
+    { key: "hardwareType", label: "Hardware Type", format: trfDash },
+    { key: "manufacturer", label: "Manufacturer", format: trfDash },
+    { key: "model", label: "Model", format: trfDash },
+    { key: "sourceSite", label: "Source DC", format: trfDash },
+    { key: "site", label: "Current Site", format: trfDash },
+    { key: "transferDate", label: "Transfer Date", format: (v) => (v ? trfDate(v) : "—"), sortRaw: true },
+    { key: "acceptedDate", label: "Accepted Date", format: (v) => (v ? trfDate(v) : "—"), sortRaw: true },
+    { key: "receivedDate", label: "Received Date", format: (v, r) => (v ? trfDay(v) : (r && r.openingStock ? "Opening stock (date not recorded)" : "—")), sortRaw: true },
+    { key: "custodyLocation", label: "Store Location", format: trfDash },
+];
+const PENDING_COLUMNS = [
+    { key: "serialNumber", label: "Serial Number", format: trfDash },
+    { key: "assetTag", label: "Asset Tag", format: trfDash },
+    { key: "deviceName", label: "Device Name", format: (v, r) => trfDash(v || (r && r.model)) },
+    { key: "sourceSite", label: "Source Site", format: trfDash },
+    { key: "transferDate", label: "Transfer Date", format: (v) => (v ? trfDate(v) : "—"), sortRaw: true },
+];
+const REJECTED_COLUMNS = [
+    { key: "serialNumber", label: "Serial Number", format: trfDash },
+    { key: "assetTag", label: "Asset Tag", format: trfDash },
+    { key: "deviceName", label: "Device Name", format: (v, r) => trfDash(v || (r && r.model)) },
+    { key: "rejectedBy", label: "Rejected By", format: trfDash },
+    { key: "rejectedDate", label: "Rejected Date", format: (v) => (v ? trfDate(v) : "—"), sortRaw: true },
+    { key: "site", label: "Returned To", format: trfDash },
+];
+// Store stock counted by Hardware Type, then by Make + Model (follows the search / location / column filters of the list below).
+function StoreSummaryPanel({ rows }) {
+    const [open, setOpen] = useState(true);
+    const groups = useMemo(() => {
+        const m = new Map();
+        (rows || []).forEach((r) => {
+            const t = (r.hardwareType || "").trim() || "(No type)";
+            const g = m.get(t) || { type: t, total: 0, opening: 0, models: new Map() };
+            g.total += 1;
+            if (r.openingStock && !r.receivedDate) g.opening += 1;
+            const mk = [(r.manufacturer || "").trim(), (r.model || "").trim()].filter(Boolean).join(" ") || "(No model)";
+            g.models.set(mk, (g.models.get(mk) || 0) + 1);
+            m.set(t, g);
+        });
+        return [...m.values()].sort((a, b) => b.total - a.total || a.type.localeCompare(b.type)).map((g) => ({ ...g, models: [...g.models.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])) }));
+    }, [rows]);
+    const total = (rows || []).length;
+    return React.createElement("div", { className: "neu-card", style: { padding: "14px 16px", marginBottom: 14 }, "data-store-summary": "1" },
+        React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" } },
+            React.createElement("div", null,
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 14, fontWeight: 800, color: "#0F172A" } }, "Store stock by Hardware Type and Model"),
+                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748B", marginTop: 2 } }, total + " device(s) in " + groups.length + " hardware type(s). Follows the search, location and column filters below.")),
+            React.createElement("button", { onClick: () => setOpen(!open), className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "6px 11px" }, "data-store-summary-toggle": "1" }, open ? "Hide" : "Show")),
+        open && (groups.length === 0
+            ? React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", padding: "14px 2px" } }, "No devices to count.")
+            : React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 10, marginTop: 12 } },
+                groups.map((g) => React.createElement("div", { key: g.type, "data-store-summary-type": g.type, style: { border: "1px solid #E2E8F0", borderRadius: 12, padding: "10px 12px", background: "#fff" } },
+                    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, marginBottom: 6 } },
+                        React.createElement("span", { style: { fontFamily: "Inter", fontSize: 12, fontWeight: 800, color: "#0F172A" } }, g.type),
+                        React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontSize: 20, fontWeight: 800, color: "#4F46E5" } }, g.total)),
+                    g.models.map(([name, n]) => React.createElement("div", { key: name, style: { display: "flex", justifyContent: "space-between", gap: 8, fontFamily: "Inter", fontSize: 11.5, color: "#334155", padding: "2px 0", borderTop: "1px solid #F1F5F9" } },
+                        React.createElement("span", { style: { overflow: "hidden", textOverflow: "ellipsis" } }, name),
+                        React.createElement("b", null, n))),
+                    g.opening > 0 && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#2563EB", marginTop: 5 } }, g.opening + " with no received date (Opening stock)"))))));
+}
 function AssetLifecycleHub({ view, onViewChange, assets, canEdit, onAction, pageProps }) {
     const [ov, setOv] = useState(null);
     const [ovErr, setOvErr] = useState("");
@@ -12973,6 +13080,14 @@ function AssetLifecycleHub({ view, onViewChange, assets, canEdit, onAction, page
     const [histAsset, setHistAsset] = useState(null);
     const [osImport, setOsImport] = useState(false);
     const osApplied = useRef(false);
+    const HUB_COLS = { pending: PENDING_COLUMNS, store: STORE_COLUMNS, rejected: REJECTED_COLUMNS };
+    const [colF, setColF] = useState(() => ({ pending: makeEmptyListColumnFilters(PENDING_COLUMNS), store: makeEmptyListColumnFilters(STORE_COLUMNS), rejected: makeEmptyListColumnFilters(REJECTED_COLUMNS) }));
+    const [srt, setSrt] = useState({ pending: {}, store: {}, rejected: {} });
+    const [openF, setOpenF] = useState(null);
+    const sortView = (v, key) => setSrt((p) => { const cur = p[v] || {}; const nx = cur.key !== key ? { key, dir: "asc" } : (cur.dir === "asc" ? { key, dir: "desc" } : {}); return { ...p, [v]: nx }; });
+    const viewRows = (v, base) => { const cols = HUB_COLS[v], f = colF[v]; const out = base.filter((r) => cols.every((c) => listColumnFilterMatches(f[c.key], c, r))); const s = srt[v] || {}; const sc = s.key ? cols.find((c) => c.key === s.key) : null; return sc ? sortListRows(out, sc, s.dir) : out; };
+    const optRows = (v, base, key) => { const cols = HUB_COLS[v], f = colF[v]; return base.filter((r) => cols.every((c) => c.key === key || listColumnFilterMatches(f[c.key], c, r))); };
+    const clearBtn = (v) => countListColumnFilters(colF[v]) > 0 ? React.createElement("button", { onClick: () => setColF((p) => ({ ...p, [v]: makeEmptyListColumnFilters(HUB_COLS[v]) })), className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "8px 11px" }, "data-clear-col-filters": v }, "Clear column filters (" + countListColumnFilters(colF[v]) + ")") : null;
     useEffect(() => {
         let alive = true;
         api.getTransfersOverview().then((d) => { if (alive) { setOv(d); setOvErr(""); } }).catch((e) => { if (alive) setOvErr(e.message || "Could not load transfer data"); });
@@ -12987,9 +13102,9 @@ function AssetLifecycleHub({ view, onViewChange, assets, canEdit, onAction, page
     const td = { padding: "10px 12px", borderBottom: "1px solid #F1F5F9", fontFamily: "Inter", fontSize: 12, color: "#334155" };
     const mono = { ...td, fontFamily: "'JetBrains Mono'", fontSize: 11.5, fontWeight: 800, color: "#0F172A", whiteSpace: "nowrap" };
     const pill = (id, label, n) => React.createElement("button", { key: id, onClick: () => onViewChange(id), className: view === id ? "tab-pill active" : "tab-pill", style: { fontSize: 11.5 }, "data-hub": id }, label, n != null ? " (" + n + ")" : "");
-    const table = (heads, body, empty) => React.createElement("div", { className: "neu-card", style: { overflowX: "auto", padding: "5px 4px", marginBottom: 14 } },
+    const table = (heads, body, empty, v) => React.createElement("div", { className: "neu-card", style: { overflowX: "auto", padding: "5px 4px", marginBottom: 14 } },
         React.createElement("table", { style: { borderCollapse: "collapse", width: "100%", minWidth: 900 } },
-            React.createElement("thead", null, React.createElement("tr", null, heads.map((h) => React.createElement("th", { key: h, style: th }, h)))),
+            React.createElement("thead", null, React.createElement("tr", null, heads.map((h) => typeof h === "string" ? React.createElement("th", { key: h, style: th }, h) : React.createElement(SortableListFilterHeader, { key: h.key, column: h, filter: colF[v][h.key], onOpenFilter: (col) => setOpenF({ view: v, column: col }), sortKey: (srt[v] || {}).key, sortDir: (srt[v] || {}).dir, onSort: (k) => sortView(v, k), style: th })))),
             React.createElement("tbody", null, body.length ? body : React.createElement("tr", null, React.createElement("td", { colSpan: heads.length, style: { padding: "34px 15px", textAlign: "center", color: "#475569", fontFamily: "Inter", fontSize: 13 } }, empty)))));
     const btn = (label, onClick, extra, primary) => React.createElement("button", { onClick, className: primary ? "neu-btn-primary" : "neu-btn-secondary", style: { fontSize: 11, padding: "6px 10px", marginRight: 6, ...(extra || {}) } }, label);
     const histBtn = (r) => byId.get(r.id) ? btn("History", () => setHistAsset(byId.get(r.id))) : null;
@@ -13003,12 +13118,12 @@ function AssetLifecycleHub({ view, onViewChange, assets, canEdit, onAction, page
         extra);
     let content = null;
     if (view === "pending") {
-        const rows = incoming.filter(match);
+        const rows = viewRows("pending", incoming.filter(match));
         content = React.createElement(React.Fragment, null,
             React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#0F172A", marginBottom: 4 } }, "Pending Transfer Acceptance"),
             React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 12 } }, "Assets transferred to your DC that are waiting to be accepted. Moving to store keeps the asset in your inventory without a rack position; installing assigns zone, rack and U."),
-            toolbar(null),
-            table(["Serial Number", "Asset Tag", "Device Name", "Source Site", "Transfer Date", "Actions"], rows.map((r) => {
+            toolbar(clearBtn("pending")),
+            table([...PENDING_COLUMNS, "Actions"], rows.map((r) => {
                 const full = byId.get(r.id);
                 return React.createElement("tr", { key: r.id, className: "neu-table-row", "data-pending-row": r.serialNumber },
                     React.createElement("td", { style: mono }, r.serialNumber || "—"),
@@ -13021,7 +13136,7 @@ function AssetLifecycleHub({ view, onViewChange, assets, canEdit, onAction, page
                         canEdit && full && btn("Accept & Install", () => onAction(full, "Receive & Install"), { color: "#047857" }),
                         canEdit && full && btn("Reject Transfer", () => onAction(full, "Refuse / Return to Source"), { color: "#DC2626", borderColor: "#FECACA" }),
                         histBtn(r)));
-            }), ov ? "No transfers are waiting for acceptance." : "Loading…"),
+            }), ov ? "No transfers are waiting for acceptance." : "Loading…", "pending"),
             outgoing.length > 0 && React.createElement(React.Fragment, null,
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 14, fontWeight: 800, color: "#0F172A", margin: "6px 0 4px" } }, "Outgoing transfers awaiting acceptance (view only)"),
                 React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 10 } }, "Sent from your DC. The destination DC accepts or rejects them."),
@@ -13030,36 +13145,39 @@ function AssetLifecycleHub({ view, onViewChange, assets, canEdit, onAction, page
                     React.createElement("td", { style: td }, r.site), React.createElement("td", { style: { ...td, whiteSpace: "nowrap" } }, trfDate(r.transferDate)), React.createElement("td", { style: td }, badge("Awaiting acceptance", "#D97706")))), "")));
     }
     else if (view === "store") {
-        const rows = store.filter(match);
+        const baseStore = store.filter(match);
+        const rows = viewRows("store", baseStore);
         const exportStore = () => exportToCSV(rows.map((r) => ({ ...r, sourceDc: r.sourceSite || "", transferDateTxt: r.transferDate ? trfDate(r.transferDate) : "", acceptedDateTxt: r.acceptedDate ? trfDate(r.acceptedDate) : "", receivedDateTxt: r.receivedDate ? trfDay(r.receivedDate) : (r.openingStock ? "Opening stock (date not recorded)" : "") })), [
-            { key: "serialNumber", label: "Serial Number" }, { key: "assetTag", label: "Asset Tag" }, { key: "deviceName", label: "Device Name" }, { key: "manufacturer", label: "Manufacturer" }, { key: "model", label: "Model" },
+            { key: "serialNumber", label: "Serial Number" }, { key: "assetTag", label: "Asset Tag" }, { key: "deviceName", label: "Device Name" }, { key: "hardwareType", label: "Hardware Type" }, { key: "manufacturer", label: "Manufacturer" }, { key: "model", label: "Model" },
             { key: "sourceDc", label: "Source DC" }, { key: "site", label: "Current Site" }, { key: "transferDateTxt", label: "Transfer Date" }, { key: "acceptedDateTxt", label: "Accepted Date" }, { key: "receivedDateTxt", label: "Received Date" }, { key: "custodyLocation", label: "Store Location" }, { key: "lifecycleStatus", label: "Status" }
         ], "store-inventory-" + localDateStr(today) + ".csv");
         content = React.createElement(React.Fragment, null,
             React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#0F172A", marginBottom: 4 } }, "Store Inventory"),
             React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 12 } }, "Assets held in store. They belong to the DC's inventory but have no zone, rack or U position and are not counted in rack capacity or elevation."),
-            toolbar(React.createElement(React.Fragment, null, canEdit && React.createElement("button", { onClick: () => setOsImport(true), className: "neu-btn-primary", style: { fontSize: 12, padding: "9px 13px", marginRight: 8 }, "data-os-open": "1" }, "Import Old Store Devices"), React.createElement("button", { onClick: exportStore, className: "neu-btn-secondary", style: { fontSize: 12, padding: "9px 13px", display: "inline-flex", alignItems: "center", gap: 6 } }, React.createElement(Download, { s: 13 }), " Export CSV"))),
-            table(["Serial Number", "Asset Tag", "Device Name", "Manufacturer", "Model", "Source DC", "Current Site", "Transfer Date", "Accepted Date", "Received Date", "Store Location", "Status", "Actions"], rows.map((r) => {
+            React.createElement(StoreSummaryPanel, { rows: baseStore }),
+            toolbar(React.createElement(React.Fragment, null, clearBtn("store"), canEdit && React.createElement("button", { onClick: () => setOsImport(true), className: "neu-btn-primary", style: { fontSize: 12, padding: "9px 13px", marginRight: 8 }, "data-os-open": "1" }, "Import Old Store Devices"), React.createElement("button", { onClick: exportStore, className: "neu-btn-secondary", style: { fontSize: 12, padding: "9px 13px", display: "inline-flex", alignItems: "center", gap: 6 } }, React.createElement(Download, { s: 13 }), " Export CSV"))),
+            table([...STORE_COLUMNS, "Status", "Actions"], rows.map((r) => {
                 const full = byId.get(r.id);
                 return React.createElement("tr", { key: r.id, className: "neu-table-row", "data-store-row": r.serialNumber },
                     React.createElement("td", { style: mono }, r.serialNumber || "—"), React.createElement("td", { style: td }, r.assetTag || "—"), React.createElement("td", { style: td }, r.deviceName || "—"),
+                    React.createElement("td", { style: td }, r.hardwareType || "—"),
                     React.createElement("td", { style: td }, r.manufacturer || "—"), React.createElement("td", { style: td }, r.model || "—"), React.createElement("td", { style: td }, r.sourceSite || "—"),
                     React.createElement("td", { style: td }, r.site), React.createElement("td", { style: { ...td, whiteSpace: "nowrap" } }, trfDate(r.transferDate)), React.createElement("td", { style: { ...td, whiteSpace: "nowrap" } }, trfDate(r.acceptedDate)),
                     React.createElement("td", { style: { ...td, whiteSpace: "nowrap" }, "data-received-date": r.serialNumber }, r.receivedDate ? trfDay(r.receivedDate) : (r.openingStock ? React.createElement("span", { title: "Already in store before receipts were recorded. The date is not known and is not guessed.", style: { color: "#2563EB", fontWeight: 600 } }, "Opening stock (date not recorded)") : "\u2014")),
                     React.createElement("td", { style: td }, r.custodyLocation || "—"), React.createElement("td", { style: td }, badge("In Store", "#2563EB")),
                     React.createElement("td", { style: { ...td, whiteSpace: "nowrap" } }, canEdit && full && btn("Install Asset", () => onAction(full, "Install from Store"), null, true), histBtn(r)));
-            }), ov ? "No assets are in store." : "Loading…"));
+            }), ov ? "No assets are in store." : "Loading…", "store"));
     }
     else if (view === "rejected") {
-        const rows = rejected.filter(match);
+        const rows = viewRows("rejected", rejected.filter(match));
         content = React.createElement(React.Fragment, null,
             React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#0F172A", marginBottom: 4 } }, "Rejected Transfers"),
             React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 12 } }, "Transfers refused by the destination DC. The asset returns to the source DC for handling."),
-            toolbar(null),
-            table(["Serial Number", "Asset Tag", "Device Name", "Rejected By", "Rejected Date", "Returned To", "Status", "Actions"], rows.map((r) => React.createElement("tr", { key: r.id, className: "neu-table-row", "data-rejected-row": r.serialNumber },
+            toolbar(clearBtn("rejected")),
+            table([...REJECTED_COLUMNS, "Status", "Actions"], rows.map((r) => React.createElement("tr", { key: r.id, className: "neu-table-row", "data-rejected-row": r.serialNumber },
                 React.createElement("td", { style: mono }, r.serialNumber || "—"), React.createElement("td", { style: td }, r.assetTag || "—"), React.createElement("td", { style: td }, r.deviceName || r.model || "—"),
                 React.createElement("td", { style: td }, r.rejectedBy || "—"), React.createElement("td", { style: { ...td, whiteSpace: "nowrap" } }, trfDate(r.rejectedDate)), React.createElement("td", { style: td }, r.site),
-                React.createElement("td", { style: td }, badge("Transfer Refused", "#DC2626")), React.createElement("td", { style: td }, histBtn(r)))), ov ? "No rejected transfers." : "Loading…"));
+                React.createElement("td", { style: td }, badge("Transfer Refused", "#DC2626")), React.createElement("td", { style: td }, histBtn(r)))), ov ? "No rejected transfers." : "Loading…", "rejected"));
     }
     return React.createElement(React.Fragment, null,
         React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 } },
@@ -13070,6 +13188,7 @@ function AssetLifecycleHub({ view, onViewChange, assets, canEdit, onAction, page
         ovErr && view !== "all" && React.createElement("div", { style: { color: "#DC2626", fontFamily: "Inter", fontSize: 12, marginBottom: 10 } }, ovErr),
         view === "all" ? React.createElement(AssetLifecyclePage, pageProps) : content,
         histAsset && React.createElement(TrfHistoryModal, { asset: histAsset, onClose: () => setHistAsset(null) }),
+        openF && React.createElement(ValueListFilterPopup, { column: openF.column, currentFilter: colF[openF.view][openF.column.key], optionRows: optRows(openF.view, ({ pending: incoming, store: store, rejected: rejected })[openF.view].filter(match), openF.column.key), onApply: (value) => setColF((p) => ({ ...p, [openF.view]: { ...p[openF.view], [openF.column.key]: value } })), onClose: () => setOpenF(null) }),
         osImport && React.createElement(OpeningStockImportModal, { sites: sites, onClose: () => { const was = osImport; setOsImport(false); if (osApplied.current) { osApplied.current = false; if (pageProps.onHistoryChanged) pageProps.onHistoryChanged(); } }, onDone: async () => { osApplied.current = true; try { setOv(await api.getTransfersOverview()); } catch (e) { } } }));
 }
 // ==== DESTINATION ACCEPTANCE:END ====
@@ -16199,6 +16318,7 @@ function PduPage({ allowedSites = [], canEdit = false }) {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [columnFilters, setColumnFilters] = useState(() => makeEmptyListColumnFilters(PDU_RACK_COLUMNS));
+    const listSort = useListSort();
     const [openFilter, setOpenFilter] = useState(null);
     const [openRack, setOpenRack] = useState(null);
     const [editing, setEditing] = useState(null);
@@ -16229,7 +16349,7 @@ function PduPage({ allowedSites = [], canEdit = false }) {
         const t = pduRackTotals(r);
         return { ...r, totalKw: t.totalKw, ratedKw: t.ratedKw, usedPct: t.usedPct, phaseLabel: t.phaseLabel, redundancy: pduRedundancy(r) };
     }), [racks]);
-    const filteredRacks = racksAugmented.filter((row) => PDU_RACK_COLUMNS.every((col) => listColumnFilterMatches(columnFilters[col.key], col, row)));
+    const filteredRacks = listSort.apply(racksAugmented.filter((row) => PDU_RACK_COLUMNS.every((col) => listColumnFilterMatches(columnFilters[col.key], col, row))), PDU_RACK_COLUMNS);
     const optionRowsForColumn = (key) => racksAugmented.filter((row) => PDU_RACK_COLUMNS.every((col) => col.key === key || listColumnFilterMatches(columnFilters[col.key], col, row)));
     const highestLoadRack = useMemo(() => racksAugmented.reduce((top, r) => (!top || r.usedPct > top.usedPct) ? r : top, null), [racksAugmented]);
     const runSync = async () => {
@@ -16285,7 +16405,7 @@ function PduPage({ allowedSites = [], canEdit = false }) {
                 React.createElement("div", { style: { overflowX: "auto" } },
                     React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 13, fontFamily: "Inter" } },
                         React.createElement("thead", null, React.createElement("tr", null, [
-                            ...PDU_RACK_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, style: { textAlign: "left", padding: "10px 14px", fontSize: 9.5, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: "#64748B", borderBottom: "1px solid rgba(148,163,184,.25)", whiteSpace: "nowrap" } })),
+                            ...PDU_RACK_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, sortKey: listSort.key, sortDir: listSort.dir, onSort: listSort.onSort, style: { textAlign: "left", padding: "10px 14px", fontSize: 9.5, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: "#64748B", borderBottom: "1px solid rgba(148,163,184,.25)", whiteSpace: "nowrap" } })),
                             ...["Load / Rated Capacity", "Capacity Used", "Last Reading", ""].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "10px 14px", fontSize: 9.5, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: "#64748B", borderBottom: "1px solid rgba(148,163,184,.25)", whiteSpace: "nowrap" } }, h)),
                         ])),
                         React.createElement("tbody", null, filteredRacks.length === 0 ? React.createElement("tr", null, React.createElement("td", { colSpan: 10, style: { padding: 30, textAlign: "center", color: "#94A3B8" } }, "No racks match the current filters.")) : filteredRacks.map((rack) => {
@@ -16388,6 +16508,7 @@ function DataCenterDashboard() {
     const [assetRackTypeFilter, setAssetRackTypeFilter] = useState("all");
     const [assetLifecycleStatusFilter, setAssetLifecycleStatusFilter] = useState("Active");
     const [assetColFilters, setAssetColFilters] = useState(() => makeEmptyAssetColumnFilters());
+    const assetSort = useListSort();
     const [selectedAssetIds, setSelectedAssetIds] = useState(new Set());
     const [showConnImport, setShowConnImport] = useState(false);
     const ISSUE_LIST_COLUMNS = React.useMemo(() => [
@@ -16400,6 +16521,7 @@ function DataCenterDashboard() {
         { key: "_status", label: "Status", format: (v, row) => getStatus(row).label }
     ], []);
     const [issueColumnFilters, setIssueColumnFilters] = useState(() => makeEmptyListColumnFilters(ISSUE_LIST_COLUMNS));
+    const issueSort = useListSort();
     const [issueOpenFilter, setIssueOpenFilter] = useState(null);
     const [selectedIssueIds, setSelectedIssueIds] = useState(new Set());
     const [selectedActivityIds, setSelectedActivityIds] = useState(new Set());
@@ -16430,6 +16552,8 @@ function DataCenterDashboard() {
     const [rackComponentModalOpen, setRackComponentModalOpen] = useState(false);
     const [editingRackComponent, setEditingRackComponent] = useState(null);
     const [rcSearch, setRcSearch] = useState("");
+    const [rcColFilters, setRcColFilters] = useState(() => makeEmptyListColumnFilters(RACK_COMPONENT_COLUMNS));
+    const rcSort = useListSort();
     const [rcPage, setRcPage] = useState(1);
     const [rcPageSize, setRcPageSize] = useState(100);
     const [rcSiteFilter, setRcSiteFilter] = useState("all");
@@ -17720,7 +17844,8 @@ function DataCenterDashboard() {
     const recentIssues = useMemo(() => [...issues].filter((i) => allowedSites.includes(i.site)).sort((a, b) => new Date(b.reportedDate || 0) - new Date(a.reportedDate || 0)).slice(0, 6), [issues, allowedSites]);
     const recentActivities = useMemo(() => [...activities].filter((a) => allowedSites.includes(a.site)).sort((a, b) => new Date(b.startDate || b.completionDate || 0) - new Date(a.startDate || a.completionDate || 0)).slice(0, 6), [activities, allowedSites]);
     const issueBaseFiltered = siteRestrictedIssues.filter((i) => { const status = getStatus(i).label; const matchesSearch = !search || [i.id, i.ticketNo, i.assetId, i.title, i.zone, i.partName, i.site, i.rackNo, i.uPosition].join(" ").toLowerCase().includes(search.toLowerCase()); const matchesStatus = statusFilter === "all" || (statusFilter === "Active" ? isIssueOpen(i) : statusFilter === "Closed" ? !isIssueOpen(i) : status === statusFilter); const matchesSeverity = severityFilter === "all" || i.severity === severityFilter; const matchesSite = siteFilter === "all" || i.site === siteFilter; return matchesSearch && matchesStatus && matchesSeverity && matchesSite; });
-    const filtered = issueBaseFiltered.filter((row) => ISSUE_LIST_COLUMNS.every((col) => listColumnFilterMatches(issueColumnFilters[col.key], col, row))).sort((a, b) => new Date(b.reportedDate || 0) - new Date(a.reportedDate || 0));
+    const filteredIssuesDefault = issueBaseFiltered.filter((row) => ISSUE_LIST_COLUMNS.every((col) => listColumnFilterMatches(issueColumnFilters[col.key], col, row))).sort((a, b) => new Date(b.reportedDate || 0) - new Date(a.reportedDate || 0));
+    const filtered = issueSort.apply(filteredIssuesDefault, ISSUE_LIST_COLUMNS);
     const issueOptionRowsForColumn = (key) => issueBaseFiltered.filter((row) => ISSUE_LIST_COLUMNS.every((col) => col.key === key || listColumnFilterMatches(issueColumnFilters[col.key], col, row)));
     const activeIssueColumnFilterCount = countListColumnFilters(issueColumnFilters);
     const inventoryBaseFilteredAssets = useMemo(() => siteRestrictedAssets.filter((a) => {
@@ -17737,7 +17862,7 @@ function DataCenterDashboard() {
         const otherRows = rows.filter((a) => ASSET_COLUMNS.every((col) => col.key === key || listColumnFilterMatches(assetColFilters[col.key], col, a)));
         return otherRows.length ? otherRows : rows;
     };
-    const filteredAssets = inventoryBaseFilteredAssets.filter((a) => ASSET_COLUMNS.every((col) => listColumnFilterMatches(assetColFilters[col.key], col, a)));
+    const filteredAssets = assetSort.apply(inventoryBaseFilteredAssets.filter((a) => ASSET_COLUMNS.every((col) => listColumnFilterMatches(assetColFilters[col.key], col, a))), ASSET_COLUMNS);
     const assetTotalPages = Math.ceil(filteredAssets.length / assetPageSize) || 1;
     // Clamp: after deleting / filtering / a refresh the stored page can be past the last page ("2 / 1" and an empty table).
     const assetPageClamped = Math.min(Math.max(1, assetPage), assetTotalPages);
@@ -17889,7 +18014,7 @@ function DataCenterDashboard() {
                                 el.indeterminate = filtered.some(i => selectedIssueIds.has(i.id)) && !filtered.every(i => selectedIssueIds.has(i.id)); }, onChange: e => setSelectedIssueIds(prev => { const n = new Set(prev); filtered.forEach(i => e.target.checked ? n.add(i.id) : n.delete(i.id)); return n; }), style: { width: 15, height: 15, accentColor: "#6366F1", cursor: "pointer" } })),
                     React.createElement("div", null, "#"),
                     React.createElement("div", null),
-                    ISSUE_LIST_COLUMNS.map((col) => React.createElement(ListFilterHeaderCell, { key: col.key, column: col, filter: issueColumnFilters[col.key], onOpen: setIssueOpenFilter })),
+                    ISSUE_LIST_COLUMNS.map((col) => React.createElement(ListFilterHeaderCell, { key: col.key, column: col, filter: issueColumnFilters[col.key], onOpen: setIssueOpenFilter, sortKey: issueSort.key, sortDir: issueSort.dir, onSort: issueSort.onSort })),
                     React.createElement("div", null)),
                 selectedIssueIds.size > 0 && React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: "rgba(99,102,241,.06)", borderBottom: "1px solid rgba(99,102,241,.12)" } },
                     React.createElement("strong", { style: { fontFamily: "Inter", fontSize: 12, color: "#4F46E5" } },
@@ -18341,7 +18466,7 @@ function DataCenterDashboard() {
                     React.createElement("button", { onClick: () => setSelectedAssetIds(new Set()), className: "neu-btn-secondary", style: { fontSize: 12, marginLeft: "auto" } }, "Clear Selection"))),
                 React.createElement("div", { ref: assetScrollRef, className: "asset-table-scroll-host", style: { overflowX: "auto", width: "100%" } },
                     React.createElement("div", { className: "asset-table-scroll-content", style: { zoom: `${assetZoom}%`, width: "2200px", minWidth: "2200px" } },
-                        React.createElement(AssetTable, { onOpenRack: openRackModal, assets: paginatedAssets, allFilteredAssets: filteredAssets, filterOptionAssets: getAssetFilterOptions, startIndex: (assetPageClamped - 1) * assetPageSize, onDelete: deleteAsset, onEdit: openEditAsset, canEdit: canEdit, colFilters: assetColFilters, onColFilterChange: (key, val) => setAssetColFilters(prev => ({ ...prev, [key]: val })), selectedIds: selectedAssetIds, onSelectId: (id, checked) => setSelectedAssetIds(prev => { const next = new Set(prev); if (checked)
+                        React.createElement(AssetTable, { sortCtl: assetSort, onOpenRack: openRackModal, assets: paginatedAssets, allFilteredAssets: filteredAssets, filterOptionAssets: getAssetFilterOptions, startIndex: (assetPageClamped - 1) * assetPageSize, onDelete: deleteAsset, onEdit: openEditAsset, canEdit: canEdit, colFilters: assetColFilters, onColFilterChange: (key, val) => setAssetColFilters(prev => ({ ...prev, [key]: val })), selectedIds: selectedAssetIds, onSelectId: (id, checked) => setSelectedAssetIds(prev => { const next = new Set(prev); if (checked)
                                 next.add(id);
                             else
                                 next.delete(id); return next; }), onSelectAll: (checked, ids) => setSelectedAssetIds(prev => { const next = new Set(prev); ids.forEach(id => checked ? next.add(id) : next.delete(id)); return next; }) }))),
@@ -18382,7 +18507,7 @@ function DataCenterDashboard() {
                     const rcZones = allZoneNames(siteRestrictedZones);
                     const rcHwNames = componentHardwareTypeNames(hardwareTypes);
                     const rcSearchLower = rcSearch.trim().toLowerCase();
-                    const filteredRc = siteRestrictedRackComponents.filter((c) => {
+                    const rcBaseRows = siteRestrictedRackComponents.filter((c) => {
                         if (rcSiteFilter !== "all" && normalizeSiteName(c.site) !== normalizeSiteName(rcSiteFilter))
                             return false;
                         if (rcZoneFilter !== "all" && (c.zone || "AZ-1") !== rcZoneFilter)
@@ -18396,6 +18521,7 @@ function DataCenterDashboard() {
                         }
                         return true;
                     });
+                    const filteredRc = rcSort.apply(rcBaseRows.filter((c) => RACK_COMPONENT_COLUMNS.every((col) => listColumnFilterMatches(rcColFilters[col.key], col, c))), RACK_COMPONENT_COLUMNS);
                     const rcTotalPages = Math.ceil(filteredRc.length / rcPageSize) || 1;
                     const rcPageC = Math.min(Math.max(1, rcPage), rcTotalPages);
                     const pagedRc = filteredRc.slice((rcPageC - 1) * rcPageSize, rcPageC * rcPageSize);
@@ -18444,7 +18570,7 @@ function DataCenterDashboard() {
                                 React.createElement(Trash2, { s: 13, c: "#DC2626" }),
                                 " Delete Selected"),
                             React.createElement("button", { onClick: () => setSelectedRcIds(new Set()), className: "neu-btn-secondary", style: { fontSize: 12, marginLeft: "auto" } }, "Clear Selection")),
-                        React.createElement(RackComponentTable, { rows: pagedRc, startIndex: (rcPageC - 1) * rcPageSize, onDelete: deleteRackComponent, onEdit: openEditRackComponent, canEdit: canEdit, selectedIds: selectedRcIds, onSelectId: (id, checked) => setSelectedRcIds((prev) => { const next = new Set(prev); checked ? next.add(id) : next.delete(id); return next; }), onSelectAll: (checked, ids) => setSelectedRcIds((prev) => { const next = new Set(prev); ids.forEach((id) => checked ? next.add(id) : next.delete(id)); return next; }) }),
+                        React.createElement(RackComponentTable, { colFilters: rcColFilters, onColFilterChange: (key, val) => { setRcColFilters((p) => ({ ...p, [key]: val })); setRcPage(1); }, optionRowsForColumn: (key) => rcBaseRows.filter((c) => RACK_COMPONENT_COLUMNS.every((col) => col.key === key || listColumnFilterMatches(rcColFilters[col.key], col, c))), sortCtl: rcSort, rows: pagedRc, startIndex: (rcPageC - 1) * rcPageSize, onDelete: deleteRackComponent, onEdit: openEditRackComponent, canEdit: canEdit, selectedIds: selectedRcIds, onSelectId: (id, checked) => setSelectedRcIds((prev) => { const next = new Set(prev); checked ? next.add(id) : next.delete(id); return next; }), onSelectAll: (checked, ids) => setSelectedRcIds((prev) => { const next = new Set(prev); ids.forEach((id) => checked ? next.add(id) : next.delete(id)); return next; }) }),
                         React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 16, flexWrap: "wrap", gap: 12 } },
                             React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B" } },
                                 "Showing ",
