@@ -12233,7 +12233,9 @@ function OpsQrSection() {
     const [err, setErr] = useState("");
     const [q, setQ] = useState("");
     const [libOk, setLibOk] = useState(typeof window.qrcode === "function");
+    const [shown, setShown] = useState(24);
     useEffect(() => { if (libOk) return; const s = document.createElement("script"); s.src = "./libs/qrcode.min.js?v=1"; s.onload = () => setLibOk(typeof window.qrcode === "function"); s.onerror = () => setErr("QR library (libs/qrcode.min.js) is missing from this installation."); document.head.appendChild(s); }, []);
+    useEffect(() => { setShown(24); }, [type, site, q]);
     useEffect(() => { setData(null); setErr(""); apiFetch("/ops/qr/labels?type=" + type + "&site=" + encodeURIComponent(site)).then(setData).catch((e) => setErr(e.message)); }, [type, site]);
     const ql = q.trim().toLowerCase();
     const labels = data ? data.labels.filter((l) => !ql || (l.title + " " + l.line2 + " " + l.line3 + " " + l.code).toLowerCase().includes(ql)) : [];
@@ -12242,7 +12244,7 @@ function OpsQrSection() {
         const w = window.open("", "_blank"); if (!w) { setErr("The browser blocked the print window - allow pop-ups for this site."); return; }
         const esc = (s) => String(s == null ? "" : s).replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
         w.document.write("<html><head><title>QR labels</title><style>body{font-family:Arial,sans-serif;margin:8mm}.g{display:flex;flex-wrap:wrap;gap:4mm}.l{width:62mm;height:26mm;border:1px solid #000;display:flex;align-items:center;gap:3mm;padding:2mm;page-break-inside:avoid}.l svg{width:22mm;height:22mm;flex:none}.t{font-size:9pt;font-weight:bold;word-break:break-all}.s{font-size:7.5pt;word-break:break-all}</style></head><body><div class='g'>" +
-            labels.slice(0, 600).map((l) => "<div class='l'>" + svgFor(l.code) + "<div><div class='t'>" + esc(l.title) + "</div><div class='s'>" + esc(l.line2) + "</div><div class='s'>" + esc(l.line3) + "</div></div></div>").join("") + "</div><script>window.onload=function(){window.print()}<\/script></body></html>");
+            labels.slice(0, 2000).map((l) => "<div class='l'>" + svgFor(l.code) + "<div><div class='t'>" + esc(l.title) + "</div><div class='s'>" + esc(l.line2) + "</div><div class='s'>" + esc(l.line3) + "</div></div></div>").join("") + "</div><script>window.onload=function(){window.print()}<\/script></body></html>");
         w.document.close();
     }
     return opsCard("QR / barcode labels", "Labels for assets, racks and locations. A USB barcode/QR scanner works like a keyboard – scan into the search boxes or the \"Scan asset label\" field in Material Movements. No camera needed.", opsH("div", null,
@@ -12250,13 +12252,16 @@ function OpsQrSection() {
             opsH(ThemedSelect, { value: type, onChange: (e) => setType(e.target.value), className: "neu-input", style: { width: "auto", fontSize: 12.5 } }, opsH("option", { value: "asset" }, "Asset labels"), opsH("option", { value: "rack" }, "Rack labels"), opsH("option", { value: "location" }, "Location labels")),
             opsH(ThemedSelect, { value: site, onChange: (e) => setSite(e.target.value), className: "neu-input", style: { width: "auto", fontSize: 12.5 } }, opsH("option", { value: "all" }, "All locations"), getAllowedSites(getUser()).map((s) => opsH("option", { key: s, value: s }, s))),
             opsH("input", { className: "neu-input", value: q, onChange: (e) => setQ(e.target.value), placeholder: "Filter labels…", "aria-label": "Filter labels", style: { width: 220, fontSize: 12.5 } }),
-            opsH("span", { style: { fontSize: 11.5, color: "#64748B" } }, labels.length + " label(s)" + (labels.length > 600 ? " (print is limited to the first 600 – filter first)" : "")),
+            opsH("span", { style: { fontSize: 11.5, color: "#64748B" } }, labels.length + " label(s)" + (labels.length > 2000 ? " (print is limited to the first 2000 – filter first)" : "")),
             opsBtn("Print labels", printLabels, true, !libOk || !labels.length)),
         err && opsH("div", { style: { color: "#B91C1C", fontSize: 12.5 } }, err),
-        opsH("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(250px,1fr))", gap: 10 } }, libOk ? labels.slice(0, 24).map((l, i) => opsH("div", { key: i, style: { display: "flex", gap: 10, alignItems: "center", padding: 10, borderRadius: 12, background: "#F8FAFC", border: "1px solid #E2E8F0" } },
+        opsH("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(250px,1fr))", gap: 10 } }, libOk ? labels.slice(0, shown).map((l, i) => opsH("div", { key: i, style: { display: "flex", gap: 10, alignItems: "center", padding: 10, borderRadius: 12, background: "#F8FAFC", border: "1px solid #E2E8F0" } },
             opsH("div", { style: { width: 64, height: 64, flex: "none" }, dangerouslySetInnerHTML: { __html: svgFor(l.code) } }),
             opsH("div", { style: { minWidth: 0 } }, opsH("div", { style: { fontWeight: 800, fontSize: 12.5, color: "#17345D", wordBreak: "break-all" } }, l.title), opsH("div", { style: { fontFamily: "'JetBrains Mono'", fontSize: 10.5, color: "#475569", wordBreak: "break-all" } }, l.code), opsH("div", { style: { fontSize: 10.5, color: "#64748B" } }, l.line3)))) : null),
-        labels.length > 24 && opsH("div", { style: { fontSize: 11.5, color: "#64748B", marginTop: 8 } }, "Preview shows the first 24; \"Print labels\" prints every label that matches the filter.")));
+        labels.length > shown && opsH("div", { style: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 10, fontSize: 11.5, color: "#64748B" } },
+            opsH("span", null, "Showing " + shown + " of " + labels.length + " labels. \"Print labels\" prints every label that matches the filter."),
+            opsBtn("Show 48 more", () => setShown((n) => n + 48), false), opsBtn("Show all (" + labels.length + ")", () => setShown(labels.length), false)),
+        labels.length > 24 && labels.length <= shown && opsH("div", { style: { display: "flex", gap: 10, alignItems: "center", marginTop: 10, fontSize: 11.5, color: "#64748B" } }, opsH("span", null, "Showing all " + labels.length + " labels."), opsBtn("Show first 24 only", () => setShown(24), false))));
 }
 function OperationsPanel() {
     const [sec, setSec] = useState("health");
@@ -13069,6 +13074,7 @@ const REJECTED_COLUMNS = [
     { key: "site", label: "Returned To", format: trfDash },
 ];
 // Store stock counted by Hardware Type, then by Make + Model (follows the search / location / column filters of the list below).
+const BAR_COLORS = [["#6366F1", "#EEF2FF"], ["#0EA5E9", "#E0F2FE"], ["#10B981", "#D1FAE5"], ["#F59E0B", "#FEF3C7"], ["#EC4899", "#FCE7F3"], ["#8B5CF6", "#EDE9FE"], ["#14B8A6", "#CCFBF1"], ["#EF4444", "#FEE2E2"], ["#84CC16", "#ECFCCB"], ["#F97316", "#FFEDD5"]];
 function StoreSummaryPanel({ rows }) {
     const [open, setOpen] = useState(true);
     const { types, models, opening } = useMemo(() => {
@@ -13090,12 +13096,12 @@ function StoreSummaryPanel({ rows }) {
             React.createElement("span", { style: { fontFamily: "Inter", fontSize: 12, fontWeight: 800, color: "#0F172A" } }, title),
             React.createElement("span", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#64748B" } }, sub)),
         React.createElement("div", { style: { maxHeight: 250, overflowY: "auto" } },
-            items.map(([name, n]) => React.createElement("div", { key: name, "data-summary-row": name, style: { padding: "4px 0", borderTop: "1px solid #F1F5F9" } },
+            items.map(([name, n], ix) => { const bc = BAR_COLORS[ix % BAR_COLORS.length]; return React.createElement("div", { key: name, "data-summary-row": name, style: { padding: "4px 0", borderTop: "1px solid #F1F5F9" } },
                 React.createElement("div", { style: { display: "flex", justifyContent: "space-between", gap: 8, fontFamily: "Inter", fontSize: 12, color: "#334155" } },
-                    React.createElement("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: name }, name),
-                    React.createElement("b", { style: { color: "#4F46E5" } }, n)),
-                React.createElement("div", { style: { height: 4, borderRadius: 3, background: "#EEF2FF", marginTop: 3 } },
-                    React.createElement("div", { style: { height: 4, borderRadius: 3, background: "#6366F1", width: Math.max(3, Math.round((n / Math.max(total, 1)) * 100)) + "%" } }))))));
+                    React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 7, minWidth: 0 } }, React.createElement("i", { style: { width: 9, height: 9, borderRadius: 3, background: bc[0], flex: "none" } }), React.createElement("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: name }, name)),
+                    React.createElement("b", { style: { color: bc[0] } }, n)),
+                React.createElement("div", { style: { height: 4, borderRadius: 3, background: bc[1], marginTop: 3 } },
+                    React.createElement("div", { style: { height: 4, borderRadius: 3, background: bc[0], width: Math.max(3, Math.round((n / Math.max(total, 1)) * 100)) + "%" } }))); })));
     return React.createElement("div", { className: "neu-card", style: { padding: "14px 16px", marginBottom: 14 }, "data-store-summary": "1" },
         React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" } },
             React.createElement("div", null,
