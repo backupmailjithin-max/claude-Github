@@ -12238,13 +12238,13 @@ function OpsQrSection() {
     useEffect(() => { setShown(24); }, [type, site, q]);
     useEffect(() => { setData(null); setErr(""); apiFetch("/ops/qr/labels?type=" + type + "&site=" + encodeURIComponent(site)).then(setData).catch((e) => setErr(e.message)); }, [type, site]);
     const ql = q.trim().toLowerCase();
-    const labels = data ? data.labels.filter((l) => !ql || (l.title + " " + l.line2 + " " + l.line3 + " " + l.code).toLowerCase().includes(ql)) : [];
+    const labels = data ? data.labels.filter((l) => !ql || (l.title + " " + l.line2 + " " + l.line3 + " " + (l.line4 || "") + " " + l.code).toLowerCase().includes(ql)) : [];
     const svgFor = (code) => { const qr = window.qrcode(0, "M"); qr.addData(code); qr.make(); return qr.createSvgTag({ cellSize: 3, margin: 0, scalable: true }); };
     function printLabels() {
         const w = window.open("", "_blank"); if (!w) { setErr("The browser blocked the print window - allow pop-ups for this site."); return; }
         const esc = (s) => String(s == null ? "" : s).replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
         w.document.write("<html><head><title>QR labels</title><style>body{font-family:Arial,sans-serif;margin:8mm}.g{display:flex;flex-wrap:wrap;gap:4mm}.l{width:62mm;height:26mm;border:1px solid #000;display:flex;align-items:center;gap:3mm;padding:2mm;page-break-inside:avoid}.l svg{width:22mm;height:22mm;flex:none}.t{font-size:9pt;font-weight:bold;word-break:break-all}.s{font-size:7.5pt;word-break:break-all}</style></head><body><div class='g'>" +
-            labels.slice(0, 2000).map((l) => "<div class='l'>" + svgFor(l.code) + "<div><div class='t'>" + esc(l.title) + "</div><div class='s'>" + esc(l.line2) + "</div><div class='s'>" + esc(l.line3) + "</div></div></div>").join("") + "</div><script>window.onload=function(){window.print()}<\/script></body></html>");
+            labels.slice(0, 2000).map((l) => "<div class='l'>" + svgFor(l.code) + "<div><div class='t'>" + esc(l.title) + "</div><div class='s'>" + esc(l.line2) + "</div><div class='s'>" + esc(l.line3) + "</div>" + (l.line4 ? "<div class='s'>" + esc(l.line4) + "</div>" : "") + "</div></div>").join("") + "</div><script>window.onload=function(){window.print()}<\/script></body></html>");
         w.document.close();
     }
     return opsCard("QR / barcode labels", "Labels for assets, racks and locations. A USB barcode/QR scanner works like a keyboard – scan into the search boxes or the \"Scan asset label\" field in Material Movements. No camera needed.", opsH("div", null,
@@ -12257,7 +12257,7 @@ function OpsQrSection() {
         err && opsH("div", { style: { color: "#B91C1C", fontSize: 12.5 } }, err),
         opsH("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(250px,1fr))", gap: 10 } }, libOk ? labels.slice(0, shown).map((l, i) => opsH("div", { key: i, style: { display: "flex", gap: 10, alignItems: "center", padding: 10, borderRadius: 12, background: "#F8FAFC", border: "1px solid #E2E8F0" } },
             opsH("div", { style: { width: 64, height: 64, flex: "none" }, dangerouslySetInnerHTML: { __html: svgFor(l.code) } }),
-            opsH("div", { style: { minWidth: 0 } }, opsH("div", { style: { fontWeight: 800, fontSize: 12.5, color: "#17345D", wordBreak: "break-all" } }, l.title), opsH("div", { style: { fontFamily: "'JetBrains Mono'", fontSize: 10.5, color: "#475569", wordBreak: "break-all" } }, l.code), opsH("div", { style: { fontSize: 10.5, color: "#64748B" } }, l.line3)))) : null),
+            opsH("div", { style: { minWidth: 0 } }, opsH("div", { style: { fontWeight: 800, fontSize: 12.5, color: "#17345D", wordBreak: "break-all" } }, l.title), opsH("div", { style: { fontSize: 10.5, color: "#475569", wordBreak: "break-all" } }, l.line2), opsH("div", { style: { fontFamily: "'JetBrains Mono'", fontSize: 10, color: "#475569", wordBreak: "break-all" } }, l.line3), l.line4 ? opsH("div", { style: { fontSize: 10, color: "#64748B" } }, l.line4) : null))) : null),
         labels.length > shown && opsH("div", { style: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 10, fontSize: 11.5, color: "#64748B" } },
             opsH("span", null, "Showing " + shown + " of " + labels.length + " labels. \"Print labels\" prints every label that matches the filter."),
             opsBtn("Show 48 more", () => setShown((n) => n + 48), false), opsBtn("Show all (" + labels.length + ")", () => setShown(labels.length), false)),
