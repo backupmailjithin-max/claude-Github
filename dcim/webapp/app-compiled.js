@@ -12819,17 +12819,17 @@ function TrfHistoryModal({ asset, onClose }) {
 const OPENING_STOCK_COLS = { serial: "Serial Number", date: "Received Date", custody: "Store / Custody Location", remarks: "Remarks" };
 function downloadOpeningStockTemplate(storeRows) {
     const todo = (storeRows || []).filter((r) => !r.receivedDate);
-    const head = [OPENING_STOCK_COLS.serial, OPENING_STOCK_COLS.date, OPENING_STOCK_COLS.custody, OPENING_STOCK_COLS.remarks, "Site (info only - not imported)", "Device (info only - not imported)", "Status (info only - not imported)"];
-    const aoa = [head].concat(todo.length ? todo.map((r) => [r.serialNumber || "", "", "", "", r.site || "", [r.deviceName, r.manufacturer, r.model].filter(Boolean).join(" ") || "", r.openingStock ? "Opening stock" : "No received date"]) : [["", "", "", "", "", "", ""]]);
+    const head = [OPENING_STOCK_COLS.serial, "Make (info only)", "Model (info only)", OPENING_STOCK_COLS.date, OPENING_STOCK_COLS.custody, OPENING_STOCK_COLS.remarks, "Asset Tag (info only)", "Device Name (info only)", "Site (info only)", "Status (info only)"];
+    const aoa = [head].concat(todo.length ? todo.map((r) => [String(r.serialNumber || ""), r.manufacturer || "", r.model || "", "", "", "", r.assetTag || "", r.deviceName || "", r.site || "", r.openingStock ? "Opening stock" : "No received date"]) : [["", "", "", "", "", "", "", "", "", ""]]);
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws["!cols"] = [{ wch: 26 }, { wch: 16 }, { wch: 28 }, { wch: 30 }, { wch: 24 }, { wch: 40 }, { wch: 22 }];
+    ws["!cols"] = [{ wch: 34 }, { wch: 18 }, { wch: 28 }, { wch: 16 }, { wch: 28 }, { wch: 30 }, { wch: 20 }, { wch: 26 }, { wch: 16 }, { wch: 20 }];
     const info = [
         ["Column", "Mandatory?", "What to enter"],
         [OPENING_STOCK_COLS.serial, "YES", "The device's serial number exactly as in Asset Inventory. The device must be In Store at one of your locations."],
         [OPENING_STOCK_COLS.date, "Optional", "The real date the device was received into the store. Use a real Excel date, or type YYYY-MM-DD or DD-MMM-YYYY (05-Nov-2026). Not in the future. LEAVE BLANK IF YOU DO NOT KNOW IT."],
         [OPENING_STOCK_COLS.custody, "Optional", "Shelf / room / store name. Blank keeps the current store location."],
         [OPENING_STOCK_COLS.remarks, "Optional", "Up to 255 characters, saved with the received entry."],
-        ["Site / Device / Status columns", "Ignored", "Only there to help you identify the device. Not imported - changing them has no effect."],
+        ["Make / Model / Asset Tag / Device Name / Site / Status columns", "Ignored", "Only there to help you identify the device. Not imported - changing them has no effect."],
         [],
         ["What happens"],
         ["Date given", "", "A 'Received to Store' entry is added with that date and marked 'Received date imported (opening stock)'."],
