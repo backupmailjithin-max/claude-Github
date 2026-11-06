@@ -1,4 +1,5 @@
 'use strict';
+const vectorRaster = require('./vector-raster');
 // =====================================================================================================
 // Offline OCR engine for the Material Movement assistant.
 //   * Image files (JPG / JPEG / PNG / WEBP): Tesseract (WebAssembly) running inside this Node process.
@@ -298,6 +299,17 @@ async function pdfLines(buffer) {
         if (fn === OPS.paintImageXObject) img = await new Promise((res) => { try { page.objs.get(ops.argsArray[i][0], res); } catch (e) { res(null); } });
         else if (fn === OPS.paintInlineImageXObject) img = ops.argsArray[i][0];
         if (img && img.data && img.width * img.height > 40000 && img.width * img.height <= 40e6 && (!best || img.width * img.height > best.width * best.height)) best = img;
+      }
+      // Vector-only page ("Microsoft Print to PDF", some ERP exports): every letter is a drawn outline, so there is no text layer and no
+      // picture to read. Draw the page ourselves and OCR that. (Without this the reader picked the small QR-code picture instead.)
+      let vecFills = 0; for (let i = 0; i < ops.fnArray.length; i++) if (ops.fnArray[i] === OPS.fill || ops.fnArray[i] === OPS.eoFill || ops.fnArray[i] === OPS.fillStroke) vecFills++;
+      if (vecFills >= 150) {
+        try {
+          const r = vectorRaster.rasterize(pdfjs, page, ops, 4);
+          ocrPages++;
+          const got = await recognizeImage(encodePng(r.width, r.height, 1, r.bits), '.png');
+          if (got.join('').length >= 25 || !best) { got.forEach((l) => lines.push(l)); continue; }
+        } catch (e) { /* fall through to the picture on the page */ }
       }
       if (!best) continue;
       const kind = best.kind || (best.data.length === best.width * best.height * 3 ? 2 : best.data.length === best.width * best.height * 4 ? 3 : 1);
