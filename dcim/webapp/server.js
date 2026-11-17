@@ -9,6 +9,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const oneviewPsu = require('./lib/oneview-psu');
+const psuModel = require('./lib/psu-model');
 const license = require('./lib/license');
 const { canonicalModel, canonicalModelKey, canonicalModelFor } = require('./lib/model-names');
 const zlib = require('zlib'); // also used by BACKUP & RESTORE further down
@@ -1246,6 +1247,8 @@ async function initDB() {
     // treatment as health_status/power_state above.
     try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_power_watts INT NULL'); } catch (e) { /* already exists */ }
     try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_psu_max_watts INT NULL'); } catch (e) { /* already exists */ }
+    // Clean column for ONE-supply ratings only (older hw_psu_max_watts held whole-server totals / measured peaks and is no longer read)
+    try { await conn.query('ALTER TABLE assets ADD COLUMN hw_psu_rating_watts INT NULL'); } catch (e) { /* already exists */ }
     // Power read from Dell OME / HPE OneView (their own columns, so Inventory fields are never touched).
     try { await conn.query('ALTER TABLE assets ADD COLUMN hw_power_watts INT NULL'); } catch (e) { /* already exists */ }
     try { await conn.query('ALTER TABLE assets ADD COLUMN hw_psu_max_watts INT NULL'); } catch (e) { /* already exists */ }
@@ -2891,7 +2894,6 @@ async function fetchOneviewPower(site, zone, uri, dev) {
   const session = await getOneviewSession(site, zone);
   if (!session) return out;
   const headers = { Auth: session.sessionId, 'X-API-Version': String(session.apiVersion) };
-  let totalCap = null;
   try {
     const res = await monitorFetch(`${session.host}${uri}/utilization?fields=AveragePower,PeakPower,PowerCap`, { headers });
     if (res.ok) {
@@ -2900,7 +2902,6 @@ async function fetchOneviewPower(site, zone, uri, dev) {
       const avg = list.find((m) => /^averagepower$/i.test(m.metricName || ''));
       const cap = list.find((m) => /^powercap$/i.test(m.metricName || ''));
       out.powerWatts = latestMetricSample(avg);
-      totalCap = toWatts(avg && avg.metricCapacity) || toWatts(cap && cap.metricCapacity); // whole-server capacity (all supplies added)
     }
   } catch (e) { /* utilization unavailable for this server */ }
   // OneView's /utilization and calibrated figures describe the WHOLE server (both supplies, e.g. 1600 W). Capacity here is ONE
@@ -2908,11 +2909,9 @@ async function fetchOneviewPower(site, zone, uri, dev) {
   try {
     const modelKey = dev ? `${dev.manufacturer || 'HPE'} ${dev.model || ''}`.trim().toLowerCase() : '';
     const psu = await oneviewPsu.fetchPsuRating({ fetch: monitorFetch, host: session.host, headers, apiVersion: session.apiVersion }, uri, modelKey);
-    if (psu.watts) out.psuMaxWatts = psu.watts;
-    else if (psu.proven) { out.psuMaxWatts = null; out.psuReset = true; } // supply lists work on this appliance but not for this server: never show a whole-server total as its capacity
-    else if (totalCap) out.psuMaxWatts = totalCap >= 1000 ? Math.round(totalCap / 2) : totalCap; // no supply list from this appliance: /utilization capacity adds both redundant supplies (2 x 800 = 1600), so one supply is half
-  } catch (e) { if (totalCap) out.psuMaxWatts = totalCap >= 1000 ? Math.round(totalCap / 2) : totalCap; }
-  // environmentalConfiguration.calibratedMaxPower is a MEASURED peak draw (e.g. 697 W), not a supply rating - never used as capacity.
+    if (psu.watts) out.psuMaxWatts = psu.watts; // ONE supply's rating, read from OneView's power-supply data
+  } catch (e) { /* no supply data for this server */ }
+  // /utilization capacity (whole server, both supplies) and calibratedMaxPower (a measured peak draw) are NOT supply ratings and are never used.
   return out;
 }
 // Pulls a watts figure out of an OME power response whose exact shape differs between OME versions:
@@ -2968,7 +2967,7 @@ async function fetchOmePower(site, zone, deviceId) {
   const psus = psu && Array.isArray(psu.InventoryInfo) ? psu.InventoryInfo : [];
   // Server capacity = ONE PSU's rating (the other PSU is redundancy), so take the largest, not the sum.
   let rated = 0;
-  for (const p of psus) rated = Math.max(rated, toWatts(p.RatedMaxOutputPower) || toWatts(p.OutputWatts) || toWatts(p.Range1MaxInputPowerWatts) || 0);
+  for (const p of psus) rated = Math.max(rated, toWatts(p.RatedMaxOutputPower) || toWatts(p.OutputWatts) || 0);
   if (rated > 0) { out.psuMaxWatts = rated; omePsuCache[psuKey] = { watts: rated, at: Date.now() }; }
   else if (psuHit) out.psuMaxWatts = psuHit.watts;
   // 2) Core OME (confirmed on OME 4.8): the device Overview's own data - GET Devices(id)/Power returns the current draw in
@@ -2990,13 +2989,6 @@ async function fetchOmePower(site, zone, deviceId) {
         const row = rows.find((r) => Number(r.Type) === 4) || rows[0];
         out.powerWatts = toWatts(row && row.Value);
       }
-    } catch (e) { /* plugin not installed */ }
-  }
-  if (out.psuMaxWatts === null && !endpointOff('details')) {
-    try {
-      const res = await monitorFetch(`${session.host}/api/PowerService/DeviceDetails`, { method: 'POST', headers, body: JSON.stringify({ DeviceId: id }) });
-      noteEndpoint('details', res.ok);
-      if (res.ok) { answered = true; const data = await res.json().catch(() => null); out.psuMaxWatts = toWatts(data && data.EstimatedMaxPower); }
     } catch (e) { /* plugin not installed */ }
   }
   if (answered) st.fails = 0;
@@ -3062,7 +3054,7 @@ async function seedPowerFromAssets(site, devices) {
   if (!POWER_FETCH_ENABLED || !Array.isArray(devices) || !devices.length) return;
   try {
     const [rows] = await pool.query(
-      'SELECT UPPER(TRIM(serial_number)) AS sn, hw_power_watts AS w, hw_psu_max_watts AS mx FROM assets WHERE site = ? AND (hw_power_watts IS NOT NULL OR hw_psu_max_watts IS NOT NULL)', [site]);
+      'SELECT UPPER(TRIM(serial_number)) AS sn, hw_power_watts AS w, hw_psu_rating_watts AS mx FROM assets WHERE site = ? AND (hw_power_watts IS NOT NULL OR hw_psu_rating_watts IS NOT NULL)', [site]);
     const bySn = new Map(rows.map((r) => [r.sn, r]));
     for (const d of devices) {
       const r = d.serialNumber ? bySn.get(String(d.serialNumber).trim().toUpperCase()) : null;
@@ -3087,8 +3079,7 @@ function startPowerEnrichment(key, site, devices, fetchOne, source, prog) {
         try {
           const r = await fetchOne(d);
           if (r.powerWatts != null) d.powerWatts = r.powerWatts;
-          if (r.psuMaxWatts != null) { d.psuMaxWatts = r.psuMaxWatts; d.psuReset = false; }
-          else if (r.psuReset) { d.psuMaxWatts = null; d.psuReset = true; }
+          if (r.psuMaxWatts != null) d.psuMaxWatts = r.psuMaxWatts;
         } catch (e) { /* keep what we had */ }
         if (d.powerState === 'Off') d.powerWatts = 0;
         if (prog) progressSet(site, prog.zone, prog.vendor, 'power', ++doneSrv, totalSrv);
@@ -3113,13 +3104,13 @@ async function persistDevicePower(site, devices, source) {
     if (!d || !d.serialNumber) continue;
     const off = d.powerState === 'Off';
     const watts = off ? 0 : d.powerWatts;
-    if ((watts === null || watts === undefined) && !d.psuMaxWatts && !d.psuReset) continue;
+    if ((watts === null || watts === undefined) && !d.psuMaxWatts) continue;
     try {
       await pool.query(
-        `UPDATE assets SET hw_power_watts = COALESCE(?, hw_power_watts), hw_psu_max_watts = IF(?, NULL, COALESCE(?, hw_psu_max_watts)),
+        `UPDATE assets SET hw_power_watts = COALESCE(?, hw_power_watts), hw_psu_rating_watts = COALESCE(?, hw_psu_rating_watts),
            hw_power_source = ?, hw_power_synced_at = NOW()
          WHERE site = ? AND UPPER(TRIM(serial_number)) = UPPER(TRIM(?))`,
-        [watts === undefined ? null : watts, d.psuReset ? 1 : 0, d.psuMaxWatts || null, source, site, d.serialNumber]
+        [watts === undefined ? null : watts, d.psuMaxWatts || null, source, site, d.serialNumber]
       );
     } catch (e) { log.warn(`Power persist failed for ${d.serialNumber}: ${e.message}`); }
   }
@@ -9785,10 +9776,13 @@ app.get('/api/monitoring/server-power-consumption', authenticateToken, async (re
     if (!allowed.length) return res.json({ sites: [], anyData: false, lastRunAt: lastAutoSyncAt ? lastAutoSyncAt.getTime() : null });
     const [rows] = await pool.query(
       `SELECT id, site, zone, rack_no, device_name, serial_number, manufacturer, model, hardware_type,
-              hw_power_watts, hw_psu_max_watts, hw_power_source, hw_power_synced_at, redfish_power_watts, redfish_psu_max_watts
+              hw_power_watts, hw_psu_rating_watts, hw_power_source, hw_power_synced_at, redfish_power_watts, redfish_psu_max_watts
          FROM assets
         WHERE site IN (?) AND (lifecycle_status IS NULL OR lifecycle_status = 'Active')
-          AND (hw_power_watts IS NOT NULL OR hw_psu_max_watts IS NOT NULL OR redfish_power_watts IS NOT NULL)`, [allowed]);
+          AND (hw_power_watts IS NOT NULL OR hw_psu_rating_watts IS NOT NULL OR redfish_power_watts IS NOT NULL)`, [allowed]);
+    // Supply rating is a property of the MODEL: the largest one-supply rating reported by any server of that model, used for all of them (on or off).
+    const [ratingRows] = await pool.query('SELECT manufacturer, model, hw_psu_rating_watts, redfish_psu_max_watts FROM assets WHERE hw_psu_rating_watts IS NOT NULL OR redfish_psu_max_watts IS NOT NULL');
+    const modelRatings = psuModel.buildModelRatings(ratingRows.map((x) => ({ manufacturer: x.manufacturer, model: x.model, ratings: [x.hw_psu_rating_watts, x.redfish_psu_max_watts] })));
     const statusOf = (pct) => (pct == null ? null : pct >= 85 ? 'Critical' : pct >= 70 ? 'High' : 'Normal');
     const bySite = new Map(allowed.map((st) => [st, { site: st, loadWatts: 0, capacityWatts: 0, loadWithCapWatts: 0, serversMonitored: 0, serversReporting: 0, serversOn: 0, asOf: null, zonesMap: new Map(), servers: [] }]));
     for (const r of rows) {
@@ -9796,7 +9790,7 @@ app.get('/api/monitoring/server-power-consumption', authenticateToken, async (re
       const fromAppliance = r.hw_power_watts !== null && r.hw_power_watts !== undefined;
       const watts = fromAppliance ? Number(r.hw_power_watts) : (r.redfish_power_watts != null ? Number(r.redfish_power_watts) : null);
       // Capacity = ONE power supply's rating. The iLO/BMC list of supplies is exact (2 x 800 W -> 800 W); appliance totals (OneView) can add both supplies up, so the BMC value wins.
-      const max = r.redfish_psu_max_watts ? Number(r.redfish_psu_max_watts) : (r.hw_psu_max_watts ? Number(r.hw_psu_max_watts) : null);
+      const max = psuModel.ratingFor(modelRatings, r.manufacturer, r.model, Math.max(Number(r.redfish_psu_max_watts) || 0, Number(r.hw_psu_rating_watts) || 0));
       const source = fromAppliance ? (r.hw_power_source || 'Appliance') : (watts != null ? 'Redfish' : (r.hw_power_source || null));
       loc.serversMonitored++;
       const z = loc.zonesMap.get(r.zone || '-') || { zone: r.zone || '-', loadWatts: 0, capacityWatts: 0, loadWithCapWatts: 0, servers: 0, reporting: 0, on: 0 };
