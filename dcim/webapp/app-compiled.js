@@ -4872,8 +4872,9 @@ function NewAssetModal({ onClose, onCreate, onUpdate, initial, assets, rackCompo
     // how many U are still free (assets + rack components both occupy U space).
     const rackOptions = React.useMemo(() => {
         const norm = (v) => String(v || "").trim().toUpperCase();
+        const nt = (v) => String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, ""); // "COMP-1" = "Comp 1" = "comp1"
         const zoneKey = form.zone || "AZ-1";
-        const typeKey = norm(form.rackType);
+        const typeKey = nt(form.rackType);
         // Only racks of the selected Rack type are offered.
         // Racks come from the racks table PLUS every rack that already holds an asset or
         // rack component (same sources the Rack Layout uses), so racks that exist only
@@ -4881,7 +4882,7 @@ function NewAssetModal({ onClose, onCreate, onUpdate, initial, assets, rackCompo
         // A rack matches the chosen Rack type if ANY source says so: the racks table row,
         // or any asset / rack component installed in that rack (their own rack type).
         const byNo = new Map();
-        const addType = (e, ty) => { const k = norm(ty); if (k) e.types.add(k); };
+        const addType = (e, ty) => { const k = nt(ty); if (k) e.types.add(k); };
         // Racks of every zone in the chosen site are offered (a rack of the chosen type may sit in another zone than the one
         // currently selected); the ones in the selected zone come first, the others are listed under "Other zones".
         const keyOf = (z, n) => (z || "AZ-1") + "\u0001" + norm(n);
@@ -4907,20 +4908,22 @@ function NewAssetModal({ onClose, onCreate, onUpdate, initial, assets, rackCompo
             const used = new Set();
             conflictCandidates.forEach((c) => {
                 if (initial && c.id === initial.id) return;
-                if (c.site !== form.site || (c.zone || "AZ-1") !== rk.zone || norm(c.rackNo) !== norm(rk.rackNo)) return;
+                if (c.site !== form.site || nt(c.zone || "AZ-1") !== nt(rk.zone) || norm(c.rackNo) !== norm(rk.rackNo)) return;
                 const u = parseUPosition(c.position);
                 if (u == null) return;
                 const h = parseHeightU(c.height) || 1;
                 for (let i = u; i < u + h; i++) used.add(i);
             });
             const usedInRack = [...used].filter((i) => i >= 1 && i <= cap).length;
-            return { rackNo: rk.rackNo, zone: rk.zone, other: rk.zone !== zoneKey, rackType: rk.rackType || "", cap, free: Math.max(0, cap - usedInRack) };
+            return { rackNo: rk.rackNo, zone: rk.zone, other: nt(rk.zone) !== nt(zoneKey), rackType: rk.rackType || "", cap, free: Math.max(0, cap - usedInRack) };
         });
         opts.sort((a, b) => (Number(a.other) - Number(b.other)) || String(a.zone).localeCompare(String(b.zone), undefined, { numeric: true }) || String(a.rackNo).localeCompare(String(b.rackNo), undefined, { numeric: true }));
         return opts;
     }, [racks, assets, rackComponents, form.site, form.zone, form.rackType, conflictCandidates, initial]);
     const rackInList = rackOptions.some((o) => !o.other && String(o.rackNo).trim().toUpperCase() === String(form.rackNo || "").trim().toUpperCase());
-    const showRackText = addingRack || rackOptions.length === 0;
+    const zoneRackOptions = rackOptions.filter((o) => !o.other);
+    const otherZoneRacks = rackOptions.filter((o) => o.other);
+    const showRackText = addingRack || zoneRackOptions.length === 0;
     const freeUMessage = React.useMemo(() => {
         const u = parseUPosition(form.position);
         if (u == null || !form.rackNo || !String(form.rackNo).trim() || uConflict || capacityConflict)
@@ -5003,22 +5006,17 @@ function NewAssetModal({ onClose, onCreate, onUpdate, initial, assets, rackCompo
                     React.createElement("div", { style: { gridColumn: "1 / -1", fontFamily: "Inter", fontSize: 10.5, color: "#64748B", marginTop: -2 } }, "No rack, U position or installation date is recorded until the asset is physically installed.")) : React.createElement(React.Fragment, null,
                     React.createElement(Field, { label: "Zone" },
                         React.createElement(ThemedSelect, { value: form.zone, onChange: (e) => set("zone", e.target.value), className: "neu-input" }, zonesForSite(zones, form.site, assets).map((z) => React.createElement("option", { key: z, value: z }, z)))),
-                    React.createElement(Field, { label: "Rack type" }, !addingRackType ? React.createElement(ThemedSelect, { value: form.rackType, onChange: (e) => { if (e.target.value === "__add_new_rack_type__") { setAddingRackType(true); set("rackType", ""); } else { const nt = e.target.value; setForm((f) => { const ntk = String(nt || "").trim().toUpperCase(); const rk = String(f.rackNo || "").trim().toUpperCase(); const same = (x) => x.site === f.site && (x.zone || "AZ-1") === (f.zone || "AZ-1") && String(x.rackNo || "").trim().toUpperCase() === rk; const sources = [...(racks || []), ...(assets || []), ...(rackComponents || [])].filter(same); const keep = !rk || sources.length === 0 || sources.some((x) => String(x.rackType || "").trim().toUpperCase() === ntk); return { ...f, rackType: nt, rackNo: keep ? f.rackNo : "" }; }); } }, className: "neu-input" },
+                    React.createElement(Field, { label: "Rack type" }, !addingRackType ? React.createElement(ThemedSelect, { value: form.rackType, onChange: (e) => { if (e.target.value === "__add_new_rack_type__") { setAddingRackType(true); set("rackType", ""); } else { const nt = e.target.value; setForm((f) => { const sq = (v) => String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, ""); const ntk = sq(nt); const rk = String(f.rackNo || "").trim().toUpperCase(); const same = (x) => x.site === f.site && (x.zone || "AZ-1") === (f.zone || "AZ-1") && String(x.rackNo || "").trim().toUpperCase() === rk; const sources = [...(racks || []), ...(assets || []), ...(rackComponents || [])].filter(same); const keep = !rk || sources.length === 0 || sources.some((x) => sq(x.rackType) === ntk); return { ...f, rackType: nt, rackNo: keep ? f.rackNo : "" }; }); } }, className: "neu-input" },
                         React.createElement("option", { value: "__add_new_rack_type__" }, "+ Rack type"),
                         React.createElement("option", { value: "", disabled: true }, "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"),
                         (form.rackType && !rackTypeNames(rackTypes).includes(form.rackType)) ? React.createElement("option", { key: "__cur", value: form.rackType }, form.rackType) : null,
                         rackTypeNames(rackTypes).map((r) => React.createElement("option", { key: r, value: r }, r))) : React.createElement("div", { style: { display: "flex", gap: 6 } },
                         React.createElement("input", { autoFocus: true, value: form.rackType, onChange: (e) => set("rackType", e.target.value), placeholder: "e.g. 48U Open Frame", className: "neu-input" }),
                         React.createElement("button", { type: "button", onClick: () => { setAddingRackType(false); set("rackType", rackTypeNames(rackTypes)[0] || ""); }, className: "neu-btn", style: { padding: "0 10px", fontFamily: "Inter", fontSize: 11, whiteSpace: "nowrap" } }, "Pick type"))),
-                    React.createElement(Field, { label: "Rack no." }, !showRackText ? React.createElement(ThemedSelect, { value: (rackInList || !form.rackNo) ? (rackOptions.find((o) => !o.other && String(o.rackNo).trim().toUpperCase() === String(form.rackNo || "").trim().toUpperCase()) || { rackNo: "" }).rackNo : "__current__", onChange: (e) => {
+                    React.createElement(Field, { label: "Rack no." }, !showRackText ? React.createElement(ThemedSelect, { value: (rackInList || !form.rackNo) ? (zoneRackOptions.find((o) => !o.other && String(o.rackNo).trim().toUpperCase() === String(form.rackNo || "").trim().toUpperCase()) || { rackNo: "" }).rackNo : "__current__", onChange: (e) => {
                             const v = e.target.value;
                             if (v === "__add_new_rack__") { setAddingRack(true); set("rackNo", ""); }
                             else if (v === "__current__") { }
-                            else if (v.indexOf("::") > 0) {
-                                const [oz, ...rest] = v.split("::"); const on = rest.join("::");
-                                const picked = rackOptions.find((o) => o.other && o.zone === oz && o.rackNo === on);
-                                setForm((f) => ({ ...f, zone: oz, rackNo: on, rackType: picked && picked.rackType ? picked.rackType : f.rackType }));
-                            }
                             else {
                                 const picked = rackOptions.find((o) => o.rackNo === v);
                                 setForm((f) => ({ ...f, rackNo: v, rackType: picked && picked.rackType ? picked.rackType : f.rackType }));
@@ -5028,11 +5026,10 @@ function NewAssetModal({ onClose, onCreate, onUpdate, initial, assets, rackCompo
                         React.createElement("option", { value: "__add_new_rack__" }, "+ Rack no."),
                         React.createElement("option", { value: "", disabled: true }, "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"),
                         (!rackInList && form.rackNo) ? React.createElement("option", { value: "__current__" }, form.rackNo) : null,
-                        rackOptions.filter((o) => !o.other).map((o) => React.createElement("option", { key: o.zone + o.rackNo, value: o.rackNo }, o.rackNo)),
-                        rackOptions.some((o) => o.other) ? React.createElement("optgroup", { key: "__other", label: "Other zones" }, rackOptions.filter((o) => o.other).map((o) => React.createElement("option", { key: o.zone + "::" + o.rackNo, value: o.zone + "::" + o.rackNo }, `${o.rackNo}  \u00B7  ${o.zone}`))) : null) : React.createElement("div", null, React.createElement("div", { style: { display: "flex", gap: 6 } },
+                        zoneRackOptions.map((o) => React.createElement("option", { key: o.zone + o.rackNo, value: o.rackNo }, o.rackNo))) : React.createElement("div", null, React.createElement("div", { style: { display: "flex", gap: 6 } },
                         React.createElement("input", { value: form.rackNo, onChange: (e) => set("rackNo", e.target.value), placeholder: "A04", className: "neu-input" }),
-                        rackOptions.length > 0 && React.createElement("button", { type: "button", onClick: () => { setAddingRack(false); set("rackNo", ""); }, className: "neu-btn", style: { padding: "0 10px", fontFamily: "Inter", fontSize: 11, whiteSpace: "nowrap" } }, "Pick rack")),
-                        (!addingRack && rackOptions.length === 0 && String(form.rackType || "").trim()) ? React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#B45309", marginTop: 5 } }, `No existing ${form.rackType} racks in ${form.site} \u2014 type the rack no. of a new rack.`) : null)),
+                        zoneRackOptions.length > 0 && React.createElement("button", { type: "button", onClick: () => { setAddingRack(false); set("rackNo", ""); }, className: "neu-btn", style: { padding: "0 10px", fontFamily: "Inter", fontSize: 11, whiteSpace: "nowrap" } }, "Pick rack")),
+                        (!addingRack && zoneRackOptions.length === 0 && String(form.rackType || "").trim()) ? React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#B45309", marginTop: 5 } }, otherZoneRacks.length ? `No ${form.rackType} racks in ${form.zone || "this zone"}. Found in ${[...new Set(otherZoneRacks.map((o) => o.zone))].join(", ")} \u2014 change Zone to pick one.` : `No existing ${form.rackType} racks in ${form.site} \u2014 type the rack no. of a new rack.`) : null)),
 
                     React.createElement(Field, { label: "Position" },
                         React.createElement("input", { value: form.position, onChange: (e) => set("position", e.target.value), placeholder: "1U or 2-3U", className: "neu-input", style: uConflict ? { boxShadow: "inset 3px 3px 6px rgba(220,38,38,0.18), inset -3px -3px 6px rgba(255,255,255,0.8), 0 0 0 2px rgba(239,68,68,0.55)" } : undefined }),
