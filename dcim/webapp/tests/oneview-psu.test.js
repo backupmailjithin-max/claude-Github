@@ -35,30 +35,74 @@ test('parser: nested under another object and Redfish-like names', () => {
 test('finds the supply list in the server-hardware record itself and remembers it', async () => {
   psu.resetForTests();
   const c = ctx({ [URI]: { powerSupplies: [{ state: 'Enabled', powerCapacityWatts: 800 }, { state: 'Enabled', powerCapacityWatts: 800 }] } });
-  assert.strictEqual(await psu.fetchPsuRating(c, URI), 800);
+  assert.strictEqual((await psu.fetchPsuRating(c, URI)).watts, 800);
   assert.strictEqual(psu.diagnostics()[0].workingSuffix, '');
 });
 test('finds it under a sub-resource when the record has none', async () => {
   psu.resetForTests();
   const c = ctx({ [URI]: { powerState: 'On' }, [URI + '/powerSupplies']: { members: [{ powerSupplyBay: 1, powerCapacityWatts: 800 }, { powerSupplyBay: 2, powerCapacityWatts: 800 }] } });
-  assert.strictEqual(await psu.fetchPsuRating(c, URI), 800);
+  assert.strictEqual((await psu.fetchPsuRating(c, URI)).watts, 800);
   assert.strictEqual(psu.diagnostics()[0].workingSuffix, '/powerSupplies');
 });
 test('discovers the path from the appliance web UI scripts when no known path answers', async () => {
   psu.resetForTests();
   const c = ctx({ '/': '<script src="/ui/app.js"></script>', '/ui/app.js': 'var u="/rest/server-hardware/{id}/powerSupplyDetails";', [URI]: {}, [URI + '/powerSupplyDetails']: { items: [{ powerSupplies: [{ powerCapacityWatts: 800 }] }] } });
-  assert.strictEqual(await psu.fetchPsuRating(c, URI), 800);
+  assert.strictEqual((await psu.fetchPsuRating(c, URI)).watts, 800);
   assert.ok(psu.diagnostics()[0].uiPathsMentioningPowerSupplies.some((p) => /powerSupplyDetails/.test(p)));
 });
 test('nothing found anywhere -> null (no number invented) and the attempts are recorded', async () => {
   psu.resetForTests();
   const c = ctx({ [URI]: { powerState: 'On' } });
-  assert.strictEqual(await psu.fetchPsuRating(c, URI), null);
+  assert.strictEqual((await psu.fetchPsuRating(c, URI)).watts, null);
   const d = psu.diagnostics()[0];
   assert.strictEqual(d.workingSuffix, null);
   assert.ok(d.recentAttempts.length >= 5);
 });
 test('unsafe server uri is refused', async () => {
   psu.resetForTests();
-  assert.strictEqual(await psu.fetchPsuRating(ctx({}), '/rest/../etc/passwd?x'), null);
+  assert.strictEqual((await psu.fetchPsuRating(ctx({}), '/rest/../etc/passwd?x')).watts, null);
+});
+
+// ---- mixed fleet: what the Monitoring page showed (some servers answer, some do not, models differ) ----
+const fleet = () => {
+  const routes = {};
+  const withList = (id, w) => { routes['/rest/server-hardware/' + id] = { powerSupplies: [{ state: 'Enabled', powerCapacityWatts: w }, { state: 'Enabled', powerCapacityWatts: w }], calibratedMaxPower: 697 }; };
+  const noList = (id) => { routes['/rest/server-hardware/' + id] = { powerState: 'On' }; };
+  noList('S0'); // the FIRST server has no supply data: it must not switch the reader off for the others
+  for (const id of ['S1', 'S2', 'S3']) withList(id, 800);
+  for (const id of ['S4', 'S5']) noList(id);       // same model as S1-S3 -> 800 W by same-model rule
+  withList('G1', 1600); withList('G2', 500);       // another model with MIXED ratings
+  noList('G3');                                    // ambiguous -> no guess
+  noList('X1');                                    // model never seen with a supply list -> no guess
+  return routes;
+};
+const U = (id) => '/rest/server-hardware/' + id;
+test('mixed fleet: one early failure does not poison the appliance; peers fill the gaps; ambiguity stays empty', async () => {
+  psu.resetForTests();
+  const c = ctx(fleet());
+  const M = 'hpe proliant dl380 gen10 plus', M2 = 'hpe proliant dl360 gen10', M3 = 'hpe proliant dl325';
+  const r = {};
+  for (const [id, m] of [['S0', M], ['S1', M], ['S2', M], ['S3', M], ['G1', M2], ['G2', M2], ['S4', M], ['S5', M], ['G3', M2], ['X1', M3]]) r[id] = await psu.fetchPsuRating(c, U(id), m);
+  for (const id of ['S1', 'S2', 'S3']) { assert.strictEqual(r[id].watts, 800); assert.strictEqual(r[id].source, 'supply'); }
+  assert.strictEqual(r.G1.watts, 1600); assert.strictEqual(r.G2.watts, 500);
+  for (const id of ['S4', 'S5']) { assert.strictEqual(r[id].watts, 800); assert.strictEqual(r[id].source, 'model-peer'); }
+  assert.strictEqual(r.G3.watts, null); assert.strictEqual(r.G3.proven, true);   // mixed 1600/500 -> not guessed, but proven => no whole-server total either
+  assert.strictEqual(r.X1.watts, null); assert.strictEqual(r.X1.proven, true);
+  // S0 was read before any server had proven the path: it has no number now, and picks up the peer value on the next look
+  assert.strictEqual(r.S0.watts, null);
+  const again = await psu.fetchPsuRating(c, U('S0'), M);
+  assert.strictEqual(again.watts, 800); assert.strictEqual(again.source, 'model-peer');
+  const d = psu.diagnostics()[0];
+  assert.strictEqual(d.pathProven, true);
+  assert.strictEqual(d.serversWithSupplyRating, 5); assert.ok(d.serversUsingSameModelPeer >= 2); assert.ok(d.serversWithoutRating.includes('G3') && d.serversWithoutRating.includes('X1'));
+});
+test('appliance that never returns supply lists: not proven, after 3 failures it stops probing (whole-server fallback stays available to the caller)', async () => {
+  psu.resetForTests();
+  const routes = {}; for (const id of ['A', 'B', 'C', 'D']) routes[U(id)] = { powerState: 'On' };
+  const c = ctx(routes);
+  for (const id of ['A', 'B', 'C']) { const r = await psu.fetchPsuRating(c, U(id), 'm'); assert.strictEqual(r.watts, null); assert.strictEqual(r.proven, false); }
+  const before = psu.diagnostics()[0].recentAttempts.length;
+  const r = await psu.fetchPsuRating(c, U('D'), 'm');
+  assert.strictEqual(r.proven, false);
+  assert.strictEqual(psu.diagnostics()[0].recentAttempts.length, before); // D was not probed again
 });

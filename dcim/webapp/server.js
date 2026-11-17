@@ -2869,7 +2869,6 @@ const OME_POWER_MANAGER_PLUGIN_ID = '2F6D05BE-EE4B-4B0E-B873-C8D2F64A4625'; // D
 const OME_POWER_RETRY_AFTER_MS = 30 * 60 * 1000;
 const omePsuCache = {}; // `${site}|${zone}|${deviceId}` -> { watts, at }  (PSU rating rarely changes)
 const omePowerState = {}; // "site|zone" -> { fails, disabledUntil } so a zone without the plugin is not hammered once per device
-const oneviewMaxPowerCache = {}; // server uri (per host) -> { watts, at }: the calibrated maximum almost never changes
 
 function toWatts(v) {
   const n = Number(v);
@@ -2886,12 +2885,13 @@ function latestMetricSample(metric) {
   }
   return null;
 }
-async function fetchOneviewPower(site, zone, uri) {
+async function fetchOneviewPower(site, zone, uri, dev) {
   const out = { powerWatts: null, psuMaxWatts: null };
   if (!uri) return out;
   const session = await getOneviewSession(site, zone);
   if (!session) return out;
   const headers = { Auth: session.sessionId, 'X-API-Version': String(session.apiVersion) };
+  let totalCap = null;
   try {
     const res = await monitorFetch(`${session.host}${uri}/utilization?fields=AveragePower,PeakPower,PowerCap`, { headers });
     if (res.ok) {
@@ -2900,34 +2900,19 @@ async function fetchOneviewPower(site, zone, uri) {
       const avg = list.find((m) => /^averagepower$/i.test(m.metricName || ''));
       const cap = list.find((m) => /^powercap$/i.test(m.metricName || ''));
       out.powerWatts = latestMetricSample(avg);
-      if (avg) out.psuMaxWatts = toWatts(avg.metricCapacity); // fallback maximum if environmentalConfiguration has none
-      const capW = toWatts(cap && cap.metricCapacity);
-      if (capW && !out.psuMaxWatts) out.psuMaxWatts = capW;
+      totalCap = toWatts(avg && avg.metricCapacity) || toWatts(cap && cap.metricCapacity); // whole-server capacity (all supplies added)
     }
   } catch (e) { /* utilization unavailable for this server */ }
-  const cacheKey = `${session.host}${uri}`;
-  const cached = oneviewMaxPowerCache[cacheKey];
-  if (cached && Date.now() - cached.at < 24 * 3600 * 1000) {
-    if (cached.watts) out.psuMaxWatts = cached.watts;
-  } else {
-    try {
-      const res = await monitorFetch(`${session.host}${uri}/environmentalConfiguration`, { headers });
-      if (res.ok) {
-        const env = await res.json().catch(() => null);
-        const w = toWatts(env && (env.calibratedMaxPower != null ? env.calibratedMaxPower : env.maxPower));
-        oneviewMaxPowerCache[cacheKey] = { watts: w, at: Date.now() };
-        if (w) out.psuMaxWatts = w; // calibrated maximum is the better figure when present
-      } else {
-        oneviewMaxPowerCache[cacheKey] = { watts: null, at: Date.now() };
-      }
-    } catch (e) { /* leave whatever the utilization call gave */ }
-  }
   // OneView's /utilization and calibrated figures describe the WHOLE server (both supplies, e.g. 1600 W). Capacity here is ONE
   // supply's rating (e.g. 800 W, as on the OneView "Power Supplies" screen), so prefer the per-supply list when OneView gives it.
   try {
-    const psu = await oneviewPsu.fetchPsuRating({ fetch: monitorFetch, host: session.host, headers, apiVersion: session.apiVersion }, uri);
-    if (psu) out.psuMaxWatts = psu;
-  } catch (e) { /* per-supply rating unavailable: keep the figure above */ }
+    const modelKey = dev ? `${dev.manufacturer || 'HPE'} ${dev.model || ''}`.trim().toLowerCase() : '';
+    const psu = await oneviewPsu.fetchPsuRating({ fetch: monitorFetch, host: session.host, headers, apiVersion: session.apiVersion }, uri, modelKey);
+    if (psu.watts) out.psuMaxWatts = psu.watts;
+    else if (psu.proven) { out.psuMaxWatts = null; out.psuReset = true; } // supply lists work on this appliance but not for this server: never show a whole-server total as its capacity
+    else if (totalCap) out.psuMaxWatts = totalCap >= 1000 ? Math.round(totalCap / 2) : totalCap; // no supply list from this appliance: /utilization capacity adds both redundant supplies (2 x 800 = 1600), so one supply is half
+  } catch (e) { if (totalCap) out.psuMaxWatts = totalCap >= 1000 ? Math.round(totalCap / 2) : totalCap; }
+  // environmentalConfiguration.calibratedMaxPower is a MEASURED peak draw (e.g. 697 W), not a supply rating - never used as capacity.
   return out;
 }
 // Pulls a watts figure out of an OME power response whose exact shape differs between OME versions:
@@ -3102,7 +3087,8 @@ function startPowerEnrichment(key, site, devices, fetchOne, source, prog) {
         try {
           const r = await fetchOne(d);
           if (r.powerWatts != null) d.powerWatts = r.powerWatts;
-          if (r.psuMaxWatts != null) d.psuMaxWatts = r.psuMaxWatts;
+          if (r.psuMaxWatts != null) { d.psuMaxWatts = r.psuMaxWatts; d.psuReset = false; }
+          else if (r.psuReset) { d.psuMaxWatts = null; d.psuReset = true; }
         } catch (e) { /* keep what we had */ }
         if (d.powerState === 'Off') d.powerWatts = 0;
         if (prog) progressSet(site, prog.zone, prog.vendor, 'power', ++doneSrv, totalSrv);
@@ -3127,13 +3113,13 @@ async function persistDevicePower(site, devices, source) {
     if (!d || !d.serialNumber) continue;
     const off = d.powerState === 'Off';
     const watts = off ? 0 : d.powerWatts;
-    if ((watts === null || watts === undefined) && !d.psuMaxWatts) continue;
+    if ((watts === null || watts === undefined) && !d.psuMaxWatts && !d.psuReset) continue;
     try {
       await pool.query(
-        `UPDATE assets SET hw_power_watts = COALESCE(?, hw_power_watts), hw_psu_max_watts = COALESCE(?, hw_psu_max_watts),
+        `UPDATE assets SET hw_power_watts = COALESCE(?, hw_power_watts), hw_psu_max_watts = IF(?, NULL, COALESCE(?, hw_psu_max_watts)),
            hw_power_source = ?, hw_power_synced_at = NOW()
          WHERE site = ? AND UPPER(TRIM(serial_number)) = UPPER(TRIM(?))`,
-        [watts === undefined ? null : watts, d.psuMaxWatts || null, source, site, d.serialNumber]
+        [watts === undefined ? null : watts, d.psuReset ? 1 : 0, d.psuMaxWatts || null, source, site, d.serialNumber]
       );
     } catch (e) { log.warn(`Power persist failed for ${d.serialNumber}: ${e.message}`); }
   }
@@ -3421,7 +3407,7 @@ async function fetchOneviewServers(site, zone, forceRefresh = false, waitForAllP
     carryOverPower(deviceSnapshotCache[key] && deviceSnapshotCache[key].devices, devices);
     await seedPowerFromAssets(site, devices);
     deviceSnapshotCache[key] = { devices, fetchedAt: Date.now() };
-    await waitUpTo(startPowerEnrichment(key, site, devices, (d) => fetchOneviewPower(site, zone, d.uri), 'ONEVIEW', { zone, vendor: 'ONEVIEW' }), waitForAllPower ? POWER_AUTOSYNC_WAIT_MS : POWER_WAIT_BUDGET_MS);
+    await waitUpTo(startPowerEnrichment(key, site, devices, (d) => fetchOneviewPower(site, zone, d.uri, d), 'ONEVIEW', { zone, vendor: 'ONEVIEW' }), waitForAllPower ? POWER_AUTOSYNC_WAIT_MS : POWER_WAIT_BUDGET_MS);
     return devices;
   });
 }

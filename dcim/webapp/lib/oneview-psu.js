@@ -63,10 +63,14 @@ function powerPathsFromUiText(text) {
   return [...out];
 }
 
-const state = new Map(); // host -> { working: suffix|null, noneAt, tried: [...], uiPaths: [...], uiAt }
-const perServer = new Map(); // host+uri -> { watts, at }
+const state = new Map(); // host -> { working, tried, uiPaths, uiAt, failed:Set, byModel:Map, outcomes:Map }
+const perServer = new Map(); // host+uri -> { res, at }
 const DAY = 24 * 3600 * 1000;
-function hostState(host) { let s = state.get(host); if (!s) { s = { working: null, noneAt: 0, tried: [], uiPaths: [], uiAt: 0, lastValue: null }; state.set(host, s); } return s; }
+function hostState(host) {
+  let s = state.get(host);
+  if (!s) { s = { working: null, everWorked: false, noneAt: 0, tried: [], uiPaths: [], uiAt: 0, lastValue: null, failed: new Set(), byModel: new Map(), outcomes: new Map() }; state.set(host, s); }
+  return s;
+}
 function note(s, rec) { s.tried.unshift(rec); if (s.tried.length > 40) s.tried.length = 40; }
 
 async function getJson(fetchFn, url, headers) {
@@ -96,30 +100,52 @@ async function discoverFromUi(fetchFn, host, s) {
   } catch (e) { /* UI not readable - not fatal */ }
 }
 
-// Returns ONE supply's rating in watts for the server at `uri`, or null. `ctx` = { fetch, host, headers, apiVersion }.
-async function fetchPsuRating(ctx, uri) {
+function noteModel(s, modelKey, watts) {
+  if (!modelKey || !watts) return;
+  const m = s.byModel.get(modelKey) || new Map();
+  m.set(watts, (m.get(watts) || 0) + 1); s.byModel.set(modelKey, m);
+}
+// Rating for a server whose own supply list could not be read: only when the appliance has PROVEN the supply path on other servers
+// and every server of the SAME make+model that reported one agrees on a single rating. Mixed ratings -> no guess (null).
+function peerRating(s, modelKey) {
+  if (!s.everWorked || !modelKey) return null;
+  const m = s.byModel.get(modelKey);
+  return m && m.size === 1 ? [...m.keys()][0] : null;
+}
+
+// Returns { watts, source: 'supply'|'model-peer'|null, proven } for the server at `uri`.
+//   watts  = ONE supply's rating (largest present supply), e.g. 800 for two 800 W supplies
+//   proven = the appliance has returned supply lists for other servers, so whole-server totals must NOT be used as capacity
+// `ctx` = { fetch, host, headers }; `modelKey` = make + model text (used only for the same-model peer rule).
+async function fetchPsuRating(ctx, uri, modelKey) {
   const { fetch: fetchFn, host, headers } = ctx;
-  if (!uri || !/^\/rest\/[A-Za-z0-9_\/-]+$/.test(uri)) return null;
   const s = hostState(host);
+  const answer = (watts, source) => ({ watts: watts || null, source: watts ? source : null, proven: s.everWorked });
+  if (!uri || !/^\/rest\/[A-Za-z0-9_\/-]+$/.test(uri)) return answer(null);
   const key = host + uri;
   const hit = perServer.get(key);
-  if (hit && Date.now() - hit.at < (hit.watts ? DAY : 6 * 3600 * 1000)) return hit.watts;
-  let watts = null;
-  const remember = (w) => { perServer.set(key, { watts: w, at: Date.now() }); return w; };
+  if (hit && Date.now() - hit.at < (hit.res.source === 'supply' ? DAY : 3 * 3600 * 1000)) {
+    if (hit.res.source === 'supply') return answer(hit.res.watts, 'supply');
+    const peer = peerRating(s, modelKey); return answer(peer, 'model-peer');
+  }
+  const success = (w, via) => { s.working = via; s.everWorked = true; s.noneAt = 0; s.lastValue = w; noteModel(s, modelKey, w); s.outcomes.set(uri, { watts: w, source: 'supply', at: Date.now() }); perServer.set(key, { res: { watts: w, source: 'supply' }, at: Date.now() }); return answer(w, 'supply'); };
+  const failure = () => { s.failed.add(uri); s.outcomes.set(uri, { watts: null, source: null, at: Date.now() }); perServer.set(key, { res: { watts: null, source: null }, at: Date.now() }); const peer = peerRating(s, modelKey); if (peer) s.outcomes.set(uri, { watts: peer, source: 'model-peer', at: Date.now() }); return answer(peer, 'model-peer'); };
 
   if (s.working !== null) {
     const r = await getJson(fetchFn, `${host}${uri}${s.working}`, headers);
-    watts = r.data ? psuWattsFromObject(r.data, isSupplyPath(s.working)) : null;
-    if (watts) { s.lastValue = watts; return remember(watts); }
+    const w = r.data ? psuWattsFromObject(r.data, isSupplyPath(s.working)) : null;
+    if (w) return success(w, s.working);
+    if (s.everWorked) return failure(); // the path is proven on other servers; this one simply has no supply data
   }
-  if (s.working === null && s.noneAt && Date.now() - s.noneAt < 6 * 3600 * 1000) return remember(null);
+  // One server failing must not switch the reader off for the whole appliance: only after 3 DIFFERENT servers failed and none ever worked.
+  if (!s.everWorked && s.noneAt && Date.now() - s.noneAt < 6 * 3600 * 1000) return failure();
 
   for (const suf of CANDIDATE_SUFFIXES) {
     if (suf === s.working) continue;
     const r = await getJson(fetchFn, `${host}${uri}${suf}`, headers);
     const w = r.data ? psuWattsFromObject(r.data, isSupplyPath(suf)) : null;
     note(s, { path: `${uri.replace(/[^/]+$/, '<id>')}${suf}`, status: r.status, psuWatts: w });
-    if (w) { s.working = suf; s.noneAt = 0; s.lastValue = w; return remember(w); }
+    if (w) return success(w, suf);
   }
   // Nothing in the known places: look at what the appliance UI itself calls (once a day) and try those paths.
   await discoverFromUi(fetchFn, host, s);
@@ -129,14 +155,15 @@ async function fetchPsuRating(ctx, uri) {
     const r = await getJson(fetchFn, `${host}${path}`, headers);
     const w = r.data ? psuWattsFromObject(r.data, true) : null;
     note(s, { path: path.replace(/[^/]+$/, (m) => (m === uri.split('/').pop() ? '<id>' : m)), status: r.status, psuWatts: w, via: 'web-ui-scan' });
-    if (w) { s.working = path.startsWith(uri) ? path.slice(uri.length) : null; if (s.working === null) break; s.noneAt = 0; s.lastValue = w; return remember(w); }
+    if (w && path.startsWith(uri)) return success(w, path.slice(uri.length));
   }
-  s.noneAt = Date.now();
-  return remember(null);
+  s.failed.add(uri);
+  if (!s.everWorked && s.failed.size >= 3) s.noneAt = Date.now();
+  return failure();
 }
 
 function diagnostics() {
-  return [...state.entries()].map(([host, s]) => ({ appliance: host.replace(/^https?:\/\//, ''), workingSuffix: s.working, noSourceFoundAt: s.noneAt ? new Date(s.noneAt).toISOString() : null, lastValueWatts: s.lastValue, uiPathsMentioningPowerSupplies: s.uiPaths, recentAttempts: s.tried.slice(0, 20) }));
+  return [...state.entries()].map(([host, s]) => ({ appliance: host.replace(/^https?:\/\//, ''), workingSuffix: s.working, noSourceFoundAt: s.noneAt ? new Date(s.noneAt).toISOString() : null, lastValueWatts: s.lastValue, uiPathsMentioningPowerSupplies: s.uiPaths, recentAttempts: s.tried.slice(0, 20), pathProven: s.everWorked, serversWithSupplyRating: [...s.outcomes.values()].filter((o) => o.source === 'supply').length, serversUsingSameModelPeer: [...s.outcomes.values()].filter((o) => o.source === 'model-peer').length, serversWithNoRating: [...s.outcomes.values()].filter((o) => !o.source).length, ratingsSeenPerModel: Object.fromEntries([...s.byModel.entries()].map(([k, v]) => [k, Object.fromEntries(v)])), serversWithoutRating: [...s.outcomes.entries()].filter(([, o]) => !o.source).slice(0, 30).map(([u]) => u.split('/').pop()) }));
 }
 function resetForTests() { state.clear(); perServer.clear(); }
 
