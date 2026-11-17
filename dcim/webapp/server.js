@@ -8,6 +8,7 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const oneviewPsu = require('./lib/oneview-psu');
 const license = require('./lib/license');
 const { canonicalModel, canonicalModelKey, canonicalModelFor } = require('./lib/model-names');
 const zlib = require('zlib'); // also used by BACKUP & RESTORE further down
@@ -2921,6 +2922,12 @@ async function fetchOneviewPower(site, zone, uri) {
       }
     } catch (e) { /* leave whatever the utilization call gave */ }
   }
+  // OneView's /utilization and calibrated figures describe the WHOLE server (both supplies, e.g. 1600 W). Capacity here is ONE
+  // supply's rating (e.g. 800 W, as on the OneView "Power Supplies" screen), so prefer the per-supply list when OneView gives it.
+  try {
+    const psu = await oneviewPsu.fetchPsuRating({ fetch: monitorFetch, host: session.host, headers, apiVersion: session.apiVersion }, uri);
+    if (psu) out.psuMaxWatts = psu;
+  } catch (e) { /* per-supply rating unavailable: keep the figure above */ }
   return out;
 }
 // Pulls a watts figure out of an OME power response whose exact shape differs between OME versions:
@@ -9783,6 +9790,9 @@ async function ensurePowerSnapshotLoaded() {
 // location's top 10 servers by draw. Pure database read of the numbers the 30-min auto-sync / Sync button save on
 // Asset Inventory (OME / OneView first; the Redfish reading is the fallback for a server neither appliance reports).
 // A server's capacity is ONE PSU's rating (the second PSU is redundancy), so utilisation = draw / that rating.
+app.get('/api/monitoring/oneview-psu-diagnostics', authenticateToken, requireAdmin, (req, res) => {
+  res.json({ note: 'What the OneView power-supply reader tried and found, per appliance. workingSuffix = the REST path under the server that lists each supply; null = none found yet.', appliances: oneviewPsu.diagnostics() });
+});
 app.get('/api/monitoring/server-power-consumption', authenticateToken, async (req, res) => {
   try {
     const allowed = await getAllowedSitesForUser(req.user);
