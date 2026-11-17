@@ -4,15 +4,15 @@
 
 | Item | Detail |
 |---|---|
-| Vendor company | [[FILL IN: vendor company name]] |
-| Support email | [[FILL IN: support email address]] |
-| Escalation email | [[FILL IN: escalation email address]] |
-| Support phone | [[FILL IN: phone number with country code]] |
-| Support hours and time zone | [[FILL IN: days, hours and time zone]] |
-| Licence requests, renewals, rebinds | [[FILL IN: licence request email address]] |
-| Customer account / contract reference | [[FILL IN: filled per customer at handover]] |
+| Vendor company | Independent vendor (individual developer, not a company) |
+| Support email | tjithin21@gmail.com |
+| Escalation email | tjithin21@gmail.com |
+| Support phone | No phone support. Contact by email only. |
+| Support hours and time zone | 10:00 AM to 6:00 PM IST (India Standard Time, UTC+05:30) |
+| Licence requests, renewals, rebinds | tjithin21@gmail.com |
+| Customer account / contract reference | Given to you at handover; quote it in every request |
 
-> **Vendor only:** every bracketed *FILL IN* value in the table above must be replaced before the kit is delivered. A release build (`DCIM_RELEASE_BUILD=1`) refuses to produce a kit while any remain. Run `packaging/tools/check-doc-placeholders.sh` to check.
+> **Vendor only:** the vendor details above are filled in; keep them current before each kit is delivered. A release build (`DCIM_RELEASE_BUILD=1`) refuses to produce a kit while any remain. Run `packaging/tools/check-doc-placeholders.sh` to check.
 
 ## Severity levels and targets
 
@@ -25,7 +25,7 @@ Targets are measured from the time your request is received during the support h
 | 3 - Medium | A function is degraded; most users can work | 1 business day | every 3 business days | 5 business days |
 | 4 - Low | Question, cosmetic issue or enhancement request | 2 business days | on request | next release |
 
-Severity 1 requests are made by phone as well as email. Escalate to the escalation email when a target is missed or the business impact grows.
+All requests, including Severity 1, are made by email: put "Severity 1" at the start of the subject line. Escalate to the escalation email when a target is missed or the business impact grows.
 
 The same support email and contact can be shown inside DCIM through the Setup Wizard (organisation settings *supportEmail* and *supportContact*), so your own users know whom to ask.
 
