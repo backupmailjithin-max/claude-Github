@@ -1383,6 +1383,10 @@ async function initDB() {
     // and firmware_targets; updated_by is set explicitly by each write path
     // below (the DB can't know who made the change, only when).
     try { await conn.query("ALTER TABLE assets ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"); } catch (e) { /* column already exists */ }
+    // updated_at must move ONLY when a person (or an explicit edit path) changes the asset. With ON UPDATE CURRENT_TIMESTAMP every
+    // background sync (power, firmware, Redfish, startup clean-ups) that touched any column re-stamped the asset, so a real edit was
+    // pushed out of "Recently Modified" by hundreds of sync-stamped rows. Every edit path sets updated_at explicitly.
+    try { await conn.query("ALTER TABLE assets MODIFY COLUMN updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP"); } catch (e) { /* best effort */ }
     try { await conn.query("ALTER TABLE assets ADD COLUMN updated_by VARCHAR(100)"); } catch (e) { /* column already exists */ }
     // This was missing entirely — /api/assets/recent's SELECT referenced
     // created_by, but assets never had this column, so every call to that
@@ -5918,7 +5922,7 @@ app.post('/api/assets', authenticateToken, requireRole(['Admin','Operator']), as
         a.site, null, null, null, now, receiptReason, receiptReference,
         req.user.name || req.user.username, remarks
       ]);
-      await db.query('UPDATE assets SET last_movement_at = ?, last_movement_reason = ?, changed_fields = ? WHERE id = ?', [now, receiptReason, 'Lifecycle: Received to Store', id]);
+      await db.query('UPDATE assets SET last_movement_at = ?, last_movement_reason = ?, changed_fields = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [now, receiptReason, 'Lifecycle: Received to Store', id]);
     }
     if (tx) await tx.commit();
 
@@ -7079,9 +7083,9 @@ app.post('/api/asset-lifecycle/opening-stock', authenticateToken, requireRole(['
           const reason = 'Received date imported (opening stock)';
           await conn.query(`INSERT INTO asset_movements (id, asset_id, serial_number, movement_type, from_site, from_zone, from_rack_no, from_position, to_site, to_zone, to_rack_no, to_position, movement_date, reason, reference_no, performed_by, remarks) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
             [genId('AMV'), a.id, a.serial_number, 'Received to Store', null, null, null, null, a.site, null, null, null, when, reason, 'OPENING-STOCK-IMPORT', who, w.remarks]);
-          await conn.query('UPDATE assets SET opening_stock = 0, custody_location = ?, last_movement_at = ?, last_movement_reason = ?, changed_fields = ? WHERE id = ?', [custody, when, reason, 'Lifecycle: Received date imported', a.id]);
+          await conn.query('UPDATE assets SET opening_stock = 0, custody_location = ?, last_movement_at = ?, last_movement_reason = ?, changed_fields = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [custody, when, reason, 'Lifecycle: Received date imported', a.id]);
         } else {
-          await conn.query('UPDATE assets SET opening_stock = 1, custody_location = ?, changed_fields = ? WHERE id = ?', [custody, 'Lifecycle: Marked Opening stock', a.id]);
+          await conn.query('UPDATE assets SET opening_stock = 1, custody_location = ?, changed_fields = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [custody, 'Lifecycle: Marked Opening stock', a.id]);
         }
         w.item.status = 'applied';
         w.item.message = w.date ? `Received to Store recorded for ${w.date}.` : 'Marked Opening stock (date not recorded).';
