@@ -1,4 +1,19 @@
 'use strict';
+
+// Rating of ONE power supply from a Redfish Chassis/Power resource: the largest PowerCapacityWatts among the supplies that are
+// present. Two 800 W supplies in a redundant pair give 800 W (not 1600 W). Returns null when the BMC does not list supplies.
+function psuRatingFromPower(power) {
+  const list = power && Array.isArray(power.PowerSupplies) ? power.PowerSupplies : [];
+  let best = 0;
+  for (const s of list) {
+    if (!s) continue;
+    const state = s.Status && s.Status.State;
+    if (state && /absent|disabled|unavailable/i.test(String(state))) continue;
+    const w = Number(s.PowerCapacityWatts != null ? s.PowerCapacityWatts : (s.Oem && s.Oem.Hpe && s.Oem.Hpe.MaxPowerOutputWatts));
+    if (Number.isFinite(w) && w > best) best = w;
+  }
+  return best > 0 ? Math.round(best) : null;
+}
 const { canonicalModelFor } = require('./model-names');
 // Vendor-agnostic hardware monitoring via DMTF Redfish - talks directly to
 // any server's BMC (Dell iDRAC, HPE iLO, Lenovo XCC, Cisco standalone IMC,
@@ -337,7 +352,7 @@ async function detectRedfish(monitorFetch, ip, port, username, password, retryOn
   const out = {
     reachable: false, rootReachable: false, redfishVersion: null, vendor: null, model: null, serialNumber: null,
     biosVersion: null, bmcFirmware: null, healthStatus: null, powerState: null,
-    powerWatts: null, temperatures: [], fans: [], systemPath: null, chassisPath: null,
+    powerWatts: null, psuMaxWatts: null, temperatures: [], fans: [], systemPath: null, chassisPath: null,
     managerPath: null, updateServicePath: null, error: null, alertCount: null, lockoutSuspected: false,
   };
   let root;
@@ -436,6 +451,7 @@ async function detectRedfish(monitorFetch, ip, port, username, password, retryOn
           const power = await redfishGet(monitorFetch, ip, port, username, password, `${firstCh}/Power`);
           const pc = power.PowerControl && power.PowerControl[0];
           if (pc && pc.PowerConsumedWatts != null) out.powerWatts = pc.PowerConsumedWatts;
+          out.psuMaxWatts = psuRatingFromPower(power); // ONE power supply's rating (e.g. 800 W) - the second PSU is redundancy, not extra capacity
         } catch (e) { /* not every BMC exposes Power */ }
       }
     }
@@ -713,7 +729,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
         await pool.query(
           `UPDATE assets SET redfish_username = NULL, redfish_password = NULL, redfish_port = NULL,
              redfish_version = NULL, bmc_firmware = NULL, bios_version = NULL, health_status = NULL, power_state = NULL,
-             redfish_alert_count = NULL, redfish_power_watts = NULL, redfish_monitor_ignored = 0,
+             redfish_alert_count = NULL, redfish_power_watts = NULL, redfish_psu_max_watts = NULL, redfish_monitor_ignored = 0,
              redfish_serial_number = NULL, redfish_hw_summary = NULL, redfish_cpu = NULL, redfish_mem = NULL, redfish_disk = NULL, redfish_nic = NULL, redfish_hw_json = NULL, redfish_hw_at = NULL, last_redfish_sync_at = NULL, last_redfish_error = NULL
            WHERE id = ?`,
           [rows[0].id]
@@ -775,6 +791,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
        WHERE id = ?`,
       [r.vendor, canonicalModelFor(r.vendor, r.model), r.serialNumber, r.biosVersion, r.biosVersion, r.serialNumber, r.bmcFirmware, r.biosVersion, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
     );
+    if (r.psuMaxWatts) { try { await pool.query('UPDATE assets SET redfish_psu_max_watts = ? WHERE id = ?', [r.psuMaxWatts, asset.id]); } catch (e) { /* column added by migration */ } }
     try { await pool.query('UPDATE assets SET redfish_hw_summary = ?, redfish_cpu = IF(redfish_hw_at IS NULL, ?, redfish_cpu), redfish_mem = IF(redfish_hw_at IS NULL, ?, redfish_mem) WHERE id = ?', [r.hwSummary || null, r.cpuQuick || null, r.memQuick || null, asset.id]); } catch (e) { /* cosmetic column - never fails a sync */ }
     // Full hardware inventory in the same pass. A failure here never fails the Sync (health / power / BIOS are already saved).
     let hwCollected = false, hwError = null;
@@ -1047,7 +1064,8 @@ module.exports = function registerRedfishRoutes(app, deps) {
                WHERE id = ?`,
               [r.credential.username, r.credential.password || '', r.vendor, canonicalModelFor(r.vendor, r.model), r.serialNumber, r.biosVersion, r.biosVersion, r.serialNumber, r.bmcFirmware, r.biosVersion, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
             );
-            try { await pool.query('UPDATE assets SET redfish_hw_summary = ?, redfish_cpu = IF(redfish_hw_at IS NULL, ?, redfish_cpu), redfish_mem = IF(redfish_hw_at IS NULL, ?, redfish_mem) WHERE id = ?', [r.hwSummary || null, r.cpuQuick || null, r.memQuick || null, asset.id]); } catch (e) { /* cosmetic column */ }
+            if (r.psuMaxWatts) { try { await pool.query('UPDATE assets SET redfish_psu_max_watts = ? WHERE id = ?', [r.psuMaxWatts, asset.id]); } catch (e) { /* column added by migration */ } }
+    try { await pool.query('UPDATE assets SET redfish_hw_summary = ?, redfish_cpu = IF(redfish_hw_at IS NULL, ?, redfish_cpu), redfish_mem = IF(redfish_hw_at IS NULL, ?, redfish_mem) WHERE id = ?', [r.hwSummary || null, r.cpuQuick || null, r.memQuick || null, asset.id]); } catch (e) { /* cosmetic column */ }
             job.applied++;
           } finally { job.processed++; }
         }
@@ -1178,6 +1196,7 @@ async function getRedfishTaskStatusForDevice(pool, monitorFetch, deviceId, taskU
   return getRedfishTaskStatus(monitorFetch, a.mgmt_ip, a.redfish_port, a.redfish_username, a.redfish_password, taskUri);
 }
 module.exports.pickSerial = pickSerial;
+module.exports.psuRatingFromPower = psuRatingFromPower;
 module.exports.buildHwSummary = buildHwSummary;
 module.exports.collectHardware = collectHardware;
 module.exports.nicLocation = nicLocation;
@@ -1185,3 +1204,4 @@ module.exports.summariseDisks = summariseDisks;
 module.exports.summariseNics = summariseNics;
 module.exports.summariseMemory = summariseMemory;
 module.exports.summariseCpu = summariseCpu;
+module.exports.detectRedfish = detectRedfish;

@@ -1244,6 +1244,7 @@ async function initDB() {
     // Power reading from the Power subresource - live state, same COALESCE-free
     // treatment as health_status/power_state above.
     try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_power_watts INT NULL'); } catch (e) { /* already exists */ }
+    try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_psu_max_watts INT NULL'); } catch (e) { /* already exists */ }
     // Power read from Dell OME / HPE OneView (their own columns, so Inventory fields are never touched).
     try { await conn.query('ALTER TABLE assets ADD COLUMN hw_power_watts INT NULL'); } catch (e) { /* already exists */ }
     try { await conn.query('ALTER TABLE assets ADD COLUMN hw_psu_max_watts INT NULL'); } catch (e) { /* already exists */ }
@@ -9788,7 +9789,7 @@ app.get('/api/monitoring/server-power-consumption', authenticateToken, async (re
     if (!allowed.length) return res.json({ sites: [], anyData: false, lastRunAt: lastAutoSyncAt ? lastAutoSyncAt.getTime() : null });
     const [rows] = await pool.query(
       `SELECT id, site, zone, rack_no, device_name, serial_number, manufacturer, model, hardware_type,
-              hw_power_watts, hw_psu_max_watts, hw_power_source, hw_power_synced_at, redfish_power_watts
+              hw_power_watts, hw_psu_max_watts, hw_power_source, hw_power_synced_at, redfish_power_watts, redfish_psu_max_watts
          FROM assets
         WHERE site IN (?) AND (lifecycle_status IS NULL OR lifecycle_status = 'Active')
           AND (hw_power_watts IS NOT NULL OR hw_psu_max_watts IS NOT NULL OR redfish_power_watts IS NOT NULL)`, [allowed]);
@@ -9798,7 +9799,8 @@ app.get('/api/monitoring/server-power-consumption', authenticateToken, async (re
       const loc = bySite.get(r.site); if (!loc) continue;
       const fromAppliance = r.hw_power_watts !== null && r.hw_power_watts !== undefined;
       const watts = fromAppliance ? Number(r.hw_power_watts) : (r.redfish_power_watts != null ? Number(r.redfish_power_watts) : null);
-      const max = r.hw_psu_max_watts ? Number(r.hw_psu_max_watts) : null;
+      // Capacity = ONE power supply's rating. The iLO/BMC list of supplies is exact (2 x 800 W -> 800 W); appliance totals (OneView) can add both supplies up, so the BMC value wins.
+      const max = r.redfish_psu_max_watts ? Number(r.redfish_psu_max_watts) : (r.hw_psu_max_watts ? Number(r.hw_psu_max_watts) : null);
       const source = fromAppliance ? (r.hw_power_source || 'Appliance') : (watts != null ? 'Redfish' : (r.hw_power_source || null));
       loc.serversMonitored++;
       const z = loc.zonesMap.get(r.zone || '-') || { zone: r.zone || '-', loadWatts: 0, capacityWatts: 0, loadWithCapWatts: 0, servers: 0, reporting: 0, on: 0 };
