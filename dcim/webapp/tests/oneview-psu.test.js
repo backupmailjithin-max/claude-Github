@@ -106,3 +106,15 @@ test('appliance that never returns supply lists: not proven, after 3 failures it
   assert.strictEqual(r.proven, false);
   assert.strictEqual(psu.diagnostics()[0].recentAttempts.length, before); // D was not probed again
 });
+
+test('real OneView /powerSupplies response (2 x 800 W, nested Oem figures ignored) -> 800, first call made', async () => {
+  const psu = (n, last, max) => ({ FirmwareVersion: '2.01', LastPowerOutputWatts: last, LineInputVoltage: 226, MemberId: String(n), Model: 'P38995-B21', Name: 'HpeServerPowerSupply',
+    Oem: { Hpe: { AveragePowerOutputWatts: last, BayNumber: n + 1, MaxPowerOutputWatts: max } }, PowerCapacityWatts: 800, PowerSupplyType: 'AC', Status: { Health: 'OK', State: 'Enabled' } });
+  const body = { uri: '/rest/server-hardware/ABC/powerSupplies', collectionState: 'Collected', data: [psu(0, 241, 247), psu(1, 277, 283)], count: 2, name: 'PowerSupplies' };
+  const urls = [];
+  const fetchFn = async (url) => { urls.push(url); return { ok: true, status: 200, json: async () => body, text: async () => '' }; };
+  const ov = require('../lib/oneview-psu'); ov.resetForTests();
+  const r = await ov.fetchPsuRating({ fetch: fetchFn, host: 'https://ov', headers: {} }, '/rest/server-hardware/ABC', 'hpe proliant dl380 gen10 plus');
+  assert.strictEqual(r.watts, 800); assert.strictEqual(r.source, 'supply');
+  assert.deepStrictEqual(urls, ['https://ov/rest/server-hardware/ABC/powerSupplies']);
+});

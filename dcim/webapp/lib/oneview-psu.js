@@ -53,7 +53,8 @@ function psuWattsFromObject(root, loose) {
 }
 
 // Paths worth trying under /rest/server-hardware/<id>. '' = the record itself.
-const CANDIDATE_SUFFIXES = ['', '/powerSupplies', '/power-supplies', '/physicalServerHardware', '/environmentalConfiguration', '/hardware', '/powerSupplyBays'];
+// '/powerSupplies' is the confirmed call (the one behind OneView's Power Supplies screen: { data: [ { PowerCapacityWatts: 800, ... }, ... ] }); the rest are only a fallback.
+const CANDIDATE_SUFFIXES = ['/powerSupplies', '', '/power-supplies', '/physicalServerHardware', '/environmentalConfiguration', '/hardware', '/powerSupplyBays'];
 const isSupplyPath = (s) => /suppl|psu/i.test(s);
 
 // Server-hardware related REST paths mentioned by the appliance's web UI scripts that look power-supply related.
