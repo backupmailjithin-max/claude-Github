@@ -46,9 +46,16 @@ This release brings the licensing, packaging and operations work into one produc
 
 - Current watts and PSU capacity from Dell OME and HPE OneView, a Server Power Consumption dashboard module (location load against PSU rating, top servers, zone breakdown with filters and sorting) and a live sync progress bar.
 
+- Max load (PSU capacity) is one power supply's rating per server model: the largest single-supply rating reported by any server of that model (HPE OneView `/powerSupplies`, Dell OME power-supply inventory, or iLO/iDRAC Redfish), shown for every server of that model whether it is on or off. Whole-server totals, measured peaks, input-power figures and estimates are no longer used as capacity; a model with no reported rating shows blank. Admins can inspect the OneView reader at `/api/monitoring/oneview-psu-diagnostics`.
+
 ### Redfish enhancements
 
 - Multi-vendor (Redfish) discovery and sync run as background jobs with a concurrent-scan guard, vendor-aware credential ordering and lock-out protection, column filters, row selection, ignore-from-monitor, and BIOS version capture.
+
+### Asset Inventory fixes
+
+- Edit asset: after choosing a Rack type, Rack no. lists the racks of that type in the selected zone (rack type and zone names match regardless of case, spaces and hyphens); when the zone has none, a note says where such racks exist or that a new rack can be typed.
+- Recently Modified no longer loses a person's edit: background syncs (power, firmware, Redfish) no longer re-stamp an asset's modified time. Times already re-stamped by earlier syncs cannot be recovered.
 
 ### Backup improvements
 
