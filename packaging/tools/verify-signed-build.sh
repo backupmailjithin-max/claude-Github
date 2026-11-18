@@ -15,7 +15,11 @@ fi
 ROOT="$(find "$SRC" -name integrity.manifest.json -not -path '*/node_modules/*' -print -quit 2>/dev/null | xargs -r dirname)"
 fail=0; ok(){ echo "PASS  $*"; }; bad(){ echo "FAIL  $*"; fail=1; }
 [ -n "$ROOT" ] && ok "signed manifest found: ${ROOT#$SRC/}" || { bad "no integrity.manifest.json in package"; echo "RESULT: NOT A SIGNED BUILD"; exit 1; }
-node "$HERE/validate-package.js" --root "$ROOT" --require-manifest --require-vendor >/tmp/vsb.$$ 2>&1 && ok "manifest verifies and is signed with the pinned vendor key; no vendor tools or keys in payload" || { bad "validate-package: $(tail -3 /tmp/vsb.$$ | tr '\n' ' ')"; }
+# Licensing code can be compiled to V8 bytecode that only the EXACT Node build shipped in the package can load (DCIM_BYTENODE), so
+# validate with the package'"'"'s own bundled Node when it has one; any other Node rejects the bytecode ("undefined is not a function").
+NODE_BIN="$(find "$SRC" -path '*/runtime/node/bin/node' -type f -print -quit 2>/dev/null)"
+if [ -n "$NODE_BIN" ] && [ -x "$NODE_BIN" ] && "$NODE_BIN" --version >/dev/null 2>&1; then ok "using the package's bundled Node $("$NODE_BIN" --version)"; else NODE_BIN="$(command -v node)"; fi
+"$NODE_BIN" "$HERE/validate-package.js" --root "$ROOT" --require-manifest --require-vendor >/tmp/vsb.$$ 2>&1 && ok "manifest verifies and is signed with the pinned vendor key; no vendor tools or keys in payload" || { bad "validate-package: $(tail -3 /tmp/vsb.$$ | tr '\n' ' ')"; }
 rm -f /tmp/vsb.$$
 a="$(sha256sum "$ROOT/lib/integrity-public-key.js" | cut -d' ' -f1)"; b="$(sha256sum "$REPO/dcim/webapp/lib/integrity-public-key.js" | cut -d' ' -f1)"
 [ "$a" = "$b" ] && ok "pinned integrity key equals this repository's vendor key" || bad "pinned integrity key differs from this repository's vendor key (test or foreign key)"
