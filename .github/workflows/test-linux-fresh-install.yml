@@ -88,10 +88,16 @@ jobs:
         if: failure()
         run: docker exec dcimt bash -c 'systemctl status dcim dcim-mariadb --no-pager | head -40; journalctl -u dcim -u dcim-mariadb --no-pager -n 120; ss -ltnp' || true
       - name: Reboot (restart the machine) - services must auto-start
+        if: ${{ !contains(matrix.image, '8-init') }}
         run: |
           docker restart dcimt
           for i in $(seq 1 40); do docker exec dcimt systemctl is-system-running 2>/dev/null | grep -qE "running|degraded" && break; sleep 2; done
           docker exec dcimt bash -c 'for i in $(seq 1 60); do systemctl is-active dcim dcim-mariadb >/dev/null 2>&1 && break; sleep 2; done; systemctl is-active dcim dcim-mariadb'
+          docker exec dcimt /usr/share/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
+      - name: Boot-order check (AlmaLinux 8 container cannot be restarted - old systemd remounts the container read-only)
+        if: ${{ contains(matrix.image, '8-init') }}
+        run: |
+          docker exec dcimt bash -c 'systemctl stop dcim dcim-mariadb; sleep 3; systemctl start dcim; for i in $(seq 1 60); do systemctl is-active dcim >/dev/null 2>&1 && systemctl is-active dcim-mariadb >/dev/null 2>&1 && break; sleep 2; done; systemctl is-active dcim dcim-mariadb'
           docker exec dcimt /usr/share/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
       - name: Upgrade, then repair
         run: |
