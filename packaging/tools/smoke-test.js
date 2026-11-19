@@ -13,6 +13,10 @@ async function call(m, p, b) {
 }
 const ck = (n, ok, x) => { console.log((ok ? 'PASS ' : 'FAIL ') + n + (ok ? '' : ' -> ' + JSON.stringify(x).slice(0, 300))); if (!ok) fails++; };
 (async () => {
+  // After a restart/crash the app may take a while to come back: wait (up to SMOKE_WAIT seconds, default 120) and report how long.
+  const t0 = Date.now(), waitMs = (parseInt(process.env.SMOKE_WAIT, 10) || 120) * 1000;
+  for (;;) { try { const h = await fetch(B + '/health'); if (h.status === 200) break; } catch (e) {} if (Date.now() - t0 > waitMs) break; await new Promise(r => setTimeout(r, 2000)); }
+  console.log('INFO service answered /health after ' + Math.round((Date.now() - t0) / 1000) + 's');
   let r = await call('GET', '/health'); ck('health', r.s === 200 && r.j.status === 'ok' && r.j.database === 'connected', r.j);
   r = await call('POST', '/auth/login', { username: user, password: pass }); T = r.j.token; ck('admin login', !!T, r);
   if (!T) process.exit(1);

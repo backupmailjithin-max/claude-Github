@@ -52,41 +52,41 @@ jobs:
         with: { name: linux-pkgs, path: pkgs }
       - name: Start a clean systemd machine
         run: |
-          docker run -d --name t --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw ${{ matrix.image }}
-          for i in $(seq 1 30); do docker exec t systemctl is-system-running 2>/dev/null | grep -qE "running|degraded" && break; sleep 2; done
-          docker exec t systemctl is-system-running || true
-          docker exec t cat /etc/os-release | head -2
-          docker cp pkgs/. t:/root/pkgs
-          docker cp packaging/tools/smoke-test.js t:/root/smoke-test.js
+          docker run -d --name dcimt --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw ${{ matrix.image }}
+          for i in $(seq 1 30); do docker exec dcimt systemctl is-system-running 2>/dev/null | grep -qE "running|degraded" && break; sleep 2; done
+          docker exec dcimt systemctl is-system-running || true
+          docker exec dcimt cat /etc/os-release | head -2
+          docker cp pkgs/. dcimt:/root/pkgs
+          docker cp packaging/tools/smoke-test.js dcimt:/root/smoke-test.js
       - name: Install the RPM (dnf resolves dependencies)
-        run: docker exec t bash -c 'dnf install -y /root/pkgs/dcim-*.rpm 2>&1 | tail -15'
+        run: docker exec dcimt bash -c 'dnf install -y /root/pkgs/dcim-*.rpm 2>&1 | tail -15'
       - name: dcim-setup with the embedded database
-        run: docker exec t bash -c 'dcim-setup --mode install --yes --embedded-db --port 8974 --admin-user ciadmin --admin-password "CiAdmin#Pass123"'
+        run: docker exec dcimt bash -c 'dcim-setup --mode install --yes --embedded-db --port 8974 --admin-user ciadmin --admin-password "CiAdmin#Pass123"'
       - name: Diagnostics
         if: always()
-        run: docker exec t bash -c 'systemctl status dcim dcim-mariadb --no-pager | head -30; journalctl -u dcim -u dcim-mariadb --no-pager -n 80' || true
+        run: docker exec dcimt bash -c 'systemctl status dcim dcim-mariadb --no-pager | head -30; journalctl -u dcim -u dcim-mariadb --no-pager -n 80' || true
       - name: Services enabled for boot + customer smoke test
         run: |
-          docker exec t bash -c 'systemctl is-enabled dcim dcim-mariadb && systemctl is-active dcim dcim-mariadb'
-          docker exec t /usr/share/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
+          docker exec dcimt bash -c 'systemctl is-enabled dcim dcim-mariadb && systemctl is-active dcim dcim-mariadb'
+          docker exec dcimt /usr/share/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
       - name: Kill app and database - systemd must recover them
         run: |
-          docker exec t bash -c 'pkill -9 -f "node server.js"; pkill -9 -x mariadbd; sleep 15; systemctl is-active dcim dcim-mariadb'
-          docker exec t /usr/share/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
+          docker exec dcimt bash -c 'pkill -9 -f "[n]ode server.js"; pkill -9 -x mariadbd; sleep 5; systemctl is-active dcim dcim-mariadb'
+          docker exec dcimt /usr/share/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
       - name: Reboot (restart the machine) - services must auto-start
         run: |
-          docker restart t
-          for i in $(seq 1 40); do docker exec t systemctl is-system-running 2>/dev/null | grep -qE "running|degraded" && break; sleep 2; done
+          docker restart dcimt
+          for i in $(seq 1 40); do docker exec dcimt systemctl is-system-running 2>/dev/null | grep -qE "running|degraded" && break; sleep 2; done
           sleep 20
-          docker exec t bash -c 'systemctl is-active dcim dcim-mariadb'
-          docker exec t /usr/share/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
+          docker exec dcimt bash -c 'systemctl is-active dcim dcim-mariadb'
+          docker exec dcimt /usr/share/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
       - name: Upgrade, then repair
         run: |
-          docker exec t bash -c 'dcim-upgrade --yes 2>&1 | tail -8; sleep 5; dcim-repair --yes 2>&1 | tail -8; sleep 5'
-          docker exec t /usr/share/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
+          docker exec dcimt bash -c 'dcim-upgrade --yes 2>&1 | tail -8; sleep 5; dcim-repair --yes 2>&1 | tail -8; sleep 5'
+          docker exec dcimt /usr/share/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
       - name: Remove the package - nothing may be left running
         run: |
-          docker exec t bash -c 'dnf remove -y dcim 2>&1 | tail -4; sleep 3; systemctl is-active dcim dcim-mariadb || true; pgrep -fa "node server.js|mariadbd" || echo "no leftover processes"'
+          docker exec dcimt bash -c 'dnf remove -y dcim 2>&1 | tail -4; sleep 3; systemctl is-active dcim dcim-mariadb || true; pgrep -fa "node server.js|mariadbd" || echo "no leftover processes"'
 
   test-deb-ubuntu:
     needs: build
@@ -112,7 +112,7 @@ jobs:
           /usr/share/dcim/runtime/node/bin/node packaging/tools/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
       - name: Kill app and database - systemd must recover them
         run: |
-          sudo pkill -9 -f "node server.js" || true; sudo pkill -9 -x mariadbd || true; sleep 15
+          sudo pkill -9 -f "[n]ode server.js" || true; sudo pkill -9 -x mariadbd || true; sleep 15
           systemctl is-active dcim dcim-mariadb
           /usr/share/dcim/runtime/node/bin/node packaging/tools/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
       - name: Upgrade, then repair
