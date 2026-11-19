@@ -15,7 +15,7 @@ URL="https://archive.mariadb.org/mariadb-${MARIADB_VERSION}/bintar-linux-systemd
 rm -rf "$OUT_DIR/mariadb"
 mkdir -p "$OUT_DIR"
 echo "[fetch-mariadb-runtime] downloading $URL"
-curl -fsSL "$URL" -o "/tmp/${DIST}.tar.gz" || {
+curl -fsSL --retry 6 --retry-all-errors --retry-delay 5 --connect-timeout 30 "$URL" -o "/tmp/${DIST}.tar.gz" || {
   echo "[fetch-mariadb-runtime] ERROR: could not download $URL" >&2
   echo "[fetch-mariadb-runtime] MariaDB may have moved/retired this version - check https://archive.mariadb.org/ for the current bintar-linux-systemd-x86_64 path and set MARIADB_VERSION accordingly." >&2
   exit 1
