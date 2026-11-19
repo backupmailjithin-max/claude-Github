@@ -40,6 +40,7 @@ ADMIN_USER=""
 ADMIN_PASSWORD=""
 CSP_MODE="enforce"
 AUDIT_RETENTION_DAYS="365"
+SAMPLE_DATA=0
 ASSUME_YES=0
 PURGE_DATA=0
 EMBEDDED_DB=0
@@ -79,6 +80,8 @@ Options:
   --admin-password PASS (install only) replace the seeded "admin" password on first install
   --csp-mode MODE       enforce (default) | report-only | off
   --audit-retention-days N  days of audit log to keep; 0 = forever (default: 365)
+  --sample-data         (install only) also create the demo sites, assets and operator accounts for an evaluation
+                        (default: off - a customer install starts empty with just the administrator account)
   --yes                 non-interactive, assume defaults / confirmations
   --purge-data          (uninstall only) also remove the database and data files
   -h, --help            show this help
@@ -101,6 +104,7 @@ while [ $# -gt 0 ]; do
     --admin-password) ADMIN_PASSWORD="$2"; shift 2 ;;
     --csp-mode) CSP_MODE="$2"; shift 2 ;;
     --audit-retention-days) AUDIT_RETENTION_DAYS="$2"; shift 2 ;;
+    --sample-data) SAMPLE_DATA=1; shift ;;
     --yes) ASSUME_YES=1; shift ;;
     --purge-data) PURGE_DATA=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -334,6 +338,7 @@ JWT_SECRET=$jwt_secret
 CORS_ORIGIN=$CORS_ORIGIN
 CSP_MODE=$CSP_MODE
 AUDIT_RETENTION_DAYS=$AUDIT_RETENTION_DAYS
+SEED_SAMPLE_DATA=$SAMPLE_DATA
 NODE_ENV=production
 INTEGRITY_MODE=enforce
 EOF
@@ -747,6 +752,7 @@ reload_env_for_summary() {
   DB_PASSWORD="$(sed -n 's/^DB_PASSWORD=//p' "$ENV_FILE")"
   v="$(sed -n 's/^CSP_MODE=//p' "$ENV_FILE")"; [ -n "$v" ] && CSP_MODE="$v"
   v="$(sed -n 's/^AUDIT_RETENTION_DAYS=//p' "$ENV_FILE")"; [ -n "$v" ] && AUDIT_RETENTION_DAYS="$v"
+  v="$(sed -n 's/^SEED_SAMPLE_DATA=//p' "$ENV_FILE")"; [ -n "$v" ] && SAMPLE_DATA="$v"
   # NOTE: must not be the last statement above as a bare `[ ... ] && X=1` (or
   # an if/fi with no else) - under `set -e`, a function's exit status is that
   # of its last command, and this function is always called as a bare
@@ -778,7 +784,11 @@ print_summary() {
     db_desc="External MySQL/MariaDB"
   fi
 
-  if [ -n "$ADMIN_USER" ] || [ -n "$ADMIN_PASSWORD" ]; then
+  if [ "${MODE:-install}" != "install" ]; then
+    # Upgrade / Repair keep the existing accounts: never claim the shipped admin/admin login is in use.
+    admin_user_shown="(unchanged - your existing administrator account)"
+    admin_pass_shown="(unchanged)"
+  elif [ -n "$ADMIN_USER" ] || [ -n "$ADMIN_PASSWORD" ]; then
     admin_user_shown="${ADMIN_USER:-admin}"
     admin_pass_shown="(the password you provided)"
   else

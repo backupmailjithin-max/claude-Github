@@ -99,7 +99,7 @@ function stopService(name) {
 
 const STRING_OPTS = new Set(['Mode', 'InstallDir', 'DbHost', 'DbUser', 'DbPassword', 'DbName', 'CorsOrigin', 'AdminUser', 'AdminPassword', 'CspMode']);
 const INT_OPTS = new Set(['Port', 'DbPort', 'EmbeddedDbPort', 'AuditRetentionDays']);
-const SWITCH_OPTS = new Set(['EmbeddedDb', 'Yes']);
+const SWITCH_OPTS = new Set(['EmbeddedDb', 'SampleData', 'Yes']);
 
 function defaultOpts() {
   return {
@@ -118,6 +118,7 @@ function defaultOpts() {
     AdminPassword: '',
     CspMode: 'enforce',
     AuditRetentionDays: 365,
+    SampleData: false,
     Yes: false,
   };
 }
@@ -288,6 +289,7 @@ function writeEnvFile(opts) {
     `CORS_ORIGIN=${opts.CorsOrigin}`,
     `CSP_MODE=${opts.CspMode}`,
     `AUDIT_RETENTION_DAYS=${opts.AuditRetentionDays}`,
+    `SEED_SAMPLE_DATA=${opts.SampleData ? 1 : 0}`,
     'NODE_ENV=production',
     'INTEGRITY_MODE=enforce',
     '',
@@ -822,11 +824,16 @@ function showSummary(opts) {
     opts.DbPassword = get('DB_PASSWORD');
     if ((v = get('CSP_MODE'))) opts.CspMode = v;
     if ((v = get('AUDIT_RETENTION_DAYS'))) opts.AuditRetentionDays = parseInt(v, 10);
+    if ((v = get('SEED_SAMPLE_DATA'))) opts.SampleData = v === '1';
   }
   const embeddedDb = opts.EmbeddedDb || fs.existsSync(path.join(opts.InstallDir, 'mariadb', 'data'));
   const dbDesc = embeddedDb ? 'Embedded (bundled private MariaDB)' : 'External MySQL/MariaDB';
   let adminUserShown, adminPassShown;
-  if (opts.AdminUser || opts.AdminPassword) {
+  if (opts.Mode && opts.Mode !== 'install') {
+    // Upgrade / Repair keep the existing accounts: never claim the shipped admin/admin login is in use.
+    adminUserShown = '(unchanged - your existing administrator account)';
+    adminPassShown = '(unchanged)';
+  } else if (opts.AdminUser || opts.AdminPassword) {
     adminUserShown = opts.AdminUser || 'admin';
     adminPassShown = '(the password you provided)';
   } else {

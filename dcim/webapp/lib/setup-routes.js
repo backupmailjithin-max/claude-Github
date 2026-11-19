@@ -503,7 +503,8 @@ module.exports = function registerSetupRoutes(app, deps) {
     } catch (e) { checks.monitoring = { ok: false, error: e.message }; }
 
     const smtp = await readSmtpSettings().catch(() => null);
-    checks.smtp = { ok: !!smtp, configured: !!smtp };
+    // E-mail is optional: an unconfigured SMTP server is not a fault, so it must not turn the overall status into 503 "degraded" (monitors would alarm on a healthy install).
+    checks.smtp = { ok: true, configured: !!smtp, optional: true };
 
     const overallOk = Object.values(checks).every((c) => c.ok !== false);
     res.status(overallOk ? 200 : 503).json({ status: overallOk ? 'ok' : 'degraded', version: APP_VERSION, checks });

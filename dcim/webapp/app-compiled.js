@@ -13242,7 +13242,7 @@ function AssetLifecycleHub({ view, onViewChange, assets, canEdit, onAction, page
 }
 // ==== DESTINATION ACCEPTANCE:END ====
 
-function AssetLifecycleActionModal({ asset, allowedSites, zones, racks, rackTypes, onClose, onSaved, initialAction }) {
+function AssetLifecycleActionModal({ asset, allowedSites, zones, racks, assets, rackTypes, onClose, onSaved, initialAction }) {
     const [action, setAction] = useState(initialAction || (asset.lifecycleStatus === "Transferred" ? "Receive & Install" : asset.lifecycleStatus === "In Store" ? "Install from Store" : asset.lifecycleStatus === "Transfer Refused" ? "Store" : "Store"));
     const [destinations, setDestinations] = useState([]);
     const [destinationsLoading, setDestinationsLoading] = useState(false);
@@ -13269,7 +13269,20 @@ function AssetLifecycleActionModal({ asset, allowedSites, zones, racks, rackType
     const externalMode = action === "Move Out / External";
     const destSite = receiveMode ? asset.site : form.destinationSite;
     const destZones = (zones || []).filter(z => z.site === destSite);
-    const destRacks = (racks || []).filter(r => r.site === destSite && (!form.destinationZone || r.zone === form.destinationZone));
+    // Destination racks: ONLY racks of the selected zone (tolerant match: "AZ-1" = "az 1"). Racks come from the racks table plus
+    // every rack that already holds an asset, so racks that exist only through installed devices are offered too. Nothing is
+    // listed until a zone is chosen, so racks of other zones never appear.
+    const ntz = v => String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const destRacks = (() => {
+        if (!form.destinationZone) return [];
+        const zk = ntz(form.destinationZone), by = new Map();
+        (racks || []).filter(r => r.site === destSite && String(r.rackNo || "").trim() && ntz(r.zone || "AZ-1") === zk)
+            .forEach(r => by.set(ntz(r.rackNo), { ...r, zone: form.destinationZone }));
+        (assets || []).filter(a => a.site === destSite && String(a.rackNo || "").trim() && ntz(a.zone || "AZ-1") === zk && a.id !== asset.id)
+            .forEach(a => { const k = ntz(a.rackNo); if (!by.has(k)) by.set(k, { id: "asset-rack-" + k, site: destSite, zone: form.destinationZone, rackNo: String(a.rackNo).trim(), rackType: a.rackType || "" }); else if (!by.get(k).rackType && a.rackType) by.get(k).rackType = a.rackType; });
+        return [...by.values()].sort((a, b) => String(a.rackNo).localeCompare(String(b.rackNo), undefined, { numeric: true }));
+    })();
+    const [addingRack, setAddingRack] = useState(false);
     const selectedRack = destRacks.find(r => String(r.rackNo || '').trim().toUpperCase() === String(form.destinationRackNo || '').trim().toUpperCase()) || null;
     const assetHeightUnits = parseHeightU(asset.height);
     const sizePresets = RACK_SIZE_PRESETS;
@@ -13396,7 +13409,7 @@ function AssetLifecycleActionModal({ asset, allowedSites, zones, racks, rackType
     };
     const title = action === "Accept & Move To Store" ? "Accept Transfer & Move To Store" : action === "Store" ? "Move Asset to Store" : action === "Move Out / External" ? "Move Asset Out of DC" : action === "Receive & Install" ? (asset.lifecycleStatus === "Transferred" ? "Accept Transfer & Install Asset" : "Receive & Install Asset") : action === "Install from Store" ? "Install Asset from Store" : action === "Refuse / Return to Source" ? "Refuse Transfer / Return to Source" : action === "Decommission" ? "Decommission Asset" : action === "RMA / OEM" ? "Send Asset to RMA / OEM" : "Transfer Asset to Another DC";
     const sourceLocation = [asset.lastKnownSite, asset.lastKnownZone, asset.lastKnownRack, asset.lastKnownPosition].filter(Boolean).join(" / ") || "—";
-    const newRackMode = receiveMode && !selectedRack;
+    const newRackMode = receiveMode && !selectedRack && !!String(form.destinationRackNo || "").trim();
     return React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(14,18,28,.4)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 80 }, onClick: onClose },
         React.createElement("div", { onClick: e => e.stopPropagation(), className: "neu-card", style: { width: 680, maxWidth: "94vw", maxHeight: "90vh", overflowY: "auto", padding: 24 } },
             React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 } },
@@ -13430,15 +13443,22 @@ function AssetLifecycleActionModal({ asset, allowedSites, zones, racks, rackType
                     React.createElement(Field, { label: "Destination DC" },
                         React.createElement("input", { value: asset.site, readOnly: true, className: "neu-input", style: { background: "#F8FAFC" } })),
                     React.createElement(Field, { label: "Destination zone" },
-                        React.createElement(ThemedSelect, { value: form.destinationZone, onChange: e => { set("destinationZone", e.target.value); set("destinationRackNo", ""); set("destinationRackType", ""); }, className: "neu-input" },
+                        React.createElement(ThemedSelect, { value: form.destinationZone, onChange: e => { set("destinationZone", e.target.value); set("destinationRackNo", ""); set("destinationRackType", ""); setAddingRack(false); }, className: "neu-input" },
                             React.createElement("option", { value: "" }, "Select zone"),
                             destZones.map(z => React.createElement("option", { key: z.id || z.zoneName, value: z.zoneName }, z.zoneName)))),
                     React.createElement(Field, { label: "Asset height (locked)" },
                         React.createElement("input", { value: asset.height || "", readOnly: true, className: "neu-input", style: { background: "#F8FAFC", fontFamily: "'JetBrains Mono'", fontWeight: 800 }, placeholder: "Height not available" }),
                         React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#64748B", marginTop: 4 } }, "Fetched from the source asset. It cannot be changed during transfer.")),
                     React.createElement(Field, { label: "Destination rack" },
-                        React.createElement("input", { list: "lifecycle-rack-list", value: form.destinationRackNo, onChange: e => set("destinationRackNo", e.target.value), className: "neu-input", placeholder: "G07 or new rack number" }),
-                        React.createElement("datalist", { id: "lifecycle-rack-list" }, destRacks.map(r => React.createElement("option", { key: r.id || r.rackNo, value: r.rackNo }, r.rackType || "Unassigned"))),
+                        (!form.destinationZone) ? React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748B", padding: "9px 2px" } }, "Select the destination zone first \u2014 only that zone's racks are listed.") :
+                        (!addingRack && destRacks.length > 0) ? React.createElement(ThemedSelect, { value: selectedRack ? selectedRack.rackNo : "", onChange: e => { const v = e.target.value; if (v === "__new__") { setAddingRack(true); set("destinationRackNo", ""); set("destinationRackType", ""); } else set("destinationRackNo", v); }, className: "neu-input" },
+                            React.createElement("option", { value: "" }, "Select rack in " + form.destinationZone),
+                            destRacks.map(r => React.createElement("option", { key: r.id || r.rackNo, value: r.rackNo }, r.rackNo + (r.rackType ? " \u00B7 " + r.rackType : ""))),
+                            React.createElement("option", { value: "__new__" }, "+ New rack")) :
+                        React.createElement("div", null, React.createElement("div", { style: { display: "flex", gap: 6 } },
+                            React.createElement("input", { value: form.destinationRackNo, onChange: e => set("destinationRackNo", e.target.value), className: "neu-input", placeholder: "New rack number, e.g. G07" }),
+                            destRacks.length > 0 && React.createElement("button", { type: "button", onClick: () => { setAddingRack(false); set("destinationRackNo", ""); }, className: "neu-btn", style: { padding: "0 10px", fontFamily: "Inter", fontSize: 11, whiteSpace: "nowrap" } }, "Pick rack")),
+                            destRacks.length === 0 && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#B45309", marginTop: 4 } }, "No racks exist in " + form.destinationZone + " yet \u2014 type a new rack number.")),
                         selectedRack && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#047857", marginTop: 4 } },
                             "Existing rack: ",
                             selectedRack.rackType || "Unassigned",
@@ -18691,7 +18711,7 @@ function DataCenterDashboard() {
         pwdModalOpen && React.createElement(PasswordChangeModal, { onClose: () => setPwdModalOpen(false), isAdmin: false, targetUser: null }),
         reportOpen && React.createElement(ReportModal, { assets: filteredAssets, issues: siteRestrictedIssues, activities: siteRestrictedActivities, movements: siteRestrictedMovements, onClose: () => setReportOpen(false) }),
         summaryModalOpen && React.createElement(OverallSummaryModal, { assets: siteRestrictedAssets, rackComponents: siteRestrictedRackComponents, issues: siteRestrictedIssues, activities: siteRestrictedActivities, movements: siteRestrictedMovements, racks: siteRestrictedRacks, zones: siteRestrictedZones, allowedSites: allowedSites, pduSummary: pduSummary, onClose: () => setSummaryModalOpen(false) }),
-        lifecycleActionAsset && React.createElement(AssetLifecycleActionModal, { key: (lifecycleActionAsset.id || "") + "|" + (lifecycleActionPreset || ""), asset: lifecycleActionAsset, initialAction: lifecycleActionPreset, allowedSites: allowedSites, zones: siteRestrictedZones, racks: siteRestrictedRacks, rackTypes: rackTypes, onClose: () => { setLifecycleActionAsset(null); setLifecycleActionPreset(null); }, onSaved: async () => { setLifecycleActionAsset(null); setLifecycleActionPreset(null); setSelectedAssetIds(new Set()); await loadAll(); showToast("success", "Asset lifecycle updated"); } }),
+        lifecycleActionAsset && React.createElement(AssetLifecycleActionModal, { key: (lifecycleActionAsset.id || "") + "|" + (lifecycleActionPreset || ""), asset: lifecycleActionAsset, initialAction: lifecycleActionPreset, allowedSites: allowedSites, zones: siteRestrictedZones, racks: siteRestrictedRacks, assets: siteRestrictedAssets, rackTypes: rackTypes, onClose: () => { setLifecycleActionAsset(null); setLifecycleActionPreset(null); }, onSaved: async () => { setLifecycleActionAsset(null); setLifecycleActionPreset(null); setSelectedAssetIds(new Set()); await loadAll(); showToast("success", "Asset lifecycle updated"); } }),
         manageDCModalOpen && React.createElement(ManageDCCapacityModal, { onClose: () => setManageDCModalOpen(false), canEdit: canEdit, isAdmin: isAdmin, canManageLocations: isGlobalAdmin, currentSite: manageDCSite || capacitySite, onAddLocation: () => setLocationModalOpen(true), onDeleteLocation: () => setDeleteLocationModalOpen(true), onAddZone: () => setZoneModalOpen(true), onAddRack: () => setRackAddModalOpen(true) }),
         rackModal && React.createElement(RackLayoutModal, { rack: rackModal, assets: siteRestrictedAssets, rackComponents: siteRestrictedRackComponents, racks: siteRestrictedRacks, zones: siteRestrictedZones, onClose: () => setRackModal(null), onViewInventory: viewRackInInventory }),
         rackLayoutPicker && React.createElement(RackLayoutPickerModal, { allowedSites: allowedSites, zones: siteRestrictedZones, assets: siteRestrictedAssets, racks: siteRestrictedRacks, presetSite: rackLayoutPicker.presetSite, onClose: () => setRackLayoutPicker(null), onOpen: ({ site, zone }) => { setRackLayoutPicker(null); openRackModal({ site, zone, rackNo: "" }); } }),

@@ -83,6 +83,7 @@ Key flags:
 | `--admin-user`, `--admin-password` | Replace the seeded `admin`/`admin` account on first install | seeded `admin`/`admin` |
 | `--csp-mode` | `enforce` \| `report-only` \| `off` | `report-only` |
 | `--audit-retention-days` | Days of audit log to keep (`0` = forever) | `365` |
+| `--sample-data` | Also create demo sites, assets and operator accounts (for evaluation only). Without it a new install starts empty with just your administrator account | off |
 | `--yes` | Non-interactive; assumes defaults/confirmations | off |
 
 **Database Strategy - pick one:**
@@ -178,3 +179,24 @@ Invoke-RestMethod http://127.0.0.1:8974/api/health
 ```
 Expect `{"status":"ok", ...}`. If not, see the **Administrator Guide**'s
 troubleshooting section or generate a Support Bundle (same guide).
+
+## 8. Uninstalling
+
+**Linux**
+```bash
+# .deb (Ubuntu/Debian)             # .rpm (RHEL/Rocky/AlmaLinux)
+sudo apt remove dcim               sudo dnf remove dcim
+
+# Appliance (.run) or any install - also removes the app and, with --purge-data, all data:
+sudo /opt/dcim/cli/uninstall.sh [--purge-data]
+```
+Removing the package stops and disables the `dcim` service and the embedded
+database service (`dcim-mariadb`) but **keeps your data** in `/opt/dcim`
+(uploads, backups, the embedded database). Delete `/opt/dcim` yourself to
+remove everything, or run `uninstall.sh --purge-data`, which asks for
+confirmation. An external MySQL/MariaDB database is never touched.
+
+**Windows:** run `node packaging\windows\uninstall.js -InstallDir C:\DCIM` from an elevated prompt (Administrator). It removes the `DCIM` service (and `DCIMMariaDB` if you used the embedded database); add `-PurgeData` to delete the install folder and data as well. An external database is never touched.
+
+Uninstalling resets the 10-day trial for a fresh install - keep your activation
+code so you can activate again.

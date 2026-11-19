@@ -200,9 +200,14 @@ async function loadEvents(pool, sites, firstKey, lastKey) {
     [...sites, from, toExcl]);
   const [visits] = await pool.query(
     `SELECT site, status, visit_date FROM visitor_requests WHERE site IN (${P}) AND visit_date >= ? AND visit_date < ? AND status <> 'Rejected'`, [...sites, from, toExcl]);
+  // A device counts as "installed" in the month it joined the managed inventory: the LATER of its installation date and the day it was
+  // registered here. (Before, only the installation date counted, so a device entered by hand with the date it was really racked -
+  // last year, or earlier this month than its entry - never showed as installed in the month it was added, although "Installed devices"
+  // already included it.) Installing from the store keeps working: the install date is later than the registration.
   const [added] = await pool.query(
-    `SELECT site, COALESCE(installation_date, DATE(created_at)) AS d FROM assets WHERE site IN (${P}) AND lifecycle_status = 'Active'
-       AND COALESCE(installation_date, DATE(created_at)) >= ? AND COALESCE(installation_date, DATE(created_at)) < ?`, [...sites, from, toExcl]);
+    `SELECT site, d FROM (SELECT site, GREATEST(COALESCE(installation_date, DATE(created_at)), COALESCE(DATE(created_at), installation_date)) AS d
+                           FROM assets WHERE site IN (${P}) AND lifecycle_status = 'Active') t
+      WHERE d >= ? AND d < ?`, [...sites, from, toExcl]);
   const [removed] = await pool.query(
     `SELECT from_site AS site, to_site, DATE(movement_date) AS d FROM asset_movements WHERE from_site IN (${P}) AND (to_site IS NULL OR to_site = '' OR to_site <> from_site)
        AND movement_date >= ? AND movement_date < ?`, [...sites, from, toExcl]).catch(() => [[]]);
