@@ -115,7 +115,8 @@ jobs:
     container: fedora:latest
     steps:
       - name: Install build tools
-        run: dnf install -y rpm-build git tar which nodejs curl xz gzip
+        # libxcrypt-compat + the libs below are needed only so the staging step can run the bundled mariadbd --version self-check here.
+        run: dnf install -y rpm-build git tar which nodejs curl xz gzip libxcrypt-compat libcap libgcrypt libgpg-error lz4-libs xz-libs libzstd systemd-libs libstdc++
 
       - uses: actions/checkout@v4
 

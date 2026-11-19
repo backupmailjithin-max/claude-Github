@@ -46,5 +46,9 @@ for d in "$OUT_DIR"/mariadb/share/*/; do
   esac
 done
 
-"$OUT_DIR/mariadb/bin/mariadbd" --version
+if ! "$OUT_DIR/mariadb/bin/mariadbd" --version; then
+  echo "[fetch-mariadb-runtime] the staged mariadbd does not start on this build host. Missing libraries:" >&2
+  ldd "$OUT_DIR/mariadb/bin/mariadbd" 2>&1 | grep "not found" >&2 || true
+  exit 1
+fi
 echo "[fetch-mariadb-runtime] staged bundled MariaDB at $OUT_DIR/mariadb"
