@@ -91,8 +91,7 @@ jobs:
         run: |
           docker restart dcimt
           for i in $(seq 1 40); do docker exec dcimt systemctl is-system-running 2>/dev/null | grep -qE "running|degraded" && break; sleep 2; done
-          sleep 20
-          docker exec dcimt bash -c 'systemctl is-active dcim dcim-mariadb'
+          docker exec dcimt bash -c 'for i in $(seq 1 60); do systemctl is-active dcim dcim-mariadb >/dev/null 2>&1 && break; sleep 2; done; systemctl is-active dcim dcim-mariadb'
           docker exec dcimt /usr/share/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
       - name: Upgrade, then repair
         run: |
@@ -101,6 +100,9 @@ jobs:
       - name: Remove the package - nothing may be left running
         run: |
           docker exec dcimt bash -c 'dnf remove -y dcim 2>&1 | tail -4; sleep 3; systemctl is-active dcim dcim-mariadb || true; pgrep -fa "node server.js|mariadbd" || echo "no leftover processes"'
+      - name: Final diagnostics (only on failure)
+        if: failure()
+        run: docker exec dcimt bash -c 'systemctl status dcim dcim-mariadb --no-pager | head -40; journalctl -u dcim -u dcim-mariadb --no-pager -n 150; systemctl list-jobs; ss -ltnp' || true
 
   test-deb-ubuntu:
     needs: build
