@@ -113,9 +113,14 @@ test('event figures for a past month are rebuilt from dated records', async () =
   assert.strictEqual(rep.power.rows.find((r) => /^Peak daily load/.test(r.label)).cur, 8.4);
   assert.strictEqual(rep.power.rows.find((r) => /80% of rating/.test(r.label)).cur, 1);
   assert.strictEqual(rep.power.feedsHot[0].pct, 84);
-  // stock figures were never captured for these months -> shown as unknown, not invented
-  assert.strictEqual(rep.assets.rows.find((r) => r.label === 'Installed devices').cur, null);
-  assert.strictEqual(rep.meta.stockMissing, true);
+  // no snapshot was ever saved for these months -> stock figures are ESTIMATED from dated records and flagged, never silent
+  assert.strictEqual(rep.meta.curEstimated, true);
+  assert.strictEqual(rep.meta.prevEstimated, true);
+  assert.strictEqual(rep.meta.stockMissing, false);
+  const dev = rep.assets.rows.find((r) => r.label === 'Installed devices');
+  assert.ok(dev.cur != null && dev.prev != null && dev.approx && dev.prevEst);
+  // what cannot be rebuilt stays unknown
+  assert.strictEqual(rep.assets.rows.find((r) => r.label === 'Assets in store').cur, null);
 });
 
 test('stock figures come from snapshots and changes are computed against last month', async () => {
@@ -157,7 +162,9 @@ test('multi-location totals and a location table; one missing snapshot hides the
   assert.deepStrictEqual(Object.keys(rep.zones.reduce((o, z) => ({ ...o, [z.zone]: 1 }), {})), ['Chennai \u00B7 AZ-1', 'Pune \u00B7 AZ-1']);
   const half = fakePool({ snaps: [{ site: 'Chennai', month: '2026-10', data: mk(5) }] });
   rep = await data.buildReport(half, { sites: ['Chennai', 'Pune'], month: '2026-10', now: new Date(2026, 10, 5) });
-  assert.strictEqual(rep.assets.rows[0].cur, null);
+  // a location without its snapshot: the mixed total is not used; the month is estimated for every location instead
+  assert.strictEqual(rep.meta.curEstimated, true);
+  assert.notStrictEqual(rep.assets.rows[0].cur, 12);
 });
 
 test('PDF writer produces a structurally valid file with correct xref offsets', () => {
@@ -195,6 +202,6 @@ test('PDF shows the no-PDU message and first-report note, and mail text uses the
   const now = new Date(2026, 10, 5);
   const rep = await data.buildReport(fakePool({ pdus: [], readings: [] }), { sites: ['Chennai'], month: '2026-11', now });
   assert.strictEqual(rep.power.configured, false);
-  assert.ok(rep.meta.firstRecord);
+  assert.strictEqual(rep.meta.prevEstimated, true); // October has no snapshot -> estimated, flagged in the PDF
   assert.ok(render(rep, {}).length > 4000);
 });

@@ -980,6 +980,9 @@ async function initDB() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     `);
     try { await conn.query('ALTER TABLE material_movements ADD COLUMN ticket_no VARCHAR(50)'); } catch (e) { /* already exists */ }
+    // Contact mobile number and the source (Inward) / destination (Outward) address of a material movement.
+    try { await conn.query('ALTER TABLE material_movements ADD COLUMN contact_mobile VARCHAR(30) NULL'); } catch (e) { /* already exists */ }
+    try { await conn.query('ALTER TABLE material_movements ADD COLUMN party_address TEXT NULL'); } catch (e) { /* already exists */ }
     try {
       await conn.query("ALTER TABLE material_movements ADD COLUMN status ENUM('Pending Approval','Approved','Rejected','Received at Site','Not Received','Outward Complete','Cancelled') NOT NULL DEFAULT 'Pending Approval'");
       await conn.query("ALTER TABLE material_movements ADD COLUMN approver_name VARCHAR(150) NULL");
@@ -1723,7 +1726,7 @@ async function initDB() {
     await relaxLegacyRequiredColumns(conn, 'asset_movements', new Set(['id', 'asset_id', 'serial_number', 'movement_type', 'from_site', 'from_zone', 'from_rack_no', 'from_position', 'to_site', 'to_zone', 'to_rack_no', 'to_position', 'movement_date', 'reason', 'reference_no', 'performed_by', 'remarks', 'created_at']));
     await relaxLegacyRequiredColumns(conn, 'issues', new Set(['id', 'ticket_no', 'asset_id', 'asset_type', 'site', 'zone', 'rack_no', 'u_position', 'location_detail', 'title', 'description', 'severity', 'part_required', 'part_name', 'reported_date', 'diagnosed_date', 'received_date', 'scheduled_date', 'completed_date', 'moved_to_store_date', 'returned_to_oem_date', 'notes', 'created_at']));
     await relaxLegacyRequiredColumns(conn, 'dc_activities', new Set(['id', 'site', 'zone', 'hardware_type', 'activity_type', 'description', 'start_date', 'completion_date', 'created_by', 'created_at']));
-    await relaxLegacyRequiredColumns(conn, 'material_movements', new Set(['id', 'ticket_no', 'movement_type', 'site', 'item_name', 'description', 'quantity', 'unit', 'receiver_name', 'sender_name', 'dc_invoice_no', 'dc_invoice_file', 'dc_invoice_original_name', 'movement_date', 'remarks', 'status', 'approver_name', 'approved_at', 'reject_reason', 'created_by', 'created_at']));
+    await relaxLegacyRequiredColumns(conn, 'material_movements', new Set(['id', 'ticket_no', 'movement_type', 'site', 'item_name', 'description', 'quantity', 'unit', 'receiver_name', 'sender_name', 'dc_invoice_no', 'dc_invoice_file', 'dc_invoice_original_name', 'movement_date', 'remarks', 'contact_mobile', 'party_address', 'status', 'approver_name', 'approved_at', 'reject_reason', 'created_by', 'created_at']));
     await relaxLegacyRequiredColumns(conn, 'locations', new Set(['id', 'name', 'status', 'created_by', 'created_at', 'archived_at', 'archived_by']));
     await relaxLegacyRequiredColumns(conn, 'rack_types', new Set(['id', 'name', 'created_by', 'created_at']));
     await relaxLegacyRequiredColumns(conn, 'hardware_types', new Set(['id', 'name', 'created_by', 'created_at', 'category', 'default_height']));
@@ -8477,12 +8480,20 @@ function appendMovementRemark(existingRemarks, label, note) {
   const line = `[${label} ${new Date().toISOString().slice(0, 19).replace('T', ' ')}] ${trimmed}`;
   return existingRemarks ? `${existingRemarks}\n${line}` : line;
 }
+// Optional contact mobile number and source (Inward) / destination (Outward) address of a material movement.
+function movementContactFields(m) {
+  const mobile = String((m && m.contactMobile) || '').trim();
+  const address = String((m && m.partyAddress) || '').trim();
+  if (mobile && !/^\+?[0-9][0-9 ()\-]{5,18}[0-9]$/.test(mobile)) { const e = new Error('Mobile No must be 7 to 20 digits (may start with + and contain spaces, dashes or brackets)'); e.statusCode = 400; throw e; }
+  if (address.length > 500) { const e = new Error('Address is too long (500 characters at most)'); e.statusCode = 400; throw e; }
+  return { contactMobile: mobile || null, partyAddress: address || null };
+}
 function movementRowToJson(r) {
   const toDateStr = (v) => dateOnlyStr(v);
   return {
     id: r.id, ticketNo: r.ticket_no, movementType: r.movement_type, site: r.site,
     itemName: r.item_name, description: r.description, quantity: r.quantity, unit: r.unit,
-    receiverName: r.receiver_name, senderName: r.sender_name,
+    receiverName: r.receiver_name, senderName: r.sender_name, contactMobile: r.contact_mobile, partyAddress: r.party_address,
     dcInvoiceNo: r.dc_invoice_no, hasDocument: !!r.dc_invoice_file, documentName: r.dc_invoice_original_name,
     movementDate: toDateStr(r.movement_date), remarks: r.remarks,
     status: r.status, approverName: r.approver_name, approvedAt: r.approved_at, rejectReason: r.reject_reason,
@@ -8554,6 +8565,8 @@ app.post('/api/material-movements', authenticateToken, requireRole(['Admin', 'Op
     if (!allowed.includes(m.site)) return res.status(403).json({ error: 'Access denied for this site' });
     const id = genId('MAT');
     const movementDate = normalizeDateInput(m.movementDate) || localTodayStr();
+    let contactMobile, partyAddress;
+    try { ({ contactMobile, partyAddress } = movementContactFields(m)); } catch (e) { return res.status(400).json({ error: e.message }); }
     // Approval enabled: no ticket number yet - the request needs approval first (/approve below),
     // then a separate Generate Ticket step (/generate-ticket), same shape as Visitor Access.
     // Approval disabled (default): the movement is recorded straight away and its ticket is issued
@@ -8568,9 +8581,9 @@ app.post('/api/material-movements', authenticateToken, requireRole(['Admin', 'Op
         autoTicketNo = await generateTicketNoGeneric(m.movementType === 'Inward' ? 'INW' : 'OUT', 'material_movements');
       }
     await pool.query(
-      `INSERT INTO material_movements (id, movement_type, site, item_name, description, quantity, unit, receiver_name, sender_name, dc_invoice_no, movement_date, remarks, created_by, status, ticket_no)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [id, m.movementType, m.site, m.itemName, m.description || null, Math.max(1, parseInt(m.quantity, 10) || 1), m.unit || null, m.receiverName || null, m.senderName || null, m.dcInvoiceNo || null, movementDate, m.remarks || null, user.name || user.username, approvalOn ? 'Pending Approval' : 'Ticket Issued', autoTicketNo]
+      `INSERT INTO material_movements (id, movement_type, site, item_name, description, quantity, unit, receiver_name, sender_name, dc_invoice_no, movement_date, remarks, created_by, status, ticket_no, contact_mobile, party_address)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [id, m.movementType, m.site, m.itemName, m.description || null, Math.max(1, parseInt(m.quantity, 10) || 1), m.unit || null, m.receiverName || null, m.senderName || null, m.dcInvoiceNo || null, movementDate, m.remarks || null, user.name || user.username, approvalOn ? 'Pending Approval' : 'Ticket Issued', autoTicketNo, contactMobile, partyAddress]
     );
     } finally { if (releaseLock) releaseLock(); }
     const [rows] = await pool.query('SELECT * FROM material_movements WHERE id = ?', [id]);
@@ -8768,11 +8781,13 @@ app.patch('/api/material-movements/:id', authenticateToken, requireRole(['Admin'
     if (existing[0].status !== 'Pending Approval') return res.status(400).json({ error: `Only a request still "Pending Approval" can be edited (this one is "${existing[0].status}")` });
     if (!m.movementType || !MOVEMENT_TYPES.includes(m.movementType)) return res.status(400).json({ error: 'Movement type must be Inward or Outward' });
     if (!m.itemName || !String(m.itemName).trim()) return res.status(400).json({ error: 'Item name is required' });
+    let contactMobile, partyAddress;
+    try { ({ contactMobile, partyAddress } = movementContactFields(m)); } catch (e) { return res.status(400).json({ error: e.message }); }
     const movementDate = normalizeDateInput(m.movementDate);
     if (m.movementDate && !movementDate) return res.status(400).json({ error: 'Movement date is not a valid date' });
     await pool.query(
-      `UPDATE material_movements SET movement_type=?, site=?, item_name=?, description=?, quantity=?, unit=?, receiver_name=?, sender_name=?, dc_invoice_no=?, movement_date=?, remarks=? WHERE id=?`,
-      [m.movementType, m.site, m.itemName, m.description || null, Math.max(1, parseInt(m.quantity, 10) || 1), m.unit || null, m.receiverName || null, m.senderName || null, m.dcInvoiceNo || null, movementDate, m.remarks || null, req.params.id]
+      `UPDATE material_movements SET movement_type=?, site=?, item_name=?, description=?, quantity=?, unit=?, receiver_name=?, sender_name=?, dc_invoice_no=?, movement_date=?, remarks=?, contact_mobile=?, party_address=? WHERE id=?`,
+      [m.movementType, m.site, m.itemName, m.description || null, Math.max(1, parseInt(m.quantity, 10) || 1), m.unit || null, m.receiverName || null, m.senderName || null, m.dcInvoiceNo || null, movementDate, m.remarks || null, contactMobile, partyAddress, req.params.id]
     );
     res.json({ success: true });
   } catch (e) {

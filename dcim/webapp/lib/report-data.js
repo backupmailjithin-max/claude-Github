@@ -156,6 +156,51 @@ function powerState(rows) {
     ratedKw: +rows.reduce((n, p) => n + num(p.max_load_kw), 0).toFixed(2), racks: racks.size, redundant, highest };
 }
 
+// Estimated month-end position for a past month that has no saved snapshot (the daily snapshots only exist from the day the report
+// feature was installed). Rebuilt from dated records: a device counts from the LATER of its installation date and the day it was
+// registered; a rack from the day it was created. Devices moved out or removed since then are not in the records any more, so this
+// can undercount slightly - every figure taken from it is marked "est." in the report. Store stock, servers, firmware and power
+// cannot be rebuilt and stay "-".
+async function reconstructState(pool, sites, key) {
+  const end = monthEndExcl(key); // exclusive
+  const out = {};
+  for (const s of sites) out[s] = null;
+  if (!sites.length) return out;
+  const [racks] = await pool.query(`SELECT site, zone, rack_no, u_size, created_at FROM racks WHERE site IN (${qs(sites)})`, sites).catch(() => [[]]);
+  const [assets] = await pool.query(
+    `SELECT site, zone, rack_no, position, height, manufacturer, installation_date, created_at
+       FROM assets WHERE site IN (${qs(sites)}) AND COALESCE(lifecycle_status, 'Active') = 'Active'`, sites);
+  const [comps] = await pool.query(`SELECT site, zone, rack_no, position, height, created_at FROM rack_components WHERE site IN (${qs(sites)})`, sites).catch(() => [[]]);
+  const joined = (a) => { const i = dstr(a.installation_date), c = dstr(a.created_at); return i && c ? (i > c ? i : c) : (i || c || ''); };
+  const existed = (a) => { const d = joined(a); return !d || d < end; };
+  for (const site of sites) {
+    const rackMap = {};
+    for (const r of racks.filter((x) => x.site === site && x.rack_no && (!r_created(x) || r_created(x) < end))) {
+      rackMap[`${r.zone || 'AZ-1'}|${String(r.rack_no).trim().toUpperCase()}`] = { zone: r.zone || 'AZ-1', rack: String(r.rack_no).trim(), cap: num(r.u_size) || 42, used: 0 };
+    }
+    const act = assets.filter((a) => a.site === site && existed(a));
+    const feed = [...act, ...comps.filter((c) => c.site === site && existed(c))];
+    for (const a of feed) {
+      if (!a.rack_no) continue;
+      const k = `${a.zone || 'AZ-1'}|${String(a.rack_no).trim().toUpperCase()}`;
+      if (!rackMap[k]) rackMap[k] = { zone: a.zone || 'AZ-1', rack: String(a.rack_no).trim(), cap: 42, used: 0 };
+      if (parseU(a.position) != null) rackMap[k].used += parseHeight(a.height) || 1;
+    }
+    const rl = Object.values(rackMap);
+    rl.forEach((r) => { r.used = Math.min(r.used, r.cap); });
+    const zones = {};
+    for (const r of rl) { const z = zones[r.zone] || (zones[r.zone] = { used: 0, total: 0, racks: 0 }); z.used += r.used; z.total += r.cap; z.racks += 1; }
+    const make = {};
+    for (const a of act) { const m = makeLabel(a.manufacturer); make[m] = (make[m] || 0) + 1; }
+    out[site] = {
+      _estimated: true, devices: act.length, racks: rl.length, usedU: rl.reduce((n, r) => n + r.used, 0), totalU: rl.reduce((n, r) => n + r.cap, 0),
+      inStore: 0, make, zones, racksHot: [], servers: { total: 0, known: 0, online: 0, unreachable: 0 }, fw: { checked: 0, ok: 0 }, pendingTransfers: 0, power: null,
+    };
+  }
+  return out;
+}
+const r_created = (x) => dstr(x.created_at);
+
 async function ensureTable(pool) {
   await pool.query(`CREATE TABLE IF NOT EXISTS ${SNAP_TABLE} (
     site VARCHAR(50) NOT NULL, month CHAR(7) NOT NULL, data LONGTEXT, taken_at DATETIME NOT NULL,
@@ -286,6 +331,7 @@ function mergeState(snapByLoc, sites) {
   const parts = sites.map((s) => snapByLoc[s]);
   if (!parts.length || parts.some((p) => !p)) return null;
   const o = { devices: 0, racks: 0, usedU: 0, totalU: 0, inStore: 0, make: {}, zones: {}, racksHot: [], servers: { total: 0, known: 0, online: 0, unreachable: 0 }, fw: { checked: 0, ok: 0 }, pendingTransfers: 0, power: { pdus: 0, online: 0, totalKw: 0, ratedKw: 0, racks: 0, redundant: 0, highest: null }, hasPower: false, perSite: {} };
+  if (parts.every((p) => p._estimated)) o._estimated = true;
   sites.forEach((s, idx) => {
     const p = parts[idx]; o.perSite[s] = p;
     o.devices += p.devices; o.racks += p.racks; o.usedU += p.usedU; o.totalU += p.totalU; o.inStore += p.inStore; o.pendingTransfers += p.pendingTransfers || 0;
@@ -326,6 +372,12 @@ async function buildReport(pool, { sites, month, scopeLabel, now = new Date() })
   const ev = await loadEvents(pool, sites, keys[0], month);
   const E = {}; for (const k of keys) E[k] = monthEvents(ev, sites, k);
   const S = {}; for (const k of keys) S[k] = mergeState(snaps[k], sites);
+  // Past months with no saved snapshot: rebuild an estimate from dated records (marked "est.").
+  for (const k of keys) {
+    if (S[k] || k >= curKey || (k === month && !isCurrent)) continue;
+    const est = await reconstructState(pool, sites, k).catch(() => null);
+    if (est) S[k] = mergeState(est, sites);
+  }
   const cur = E[month], prv = E[prevKey];
   let sCur = S[month], approx = false;
   // First report: no month-end snapshot exists yet. Use the first position recorded just after the month and say so.
@@ -333,7 +385,13 @@ async function buildReport(pool, { sites, month, scopeLabel, now = new Date() })
     const nx = mergeState(snaps[nextKey], sites);
     if (nx && nx.takenAt && Number(nx.takenAt.slice(8, 10)) <= FALLBACK_DAYS) { sCur = nx; approx = true; S[month] = null; }
   }
+  if (!sCur && !isCurrent) { // no snapshot at all around that month: estimate it from dated records
+    const est = await reconstructState(pool, sites, month).catch(() => null);
+    const m = est ? mergeState(est, sites) : null;
+    if (m) { sCur = m; approx = true; S[month] = null; }
+  }
   const sPrv = S[prevKey];
+  const prevEst = !!(sPrv && sPrv._estimated);
   const multi = sites.length > 1;
 
   const rows = {};
@@ -345,14 +403,14 @@ async function buildReport(pool, { sites, month, scopeLabel, now = new Date() })
     const good = o.good == null ? null : o.good;
     const watch = !!o.watch && curV != null && curV > 0 && (prev == null || curV > prev);
     (rows[mod] || (rows[mod] = [])).push({ label: typeof label === 'function' ? label(sCur) : label, prev, cur: curV, delta, unit: o.unit || '', dec: o.dec || 0, good, kind: o.kind || 'event',
-      series: exactSeries, first: o.kind === 'stock' && prev == null && curV != null, approx: o.kind === 'stock' && approx && curV != null, watch });
+      series: exactSeries, first: o.kind === 'stock' && prev == null && curV != null, approx: o.kind === 'stock' && approx && curV != null, prevEst: o.kind === 'stock' && prevEst && prev != null, watch });
   };
   const st = (fn) => (e, s) => (s ? fn(s) : null);
 
   add('assets', 'Installed devices', st((s) => s.devices), { kind: 'stock' });
   add('assets', 'Total racks', st((s) => s.racks), { kind: 'stock' });
   add('assets', 'DC utilization (rack U used)', st((s) => pctOf(s.usedU, s.totalU)), { kind: 'stock', unit: '%' });
-  add('assets', 'Assets in store', st((s) => s.inStore), { kind: 'stock' });
+  add('assets', 'Assets in store', st((s) => (s._estimated ? null : s.inStore)), { kind: 'stock' });
 
   const pw = sCur && sCur.hasPower ? sCur.power : null;
   add('power', pw ? `Total load (kW) of ${pw.ratedKw} kW rated` : 'Total load (kW)', st((s) => (s.hasPower ? s.power.totalKw : null)), { kind: 'stock', dec: 1 });
@@ -368,7 +426,7 @@ async function buildReport(pool, { sites, month, scopeLabel, now = new Date() })
   add('ops', 'Servers unreachable', st((s) => (s.servers.total ? s.servers.unreachable : null)), { kind: 'stock', good: false, watch: true });
   add('ops', 'Firmware compliant', st((s) => (s.fw.checked ? pctOf(s.fw.ok, s.fw.checked) : null)), { kind: 'stock', unit: '%', good: true });
   add('ops', 'Visits approved', (e) => e.visits);
-  add('ops', 'Transfers waiting for approval', st((s) => s.pendingTransfers), { kind: 'stock', good: false });
+  add('ops', 'Transfers waiting for approval', st((s) => (s._estimated ? null : s.pendingTransfers)), { kind: 'stock', good: false });
 
   add('issues', 'Reported', (e) => e.reported);
   add('issues', 'Resolved / closed', (e) => e.resolved, { good: true });
@@ -409,8 +467,8 @@ async function buildReport(pool, { sites, month, scopeLabel, now = new Date() })
     meta: {
       month, prevMonth: prevKey, label: monthLabel(month), prevLabel: monthLabel(prevKey), shortLabel: monthShort(month), prevShort: monthShort(prevKey),
       scope: scopeLabel || (multi ? 'All locations' : sites[0]), sites, multi, isCurrent, generatedAt: now.toISOString(), monthsShown: keys.map(monthShort),
-      firstRecord: stockKnown && !sPrv ? { asOf: approx ? sCur.takenAt : (isCurrent ? dstr(now) : (sCur.takenAt || '')), approx } : null,
-      stockMissing: !stockKnown,
+      firstRecord: stockKnown && !sPrv && !(sCur && sCur._estimated) ? { asOf: approx ? sCur.takenAt : (isCurrent ? dstr(now) : (sCur.takenAt || '')), approx } : null,
+      stockMissing: !stockKnown, prevEstimated: prevEst, curEstimated: !!(sCur && sCur._estimated),
     },
     assets: { rows: rows.assets, note: `${cur.added} installed and ${cur.removed} moved out during ${monthLabel(month).split(' ')[0]}` },
     hardwareMix,

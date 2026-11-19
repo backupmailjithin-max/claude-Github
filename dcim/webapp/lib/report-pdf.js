@@ -94,7 +94,8 @@ function measureCard(L, title, sub, rows, color, extraLine) {
     if (i) p.line(b.x, y - 5, b.x + b.w, y - 5, { stroke: C.row, lw: 0.15 });
     const lw = p.text(r.label, b.x, y, { size: 8.4, font: 'HB', color: C.white, maxW: 64 });
     if (r.watch) { const x0 = b.x + Math.min(lw, 64) + 2; p.rect(x0, y - 3, 10.5, 4.1, { fill: '#3B1318', stroke: '#7F1D1D', lw: 0.15, r: 1 }); p.text('WATCH', x0 + 5.25, y - 0.1, { size: 4.8, font: 'HB', color: '#FCA5A5', align: 'center', spacing: 0.3 }); }
-    p.text(fmtNum(r.prev, r.unit, r.dec), b.x + 84, y, { size: 8.4, color: C.dim, align: 'right' });
+    p.text(fmtNum(r.prev, r.unit, r.dec), b.x + 84 - (r.prevEst ? 1.6 : 0), y, { size: 8.4, color: C.dim, align: 'right' });
+    if (r.prevEst) p.text('*', b.x + 84 + 0.2, y - 0.8, { size: 8, font: 'HB', color: C.amber });
     const cw = p.text(fmtNum(r.cur, r.unit, r.dec), b.x + 106 - (r.approx ? 1.6 : 0), y, { size: 8.6, font: 'HB', color: C.white, align: 'right' });
     if (r.approx) p.text('*', b.x + 106 + 0.2, y - 0.8, { size: 8, font: 'HB', color: C.amber });
     if (r.first || r.prev == null || r.cur == null) {
@@ -148,7 +149,8 @@ function zones(L) {
     if (i) p.line(b.x, y - 5, b.x + b.w, y - 5, { stroke: C.row, lw: 0.15 });
     p.text(z.zone, b.x, y, { size: 8.4, font: 'HB', color: C.white, maxW: 40 });
     p.text(z.racks == null ? '—' : String(z.racks), b.x + 56, y, { size: 8.2, color: C.dim, align: 'right' });
-    p.text(z.prev == null ? '—' : z.prev + '%', b.x + 76, y, { size: 8.2, color: C.dim, align: 'right' });
+    p.text(z.prev == null ? '—' : z.prev + '%', b.x + 76 - (z.prev != null && rep.meta.prevEstimated ? 1.6 : 0), y, { size: 8.2, color: C.dim, align: 'right' });
+    if (z.prev != null && rep.meta.prevEstimated) p.text('*', b.x + 76 + 0.2, y - 0.8, { size: 8, font: 'HB', color: C.amber });
     p.text(z.cur == null ? '—' : z.cur + '%', b.x + 96, y, { size: 8.6, font: 'HB', color: C.white, align: 'right' });
     if (z.approx && z.cur != null) p.text('*', b.x + 96.4, y - 0.8, { size: 8, font: 'HB', color: C.amber });
     if (z.cur != null && z.prev != null) L.deltaAt(b.x + 124, y, z.cur - z.prev, null, '%', 0, 8); else p.text('—', b.x + 124, y, { size: 8.2, color: C.dim, align: 'right' });
@@ -282,6 +284,11 @@ function notes(L) {
 function render(rep, opts = {}) {
   const L = new Layout(rep, opts), m = rep.meta;
   L.newPage(`${m.scope} · every module compared with ${m.prevLabel}${m.isCurrent ? ' · month to date' : ''}`);
+  if (m.prevEstimated || m.curEstimated) {
+    const which = m.prevEstimated && m.curEstimated ? `${m.prevLabel} and ${m.label}` : (m.prevEstimated ? m.prevLabel : m.label);
+    const n = L.page.paragraph(`* ${which}: no month-end snapshot was saved, so device, rack, utilization and hardware-mix figures are estimated from installation and registration dates (devices moved out or removed since then are not counted). Store stock, server, firmware and power totals cannot be rebuilt and show a dash. From now on DCIM saves a snapshot every day, so later reports use exact figures.`, ML, L.y + 1, W, { size: 7.6, color: C.amber, lineH: 3.8, maxLines: 4 });
+    L.y += n * 3.8 + 3.5;
+  }
   if (m.firstRecord || m.stockMissing) {
     const t = m.stockMissing
       ? 'Device, rack, hardware, power and server totals were not recorded for this month, so they show a dash. Activity, material, issue and visit figures are complete.'

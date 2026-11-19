@@ -175,6 +175,8 @@ CREATE TABLE IF NOT EXISTS material_movements (
   unit VARCHAR(20),
   receiver_name VARCHAR(100),
   sender_name VARCHAR(100),
+  contact_mobile VARCHAR(30),
+  party_address TEXT,
   dc_invoice_no VARCHAR(100),
   dc_invoice_file VARCHAR(255),
   dc_invoice_original_name VARCHAR(255),

@@ -1625,6 +1625,7 @@ const MOVEMENT_COLUMNS = [
     { key: "movementType", label: "Type" }, { key: "site", label: "Location" },
     { key: "itemName", label: "Item" }, { key: "quantity", label: "Qty" }, { key: "unit", label: "Unit" },
     { key: "receiverName", label: "Receiver Name" }, { key: "senderName", label: "Sender / Vendor" },
+    { key: "contactMobile", label: "Mobile No" }, { key: "partyAddress", label: "Source / Destination Address" },
     { key: "dcInvoiceNo", label: "DC / Invoice No" },
     { key: "movementDate", label: "Date", format: (v) => fmtDate(v) },
     { key: "hasDocument", label: "Document", format: (v, row) => { const d = movementDocs(row); return d.length ? d.map((x) => x.name).join(", ") : "—"; } },
@@ -2788,7 +2789,7 @@ function ListFilterHeader({ column, filter, onOpen, style = {}, sortKey, sortDir
 }
 /* ===== DC ACTIVITY TABLE ===== */
 /* ===== EXPANDABLE LIST ROW (DC Activity / Material Movement) ===== */
-const WRAP_COLS = new Set(["description", "itemName", "remarks", "receiverName", "senderName"]);
+const WRAP_COLS = new Set(["description", "itemName", "remarks", "receiverName", "senderName", "partyAddress"]);
 function wrapCellStyle(open) {
     return open ? { whiteSpace: "pre-wrap", wordBreak: "break-word", overflowWrap: "anywhere", minWidth: 220, maxWidth: 380 }
         : { whiteSpace: "normal", wordBreak: "break-word", overflowWrap: "anywhere", minWidth: 220, maxWidth: 380, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" };
@@ -3128,12 +3129,14 @@ function RecordMovementModal({ onClose, onSave, initial, zones, onDownload, onRe
         unit: initial.unit || MOVEMENT_UNITS[0],
         receiverName: initial.receiverName || "",
         senderName: initial.senderName || "",
+        contactMobile: initial.contactMobile || "",
+        partyAddress: initial.partyAddress || "",
         dcInvoiceNo: initial.dcInvoiceNo || "",
         movementDate: initial.movementDate || nowDateTimeStr().slice(0, 10),
         remarks: initial.remarks || "",
     } : {
         movementType: "Inward", site: defaultSiteForUser(), zone: "AZ-1", itemName: "", description: "",
-        quantity: 1, unit: MOVEMENT_UNITS[0], receiverName: "", senderName: "", dcInvoiceNo: "",
+        quantity: 1, unit: MOVEMENT_UNITS[0], receiverName: "", senderName: "", contactMobile: "", partyAddress: "", dcInvoiceNo: "",
         movementDate: nowDateTimeStr().slice(0, 10), remarks: "",
     });
     const [files, setFiles] = useState([]);
@@ -3198,6 +3201,11 @@ function RecordMovementModal({ onClose, onSave, initial, zones, onDownload, onRe
                     React.createElement("input", { value: form.receiverName, onChange: (e) => set("receiverName", e.target.value), className: "neu-input", placeholder: isInward ? "Who received it at site" : "Who received it (external)" })),
                 React.createElement(Field, { label: isInward ? "Sender / Vendor" : "Recipient company" },
                     React.createElement("input", { value: form.senderName, onChange: (e) => set("senderName", e.target.value), className: "neu-input", placeholder: isInward ? "Vendor, courier, OEM…" : "Where it's being sent" }))),
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 } },
+                React.createElement(Field, { label: isInward ? "Sender Mobile No (optional)" : "Recipient Mobile No (optional)" },
+                    React.createElement("input", { type: "tel", inputMode: "tel", maxLength: 20, value: form.contactMobile, onChange: (e) => set("contactMobile", e.target.value.replace(/[^0-9+()\- ]/g, "")), className: "neu-input", placeholder: "e.g. +91 98765 43210" })),
+                React.createElement(Field, { label: isInward ? "Source Address (optional)" : "Destination Address (optional)" },
+                    React.createElement("textarea", { rows: 2, maxLength: 500, value: form.partyAddress, onChange: (e) => set("partyAddress", e.target.value), className: "neu-input", style: { resize: "vertical" }, placeholder: isInward ? "Address the material is coming from\u2026" : "Address the material is being sent to\u2026" }))),
             React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 } },
                 React.createElement(Field, { label: "DC / Invoice No (optional)" },
                     React.createElement("input", { value: form.dcInvoiceNo, onChange: (e) => set("dcInvoiceNo", e.target.value), className: "neu-input", placeholder: "e.g. DC-88512" })),
@@ -3275,7 +3283,7 @@ function MaterialMovements({ movements, allowedSites, canEdit, isAdmin, canAppro
             return false;
         if (search.trim()) {
             const q = search.trim().toLowerCase();
-            if (![m.itemName, m.description, m.receiverName, m.senderName, m.dcInvoiceNo, m.createdBy].some((v) => String(v || "").toLowerCase().includes(q)))
+            if (![m.itemName, m.description, m.receiverName, m.senderName, m.contactMobile, m.partyAddress, m.dcInvoiceNo, m.createdBy].some((v) => String(v || "").toLowerCase().includes(q)))
                 return false;
         }
         return true;
