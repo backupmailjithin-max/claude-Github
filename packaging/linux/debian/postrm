@@ -3,7 +3,7 @@ set -e
 
 case "$1" in
   purge)
-    rm -f /etc/systemd/system/dcim.service
+    rm -f /etc/systemd/system/dcim.service /etc/systemd/system/dcim-mariadb.service
     command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload || true
     echo "dcim: package purged. Application data in /opt/dcim was left in place;" >&2
     echo "remove it manually with: sudo rm -rf /opt/dcim" >&2

@@ -115,9 +115,15 @@ jobs:
     container: fedora:latest
     steps:
       - name: Install build tools
-        run: dnf install -y rpm-build git tar which nodejs
+        run: dnf install -y rpm-build git tar which nodejs curl xz gzip
 
       - uses: actions/checkout@v4
+
+      - name: Stage bundled Node.js runtime
+        run: bash packaging/linux/fetch-node-runtime.sh x64 packaging/linux/runtime
+
+      - name: Stage bundled MariaDB runtime (for --embedded-db)
+        run: bash packaging/linux/fetch-mariadb-runtime.sh packaging/linux/runtime
 
       - name: Build .rpm
         env:

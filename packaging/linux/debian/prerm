@@ -7,6 +7,11 @@ case "$1" in
       systemctl stop dcim 2>/dev/null || true
       systemctl disable dcim 2>/dev/null || true
     fi
+    # embedded database (only present if --embedded-db was used)
+    if [ -f /etc/systemd/system/dcim-mariadb.service ]; then
+      systemctl stop dcim-mariadb 2>/dev/null || true
+      systemctl disable dcim-mariadb 2>/dev/null || true
+    fi
     ;;
 esac
 

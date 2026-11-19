@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Builds dcim-<version>-1.x86_64.rpm. Requires rpmbuild (rpm-build package);
 # this is not installed in every environment, so CI builds this on a
-# Fedora/RHEL-family runner. The RPM path currently requires a system-installed
-# Node.js >= 18 (no bundled runtime support yet -- see build-deb.sh for that).
+# Fedora/RHEL-family runner. Like the .deb it is self-contained: run
+# fetch-node-runtime.sh and fetch-mariadb-runtime.sh first (into
+# packaging/linux/runtime) and the package bundles Node.js + the embedded
+# MariaDB, so it installs on RHEL/Rocky/AlmaLinux/Fedora with no Node.js or
+# database pre-installed. Without staged runtimes it falls back to system Node.
 set -euo pipefail
 
 command -v rpmbuild >/dev/null 2>&1 || { echo "rpmbuild not found; install the 'rpm-build' package." >&2; exit 1; }
@@ -35,6 +38,23 @@ rm -f "$PAYLOAD"/webapp/tools/license-*.js "$PAYLOAD/webapp/tools/Run-License-Ge
 mkdir -p "$PAYLOAD/webapp/uploads" "$PAYLOAD/webapp/backups" "$PAYLOAD/webapp/logs"
 . "$REPO_ROOT/packaging/tools/prune-customer-payload.sh"
 prune_customer_payload "$PAYLOAD/webapp"
+
+# Bundled runtimes (same payload layout as the .deb: /usr/share/dcim/runtime/{node,mariadb}).
+if [ -x "$SCRIPT_DIR/runtime/node/bin/node" ]; then
+  mkdir -p "$PAYLOAD/runtime"
+  cp -a "$SCRIPT_DIR/runtime/node" "$PAYLOAD/runtime/node"
+  echo "Bundling Node runtime: $("$SCRIPT_DIR/runtime/node/bin/node" --version)"
+else
+  [ "${DCIM_REQUIRE_BUNDLED:-1}" = "1" ] && { echo "ERROR: no staged Node runtime (run fetch-node-runtime.sh x64 packaging/linux/runtime first). Set DCIM_REQUIRE_BUNDLED=0 to build a system-Node RPM." >&2; exit 1; }
+  echo "No staged runtime; RPM will require system Node.js >= 18."
+fi
+if [ -x "$SCRIPT_DIR/runtime/mariadb/bin/mariadbd" ]; then
+  mkdir -p "$PAYLOAD/runtime"
+  cp -a "$SCRIPT_DIR/runtime/mariadb" "$PAYLOAD/runtime/mariadb"
+  echo "Bundling embedded MariaDB."
+else
+  [ "${DCIM_REQUIRE_BUNDLED:-1}" = "1" ] && { echo "ERROR: no staged MariaDB runtime (run fetch-mariadb-runtime.sh packaging/linux/runtime first)." >&2; exit 1; }
+fi
 
 # Signed integrity manifest + build gate: FAILS the build on licence tools / signing material / private keys.
 # Bytenode defaults on only when a bundled runtime was actually staged (system-Node builds have no exact
