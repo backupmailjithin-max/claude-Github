@@ -1,0 +1,126 @@
+name: Test fresh install on real Linux (RPM on AlmaLinux 8/9 with systemd, DEB on Ubuntu 22.04/24.04)
+
+# Builds the real .rpm/.deb (vendor-signed, same scripts as the release) and installs them the way a customer
+# would on a clean machine WITH a working systemd: dnf/apt install -> dcim-setup (embedded DB) -> customer-style
+# smoke test -> kill-and-recover -> reboot (container restart) -> upgrade -> repair -> remove.
+on:
+  workflow_dispatch: {}
+  push:
+    branches: ["release/commercial"]
+    paths:
+      - ".github/workflows/test-linux-fresh-install.yml"
+      - "packaging/tools/smoke-test.js"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage runtimes
+        run: |
+          bash packaging/linux/fetch-node-runtime.sh x64 packaging/linux/runtime
+          bash packaging/linux/fetch-mariadb-runtime.sh packaging/linux/runtime
+          sudo apt-get update -y && sudo apt-get install -y rpm
+      - name: Build rpm + deb
+        env:
+          DCIM_INTEGRITY_SIGN_KEY: ${{ secrets.DCIM_INTEGRITY_SIGN_KEY }}
+        run: |
+          if [ -n "$DCIM_INTEGRITY_SIGN_KEY" ]; then
+            kf="$RUNNER_TEMP/integrity-sign.pem"; printf '%s' "$DCIM_INTEGRITY_SIGN_KEY" > "$kf"; export DCIM_INTEGRITY_SIGN_KEY_FILE="$kf"
+          fi
+          bash packaging/linux/build-rpm.sh
+          bash packaging/linux/build-deb.sh
+          [ -n "${DCIM_INTEGRITY_SIGN_KEY_FILE:-}" ] && rm -f "$DCIM_INTEGRITY_SIGN_KEY_FILE"
+          ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-pkgs
+          path: |
+            dist/*.rpm
+            dist/*.deb
+
+  test-rpm-almalinux:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["almalinux/9-init", "almalinux/8-init"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: linux-pkgs, path: pkgs }
+      - name: Start a clean systemd machine
+        run: |
+          docker run -d --name t --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw ${{ matrix.image }}
+          for i in $(seq 1 30); do docker exec t systemctl is-system-running 2>/dev/null | grep -qE "running|degraded" && break; sleep 2; done
+          docker exec t systemctl is-system-running || true
+          docker exec t cat /etc/os-release | head -2
+          docker cp pkgs/. t:/root/pkgs
+          docker cp packaging/tools/smoke-test.js t:/root/smoke-test.js
+      - name: Install the RPM (dnf resolves dependencies)
+        run: docker exec t bash -c 'dnf install -y /root/pkgs/dcim-*.rpm 2>&1 | tail -15'
+      - name: dcim-setup with the embedded database
+        run: docker exec t bash -c 'dcim-setup --mode install --yes --embedded-db --port 8974 --admin-user ciadmin --admin-password "CiAdmin#Pass123"'
+      - name: Diagnostics
+        if: always()
+        run: docker exec t bash -c 'systemctl status dcim dcim-mariadb --no-pager | head -30; journalctl -u dcim -u dcim-mariadb --no-pager -n 80' || true
+      - name: Services enabled for boot + customer smoke test
+        run: |
+          docker exec t bash -c 'systemctl is-enabled dcim dcim-mariadb && systemctl is-active dcim dcim-mariadb'
+          docker exec t /usr/share/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
+      - name: Kill app and database - systemd must recover them
+        run: |
+          docker exec t bash -c 'pkill -9 -f "node server.js"; pkill -9 -x mariadbd; sleep 15; systemctl is-active dcim dcim-mariadb'
+          docker exec t /usr/share/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
+      - name: Reboot (restart the machine) - services must auto-start
+        run: |
+          docker restart t
+          for i in $(seq 1 40); do docker exec t systemctl is-system-running 2>/dev/null | grep -qE "running|degraded" && break; sleep 2; done
+          sleep 20
+          docker exec t bash -c 'systemctl is-active dcim dcim-mariadb'
+          docker exec t /usr/share/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
+      - name: Upgrade, then repair
+        run: |
+          docker exec t bash -c 'dcim-upgrade --yes 2>&1 | tail -8; sleep 5; dcim-repair --yes 2>&1 | tail -8; sleep 5'
+          docker exec t /usr/share/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
+      - name: Remove the package - nothing may be left running
+        run: |
+          docker exec t bash -c 'dnf remove -y dcim 2>&1 | tail -4; sleep 3; systemctl is-active dcim dcim-mariadb || true; pgrep -fa "node server.js|mariadbd" || echo "no leftover processes"'
+
+  test-deb-ubuntu:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: linux-pkgs, path: pkgs }
+      - name: Install the DEB
+        run: sudo apt-get install -y ./pkgs/dcim_*.deb
+      - name: dcim-setup with the embedded database
+        run: sudo dcim-setup --mode install --yes --embedded-db --port 8974 --admin-user ciadmin --admin-password "CiAdmin#Pass123"
+      - name: Diagnostics
+        if: always()
+        run: sudo systemctl status dcim dcim-mariadb --no-pager | head -30; sudo journalctl -u dcim -u dcim-mariadb --no-pager -n 80 || true
+      - name: Customer smoke test
+        run: |
+          systemctl is-enabled dcim dcim-mariadb && systemctl is-active dcim dcim-mariadb
+          /usr/share/dcim/runtime/node/bin/node packaging/tools/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
+      - name: Kill app and database - systemd must recover them
+        run: |
+          sudo pkill -9 -f "node server.js" || true; sudo pkill -9 -x mariadbd || true; sleep 15
+          systemctl is-active dcim dcim-mariadb
+          /usr/share/dcim/runtime/node/bin/node packaging/tools/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
+      - name: Upgrade, then repair
+        run: |
+          sudo dcim-upgrade --yes 2>&1 | tail -8; sleep 5; sudo dcim-repair --yes 2>&1 | tail -8; sleep 5
+          /usr/share/dcim/runtime/node/bin/node packaging/tools/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
+      - name: Remove the package - embedded DB must not be left running
+        run: |
+          sudo apt-get remove -y dcim; sleep 3
+          systemctl is-active dcim dcim-mariadb || true
+          pgrep -fa "node server.js|mariadbd" && { echo "FAIL: leftover processes"; exit 1; } || echo "no leftover processes"
