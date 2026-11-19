@@ -764,7 +764,12 @@ reload_env_for_summary() {
 # install/upgrade/repair so it's always the last thing on screen.
 print_summary() {
   local server_ip db_desc admin_user_shown admin_pass_shown
-  server_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  # Minimal RHEL/Alma/Rocky images ship neither `hostname` nor `ip` - a missing tool must never abort the installer
+  # (set -e/pipefail would exit 127 here, before the summary with the admin/DB details is printed).
+  server_ip=""
+  if command -v hostname >/dev/null 2>&1; then server_ip="$( { hostname -I 2>/dev/null || true; } | awk '{print $1}' || true)"; fi
+  if [ -z "$server_ip" ] && command -v ip >/dev/null 2>&1; then server_ip="$( { ip -4 -o addr show scope global 2>/dev/null || true; } | awk '{split($4,a,"/"); print a[1]; exit}' || true)"; fi
+  if [ -z "$server_ip" ] && [ -r /proc/net/fib_trie ]; then server_ip="$(awk '/32 host/ {print prev} {prev=$2}' /proc/net/fib_trie 2>/dev/null | grep -v '^127\.' | head -1 || true)"; fi
   [ -n "$server_ip" ] || server_ip="<this-server-ip>"
 
   if [ "$EMBEDDED_DB" -eq 1 ]; then

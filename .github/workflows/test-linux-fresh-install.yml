@@ -10,6 +10,7 @@ on:
     paths:
       - ".github/workflows/test-linux-fresh-install.yml"
       - "packaging/tools/smoke-test.js"
+      - "packaging/linux/install.sh"
 
 jobs:
   build:
@@ -69,10 +70,21 @@ jobs:
         run: |
           docker exec dcimt bash -c 'systemctl is-enabled dcim dcim-mariadb && systemctl is-active dcim dcim-mariadb'
           docker exec dcimt /usr/share/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
-      - name: Kill app and database - systemd must recover them
+      - name: Kill the app only - systemd must restart it
+        run: |
+          docker exec dcimt bash -c 'pkill -9 -f "[n]ode server.js"; sleep 5; systemctl is-active dcim'
+          docker exec dcimt /usr/share/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
+      - name: Kill the database only - it must restart and the app must reconnect
+        run: |
+          docker exec dcimt bash -c 'pkill -9 -x mariadbd; sleep 5; systemctl is-active dcim-mariadb'
+          docker exec dcimt /usr/share/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
+      - name: Kill both at once (power-loss style)
         run: |
           docker exec dcimt bash -c 'pkill -9 -f "[n]ode server.js"; pkill -9 -x mariadbd; sleep 5; systemctl is-active dcim dcim-mariadb'
           docker exec dcimt /usr/share/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
+      - name: Recovery diagnostics
+        if: failure()
+        run: docker exec dcimt bash -c 'systemctl status dcim dcim-mariadb --no-pager | head -40; journalctl -u dcim -u dcim-mariadb --no-pager -n 120; ss -ltnp' || true
       - name: Reboot (restart the machine) - services must auto-start
         run: |
           docker restart dcimt
@@ -110,11 +122,21 @@ jobs:
         run: |
           systemctl is-enabled dcim dcim-mariadb && systemctl is-active dcim dcim-mariadb
           /usr/share/dcim/runtime/node/bin/node packaging/tools/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
-      - name: Kill app and database - systemd must recover them
+      - name: Kill the app only - systemd must restart it
         run: |
-          sudo pkill -9 -f "[n]ode server.js" || true; sudo pkill -9 -x mariadbd || true; sleep 15
-          systemctl is-active dcim dcim-mariadb
+          sudo pkill -9 -f "[n]ode server.js" || true; sleep 5; systemctl is-active dcim
           /usr/share/dcim/runtime/node/bin/node packaging/tools/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
+      - name: Kill the database only - it must restart and the app must reconnect
+        run: |
+          sudo pkill -9 -x mariadbd || true; sleep 5; systemctl is-active dcim-mariadb
+          /usr/share/dcim/runtime/node/bin/node packaging/tools/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
+      - name: Kill both at once (power-loss style)
+        run: |
+          sudo pkill -9 -f "[n]ode server.js" || true; sudo pkill -9 -x mariadbd || true; sleep 5; systemctl is-active dcim dcim-mariadb
+          /usr/share/dcim/runtime/node/bin/node packaging/tools/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
+      - name: Recovery diagnostics
+        if: failure()
+        run: sudo systemctl status dcim dcim-mariadb --no-pager | head -40; sudo journalctl -u dcim -u dcim-mariadb --no-pager -n 120; sudo ss -ltnp || true
       - name: Upgrade, then repair
         run: |
           sudo dcim-upgrade --yes 2>&1 | tail -8; sleep 5; sudo dcim-repair --yes 2>&1 | tail -8; sleep 5
