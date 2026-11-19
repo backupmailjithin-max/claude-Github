@@ -68,7 +68,7 @@ for d in DEPLOYMENT ROLLBACK; do sed -e "s|{{FILE_COUNT}}|$COUNT|g" -e "s|{{BASE
   while IFS='|' read -r st f; do echo "| $st | $f |"; done < "$W/CHANGES.txt"
   echo; echo "## Not changed"; echo; echo "Database (no migration step in this package), \`.env\`, uploads, backups, logs, runtimes, npm packages. schema.sql: $SCHEMA_NOTE."
   echo; echo "## Commits since the baseline"; echo
-  git log --no-merges --format='- %s' "$BASE..HEAD" 2>/dev/null | head -60
+  { git log --no-merges --format="- %s" "$BASE..HEAD" 2>/dev/null | head -60; } || true
 } > "$W/pkg/docs/CHANGELOG.md"
 printf 'DCIM Internal Update Package (internal, licence-free edition) - version %s, commit %s\n  docs/DEPLOYMENT.md, docs/ROLLBACK.md, docs/CHANGELOG.md\n  apply-update.sh / rollback-update.sh, FILES.txt, REQUIRES.txt, SHA256SUMS\nNot for customers.\n' "$VERSION" "$HEAD_SHA" > "$W/pkg/README.txt"
 (cd "$W/pkg" && find . -type f ! -name SHA256SUMS | sed 's|^\./||' | sort | xargs sha256sum > SHA256SUMS)
