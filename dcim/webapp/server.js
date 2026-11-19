@@ -10257,11 +10257,14 @@ async function startServer() {
     });
   } catch (e) {
     log.error('Failed to initialize:', e && e.message ? e.message : String(e));
-    process.exitCode = 1;
+    // Exit (not just set exitCode): lingering timers/handles would otherwise keep a half-started process alive that never
+    // listens, which systemd/NSSM report as "running" forever. Exiting lets the service manager restart us until the
+    // database is reachable (e.g. right after a reboot or a database crash-recovery).
+    process.exit(1);
   }
 }
 
 startServer().catch((e) => {
   log.error('Fatal startup error:', e && e.message ? e.message : e);
-  process.exitCode = 1;
+  process.exit(1);
 });

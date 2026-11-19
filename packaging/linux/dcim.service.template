@@ -1,4 +1,5 @@
 [Unit]
+StartLimitIntervalSec=0
 Description=DCIM web application
 After=network.target mysqld.service mariadb.service@DB_DEPENDENCY_SUFFIX@
 Wants=network-online.target

@@ -11,7 +11,8 @@ on:
       - ".github/workflows/test-linux-fresh-install.yml"
       - "packaging/tools/smoke-test.js"
       - "packaging/linux/install.sh"
-      - "packaging/linux/fetch-*.sh"
+      - "packaging/linux/**"
+      - "dcim/webapp/server.js"
 
 jobs:
   build:
