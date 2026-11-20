@@ -205,3 +205,12 @@ test('PDF shows the no-PDU message and first-report note, and mail text uses the
   assert.strictEqual(rep.meta.prevEstimated, true); // October has no snapshot -> estimated, flagged in the PDF
   assert.ok(render(rep, {}).length > 4000);
 });
+
+test('makeLabel: one make regardless of case / suffix, identical rule to the web app', () => {
+  const { makeLabel } = require('../lib/report-data');
+  for (const v of ['Cisco', 'CISCO', 'cisco', 'Cisco Systems, Inc.']) assert.strictEqual(makeLabel(v), 'Cisco');
+  for (const v of ['Dell', 'DELL', 'Dell Inc.', 'OME']) assert.strictEqual(makeLabel(v), 'Dell');
+  for (const v of ['HP', 'hpe', 'Hewlett Packard Enterprise', 'OneView']) assert.strictEqual(makeLabel(v), 'HP');
+  assert.strictEqual(makeLabel(''), 'Unknown');
+  assert.strictEqual(makeLabel('NetApp'), 'NetApp');
+});

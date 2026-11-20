@@ -13567,8 +13567,10 @@ function dashMakeLabel(raw) {
     if (!t) return "Unknown";
     if (/^dell|\bome\b/i.test(t)) return "Dell";
     if (/^hp\b|^hpe\b|hewlett|oneview/i.test(t)) return "HP";
-    const c = t.replace(/[,.]/g, " ").replace(/\b(inc|corp|corporation|ltd|limited|llc|co|company|technologies|technology|systems)\b/ig, " ").replace(/\s+/g, " ").trim();
-    return c || t;
+    let c = t.replace(/[,.]/g, " ").replace(/\b(inc|corp|corporation|ltd|limited|llc|co|company|technologies|technology|systems)\b/ig, " ").replace(/\s+/g, " ").trim() || t;
+    // "CISCO", "cisco" and "Cisco" are one make: single-case names longer than 3 letters are Title-Cased (HP / IBM / APC stay as typed).
+    if (c.length > 3 && (c === c.toUpperCase() || c === c.toLowerCase())) c = c.toLowerCase().replace(/(^|[\s\-\/])([a-z])/g, (m, a, b) => a + b.toUpperCase());
+    return c;
 }
 const DASH_MAKE_COLORS = { Dell: "#2F6DF6", HP: "#12A594", Unknown: "#94A3B8" };
 const DASH_MAKE_EXTRA = ["#F59E0B", "#A78BFA", "#EF4444", "#0EA5E9", "#84CC16", "#EC4899", "#14B8A6", "#F97316"];
@@ -14599,7 +14601,7 @@ function ReportModal({ assets, issues = [], activities, movements = [], onClose 
     const byZone = {};
     assets.forEach(a => {
         bySite[a.site] = (bySite[a.site] || 0) + 1;
-        byManufacturer[a.manufacturer || "Unknown"] = (byManufacturer[a.manufacturer || "Unknown"] || 0) + 1;
+        { const mk = dashMakeLabel(a.manufacturer); const mkey = Object.keys(byManufacturer).find((x) => x.toLowerCase() === mk.toLowerCase()) || mk; byManufacturer[mkey] = (byManufacturer[mkey] || 0) + 1; }
         byZone[a.zone || "AZ-1"] = (byZone[a.zone || "AZ-1"] || 0) + 1;
     });
     const byHw = groupByHardwareType(assets);
@@ -15204,7 +15206,8 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
         const siteDevices = deviceAssets.filter(a => a.site === site);
         // Hardware Mix = by hardware make (Dell / HP / Cisco ...), same grouping as the main Dashboard
         const byHw = {};
-        siteDevices.forEach(a => { const k = dashMakeLabel(a.manufacturer); byHw[k] = (byHw[k] || 0) + 1; });
+        const hwLabelOf = {};
+        siteDevices.forEach(a => { const l = dashMakeLabel(a.manufacturer); const lk = l.toLowerCase(); const k = hwLabelOf[lk] || (hwLabelOf[lk] = l); byHw[k] = (byHw[k] || 0) + 1; });
         const bySeverity = {
             // "Open" means the same thing here as in Issue Tracker / Dashboard (isIssueOpen), not just "no completed date".
             Critical: siteIssues.filter(i => i.severity === 'critical' && isIssueOpen(i)).length,
@@ -15806,7 +15809,7 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                             const row = { hw };
                             let total = 0;
                             zoneNames.forEach(zn => {
-                                const cnt = sd.siteDevices.filter(a => dashMakeLabel(a.manufacturer) === hw && (a.zone || "AZ-1") === zn).length;
+                                const cnt = sd.siteDevices.filter(a => dashMakeLabel(a.manufacturer).toLowerCase() === hw.toLowerCase() && (a.zone || "AZ-1") === zn).length;
                                 row[zn] = cnt;
                                 total += cnt;
                             });
@@ -18717,7 +18720,7 @@ function DataCenterDashboard() {
             editingVisitor && React.createElement(VisitorRequestModal, { initial: editingVisitor, onClose: () => setEditingVisitor(null), onSave: (f) => updateVisitorRequest({ ...editingVisitor, ...f }) })),
         !loading && tab === "settings" && React.createElement(SettingsPage, { users: users, onRefresh: loadAll, locations: locations, currentUser: currentUser, isAdmin: !!isAdmin, isGlobalAdmin: isGlobalAdmin, onFeaturesChanged: (a, m) => { setApprovalAccess(a); setMultiVendor(m); }, onChangePassword: () => setPwdModalOpen(true) }),
         pwdModalOpen && React.createElement(PasswordChangeModal, { onClose: () => setPwdModalOpen(false), isAdmin: false, targetUser: null }),
-        reportOpen && React.createElement(ReportModal, { assets: filteredAssets, issues: siteRestrictedIssues, activities: siteRestrictedActivities, movements: siteRestrictedMovements, onClose: () => setReportOpen(false) }),
+        reportOpen && React.createElement(ReportModal, { assets: siteRestrictedAssets.filter((a) => (a.lifecycleStatus || "Active") === "Active"), issues: siteRestrictedIssues, activities: siteRestrictedActivities, movements: siteRestrictedMovements, onClose: () => setReportOpen(false) }),
         summaryModalOpen && React.createElement(OverallSummaryModal, { assets: siteRestrictedAssets, rackComponents: siteRestrictedRackComponents, issues: siteRestrictedIssues, activities: siteRestrictedActivities, movements: siteRestrictedMovements, racks: siteRestrictedRacks, zones: siteRestrictedZones, allowedSites: allowedSites, pduSummary: pduSummary, onClose: () => setSummaryModalOpen(false) }),
         lifecycleActionAsset && React.createElement(AssetLifecycleActionModal, { key: (lifecycleActionAsset.id || "") + "|" + (lifecycleActionPreset || ""), asset: lifecycleActionAsset, initialAction: lifecycleActionPreset, allowedSites: allowedSites, zones: siteRestrictedZones, racks: siteRestrictedRacks, assets: siteRestrictedAssets, rackTypes: rackTypes, onClose: () => { setLifecycleActionAsset(null); setLifecycleActionPreset(null); }, onSaved: async () => { setLifecycleActionAsset(null); setLifecycleActionPreset(null); setSelectedAssetIds(new Set()); await loadAll(); showToast("success", "Asset lifecycle updated"); } }),
         manageDCModalOpen && React.createElement(ManageDCCapacityModal, { onClose: () => setManageDCModalOpen(false), canEdit: canEdit, isAdmin: isAdmin, canManageLocations: isGlobalAdmin, currentSite: manageDCSite || capacitySite, onAddLocation: () => setLocationModalOpen(true), onDeleteLocation: () => setDeleteLocationModalOpen(true), onAddZone: () => setZoneModalOpen(true), onAddRack: () => setRackAddModalOpen(true) }),

@@ -58,8 +58,10 @@ function makeLabel(raw) {
   if (!t) return 'Unknown';
   if (/^dell|\bome\b/i.test(t)) return 'Dell';
   if (/^hp\b|^hpe\b|hewlett|oneview/i.test(t)) return 'HP';
-  const c = t.replace(/[,.]/g, ' ').replace(/\b(inc|corp|corporation|ltd|limited|llc|co|company|technologies|technology|systems)\b/ig, ' ').replace(/\s+/g, ' ').trim();
-  return c || t;
+  let c = t.replace(/[,.]/g, ' ').replace(/\b(inc|corp|corporation|ltd|limited|llc|co|company|technologies|technology|systems)\b/ig, ' ').replace(/\s+/g, ' ').trim() || t;
+  // Same rule as the web app (dashMakeLabel): "CISCO" / "cisco" / "Cisco" are one make.
+  if (c.length > 3 && (c === c.toUpperCase() || c === c.toLowerCase())) c = c.toLowerCase().replace(/(^|[\s\-/])([a-z])/g, (m, a, b) => a + b.toUpperCase());
+  return c;
 }
 function issueClosedAt(i) {
   // The date an issue stopped being "open" (same labels the Issue Tracker treats as closed).
@@ -335,7 +337,7 @@ function mergeState(snapByLoc, sites) {
   sites.forEach((s, idx) => {
     const p = parts[idx]; o.perSite[s] = p;
     o.devices += p.devices; o.racks += p.racks; o.usedU += p.usedU; o.totalU += p.totalU; o.inStore += p.inStore; o.pendingTransfers += p.pendingTransfers || 0;
-    for (const [k, v] of Object.entries(p.make || {})) o.make[k] = (o.make[k] || 0) + v;
+    for (const [k0, v] of Object.entries(p.make || {})) { const k = makeLabel(k0); o.make[k] = (o.make[k] || 0) + v; } // old snapshots may hold case variants
     for (const [z, v] of Object.entries(p.zones || {})) { const key = sites.length > 1 ? `${s} · ${z}` : z; o.zones[key] = { used: v.used, total: v.total, racks: v.racks || 0 }; }
     for (const r of p.racksHot || []) o.racksHot.push({ ...r, site: s });
     for (const k of Object.keys(o.servers)) o.servers[k] += (p.servers || {})[k] || 0;
