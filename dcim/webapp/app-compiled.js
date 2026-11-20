@@ -3251,7 +3251,7 @@ const MOVEMENT_ACTION_VERBING = { receive: "Marking Received", notReceived: "Mar
 const MOVEMENT_DOC_LOCKED = new Set(["Rejected", "Cancelled", "Received at Site", "Outward Complete", "Not Received"]); // closed records: no more uploads from the row
 const MOVEMENT_DOC_MAX_BYTES = 15 * 1024 * 1024;
 function movActBtn(kind) {
-    const base = { display: "inline-flex", alignItems: "center", gap: 5, padding: "7px 11px", borderRadius: 11, fontFamily: "Inter", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap", margin: "0 6px 6px 0", cursor: "pointer", width: "auto", lineHeight: 1.2 };
+    const base = { display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "0 10px", borderRadius: 11, fontFamily: "Inter", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap", margin: 0, cursor: "pointer", width: "100%", height: 34, minHeight: 34, boxSizing: "border-box", lineHeight: 1.2 };
     return kind === "solid" ? { ...base, color: "#fff" } : { ...base, color: kind };
 }
 function MovementUploadButton({ movement, onUploadDocs, solid }) {
@@ -3483,7 +3483,9 @@ function MaterialMovements({ onUploadDocs, onApproveNamed, defaultApprover, move
                                     color: isType ? (m.movementType === "Inward" ? "#059669" : "#DC2626") : (col.key === "site" ? "#6366F1" : (col.key === "ticketNo" ? "#4F46E5" : "#1E293B")),
                                     fontWeight: isType || col.key === "site" || col.key === "ticketNo" ? 700 : 400 } }, WRAP_COLS.has(col.key) ? React.createElement("div", { style: wrapCellStyle(false) }, val != null && val !== "" ? val : "—") : (val != null && val !== "" ? val : "—"));
                         }),
-                        React.createElement("td", { onClick: (e) => e.stopPropagation(), style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px", textAlign: "right", whiteSpace: "normal", minWidth: 250 } },
+                        React.createElement("td", { onClick: (e) => e.stopPropagation(), style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px", textAlign: "left", whiteSpace: "normal", minWidth: 350, verticalAlign: "middle" } },
+                            React.createElement("div", { "data-mv-actions": m.id, style: { display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 6, width: 320 } },
+                            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 6, width: "100%" } },
                             // Every workflow action carries a readable name (the old icon-only tick meant approve / received / complete depending on the row).
                             canApprove && m.status === "Pending Approval" && React.createElement("button", { onClick: () => setReviewId(m.id), className: "neu-btn-primary", style: movActBtn("solid"), title: "Open the review page: details + DC copy / invoice, then approve", "data-mv-action": "review" }, React.createElement(CheckCircle2, { s: 12, c: "#fff" }), "Review & Approve"),
                             canApprove && m.status === "Pending Approval" && React.createElement("button", { onClick: () => onReject(m.id), className: "neu-btn-secondary", style: movActBtn("#DC2626"), title: "Reject request", "data-mv-action": "reject" }, React.createElement(X, { s: 12, c: "#DC2626" }), "Reject"),
@@ -3493,12 +3495,14 @@ function MaterialMovements({ onUploadDocs, onApproveNamed, defaultApprover, move
                             canEdit && m.status === "Ticket Issued" && m.movementType === "Outward" && React.createElement("button", { onClick: () => setCloseAction({ id: m.id, type: "outwardComplete", itemName: m.itemName }), className: "neu-btn-secondary", style: movActBtn("#047857"), title: "Material outward complete", "data-mv-action": "outwardComplete" }, React.createElement(CheckCircle2, { s: 12, c: "#059669" }), "Outward complete"),
                             canEdit && (m.status === "Approved" || m.status === "Ticket Issued") && m.movementType === "Outward" && React.createElement("button", { onClick: () => setCloseAction({ id: m.id, type: "cancel", itemName: m.itemName }), className: "neu-btn-secondary", style: movActBtn("#DC2626"), title: "Cancelled — Close Ticket", "data-mv-action": "cancel" }, React.createElement(X, { s: 12, c: "#DC2626" }), "Cancel"),
                             canEdit && onUploadDocs && !MOVEMENT_DOC_LOCKED.has(m.status) && React.createElement(MovementUploadButton, { movement: m, onUploadDocs: onUploadDocs }),
-                            movementDocs(m).length === 1 && React.createElement("button", { onClick: () => { const d = movementDocs(m)[0]; if (d.id) onDownloadDoc(m.id, d.id, d.name); else onDownload(m.id, d.name); }, className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Download DC/Invoice" },
+                            ),
+                            React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center" } },
+                            movementDocs(m).length === 1 && React.createElement("button", { onClick: () => { const d = movementDocs(m)[0]; if (d.id) onDownloadDoc(m.id, d.id, d.name); else onDownload(m.id, d.name); }, className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", margin: 0 }, title: "Download DC/Invoice" },
                                 React.createElement(Download, { s: 13, c: "#0EA5E9" })),
-                            canEdit && m.status === "Pending Approval" && React.createElement("button", { onClick: () => onEdit(m), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Edit record" },
+                            canEdit && m.status === "Pending Approval" && React.createElement("button", { onClick: () => onEdit(m), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", margin: 0 }, title: "Edit record" },
                                 React.createElement(Edit2, { s: 13, c: "#64748B" })),
                             canEdit && React.createElement("button", { onClick: () => onDelete(m.id), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex" }, title: "Delete record" },
-                                React.createElement(Trash2, { s: 13, c: "#64748B" })))),
+                                React.createElement(Trash2, { s: 13, c: "#64748B" })))))),
                         open && React.createElement(ExpandedDetailRow, { colSpan: MOVEMENT_COLUMNS.length + 2, title: "Material movement details", items: [
                             { label: "Item", value: m.itemName, wide: true },
                             { label: "Item description", value: m.description, wide: true },
