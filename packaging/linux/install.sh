@@ -423,6 +423,60 @@ install_systemd_unit() {
   log "Installed and enabled systemd service '$SERVICE_NAME' (auto-start on boot)."
 }
 
+# The single-file (.run) installer, unlike the .deb/.rpm, has no package manager declaring dependencies. Before the embedded
+# database is initialised, check that the bundled mariadbd can load its shared libraries and, when it cannot, install the
+# missing system packages with the host's own package manager (apt/dnf/yum/zypper) or stop with the exact command to run.
+ensure_embedded_db_libs() {
+  local bin="$PAYLOAD_MARIADB/bin/mariadbd"
+  [ -x "$bin" ] || bin="$INSTALL_DIR/mariadb/engine/bin/mariadbd"
+  [ -x "$bin" ] || return 0
+  command -v ldd >/dev/null 2>&1 || return 0
+  local missing lib pkgs="" mgr="" p
+  missing="$(ldd "$bin" 2>/dev/null | awk '/not found/{print $1}')"
+  [ -n "$missing" ] || return 0
+  if command -v apt-get >/dev/null 2>&1; then mgr=apt
+  elif command -v dnf >/dev/null 2>&1; then mgr=dnf
+  elif command -v yum >/dev/null 2>&1; then mgr=yum
+  elif command -v zypper >/dev/null 2>&1; then mgr=zypper; fi
+  for lib in $missing; do
+    case "$lib:$mgr" in
+      libcrypt.so.1:apt|libcrypt.so.1:zypper) p=libcrypt1 ;;
+      libcrypt.so.1:dnf|libcrypt.so.1:yum)    p=libxcrypt-compat ;;
+      libaio.so.1*:apt)                       p=libaio1 ;;
+      libaio.so.1*:dnf|libaio.so.1*:yum|libaio.so.1*:zypper) p=libaio ;;
+      libnuma.so.1:apt)                       p=libnuma1 ;;
+      libnuma.so.1:dnf|libnuma.so.1:yum)      p=numactl-libs ;;
+      libcap.so.2:apt)                        p=libcap2 ;;
+      libcap.so.2:dnf|libcap.so.2:yum)        p=libcap ;;
+      libsystemd.so.0:apt)                    p=libsystemd0 ;;
+      libsystemd.so.0:dnf|libsystemd.so.0:yum) p=systemd-libs ;;
+      libgcrypt.so.20:apt)                    p=libgcrypt20 ;;
+      libgcrypt.so.20:dnf|libgcrypt.so.20:yum) p=libgcrypt ;;
+      liblz4.so.1:apt)                        p=liblz4-1 ;;
+      liblz4.so.1:dnf|liblz4.so.1:yum)        p=lz4-libs ;;
+      *) p="" ;;
+    esac
+    [ -n "$p" ] && pkgs="$pkgs $p"
+  done
+  log "The bundled database needs system libraries this machine lacks: $(echo $missing)"
+  if [ -n "$pkgs" ] && [ -n "$mgr" ]; then
+    log "Installing:$pkgs (via $mgr)"
+    case "$mgr" in
+      apt)    DEBIAN_FRONTEND=noninteractive apt-get install -y $pkgs >/dev/null 2>&1 || true ;;
+      dnf)    dnf install -y $pkgs >/dev/null 2>&1 || true ;;
+      yum)    yum install -y $pkgs >/dev/null 2>&1 || true ;;
+      zypper) zypper --non-interactive install $pkgs >/dev/null 2>&1 || true ;;
+    esac
+    missing="$(ldd "$bin" 2>/dev/null | awk '/not found/{print $1}')"
+    [ -z "$missing" ] && { log "System libraries installed."; return 0; }
+  fi
+  case "$mgr" in
+    apt) die "Still missing: $(echo $missing). Install them (needs internet or a local mirror) with:  sudo apt-get install -y${pkgs:- <package providing the library>}  - then run this installer again." ;;
+    dnf|yum) die "Still missing: $(echo $missing). Install them (needs internet or a local mirror) with:  sudo $mgr install -y${pkgs:- <package providing the library>}  - then run this installer again." ;;
+    *) die "Still missing: $(echo $missing). Install the packages that provide these libraries with your package manager, then run this installer again." ;;
+  esac
+}
+
 setup_embedded_db() {
   # "root" is reserved for the embedded engine's own admin account, which
   # this function re-passwords for its own maintenance bookkeeping
@@ -435,6 +489,7 @@ setup_embedded_db() {
   # fails with Access Denied no matter how carefully the two accounts'
   # passwords are set. Rejecting it outright avoids relying on MariaDB's
   # own host-matching precedence working out in our favor.
+  ensure_embedded_db_libs
   if [ "$(printf '%s' "$DB_USER" | tr '[:upper:]' '[:lower:]')" = "root" ]; then
     die "--db-user cannot be 'root' for the embedded database - that name is reserved for the engine's own admin account. Choose a different username."
   fi
@@ -664,11 +719,20 @@ backup_before_change() {
   echo "$backup_dir" > "$INSTALL_DIR/.last-pre-change-backup" 2>/dev/null || true
 }
 
+# curl is not guaranteed on a minimal server; fall back to the bundled Node runtime so the health check never depends on it.
+health_probe() {
+  if command -v curl >/dev/null 2>&1; then curl -fsS "http://127.0.0.1:${PORT}/api/health" 2>/dev/null; return; fi
+  local node_bin="$INSTALL_DIR/runtime/node/bin/node"
+  [ -x "$node_bin" ] || node_bin="$(command -v node || true)"
+  [ -n "$node_bin" ] || return 1
+  "$node_bin" -e "require('http').get('http://127.0.0.1:${PORT}/api/health',r=>{let d='';r.on('data',c=>d+=c);r.on('end',()=>process.stdout.write(d))}).on('error',()=>process.exit(1))" 2>/dev/null
+}
+
 wait_for_health() {
   log "Waiting for the service to report healthy ..."
   local i
   for i in $(seq 1 30); do
-    if curl -fsS "http://127.0.0.1:${PORT}/api/health" 2>/dev/null | grep -q '"status":"ok"'; then
+    if health_probe | grep -q '"status":"ok"'; then
       log "Health check passed: http://127.0.0.1:${PORT}/api/health"
       return 0
     fi
