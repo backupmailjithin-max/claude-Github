@@ -719,14 +719,35 @@ backup_before_change() {
   echo "$backup_dir" > "$INSTALL_DIR/.last-pre-change-backup" 2>/dev/null || true
 }
 
-# curl is not guaranteed on a minimal server; fall back to the bundled Node runtime so the health check never depends on it.
-health_probe() {
-  if command -v curl >/dev/null 2>&1; then curl -fsS "http://127.0.0.1:${PORT}/api/health" 2>/dev/null; return; fi
+# curl is not guaranteed on a minimal server (e.g. a bare Ubuntu image). http_curl runs curl when present, otherwise a tiny
+# equivalent on the bundled Node runtime, so the health check and the admin-account step never depend on curl.
+# Supported flags (the ones this script uses): -fsS (ignored), -m SECONDS, -X METHOD, -H 'Name: value', -d BODY, URL.
+http_curl() {
+  if command -v curl >/dev/null 2>&1; then curl "$@"; return; fi
   local node_bin="$INSTALL_DIR/runtime/node/bin/node"
-  [ -x "$node_bin" ] || node_bin="$(command -v node || true)"
+  [ -x "$node_bin" ] || node_bin="${NODE_BIN:-$(command -v node || true)}"
   [ -n "$node_bin" ] || return 1
-  "$node_bin" -e "require('http').get('http://127.0.0.1:${PORT}/api/health',r=>{let d='';r.on('data',c=>d+=c);r.on('end',()=>process.stdout.write(d))}).on('error',()=>process.exit(1))" 2>/dev/null
+  "$node_bin" -e '
+    const a = process.argv.slice(1); let method = "GET", body = null, t = 10, url = ""; const headers = {};
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] === "-m") t = +a[++i]; else if (a[i] === "-X") method = a[++i];
+      else if (a[i] === "-H") { const h = a[++i], k = h.indexOf(":"); headers[h.slice(0, k).trim()] = h.slice(k + 1).trim(); }
+      else if (a[i] === "-d") { body = a[++i]; if (method === "GET") method = "POST"; }
+      else if (a[i][0] !== "-") url = a[i];
+    }
+    if (body !== null) headers["Content-Length"] = Buffer.byteLength(body);
+    const req = require("http").request(url, { method, headers, timeout: t * 1000 }, (r) => {
+      let d = ""; r.on("data", (c) => d += c);
+      r.on("end", () => { process.stdout.write(d); process.exit(r.statusCode >= 400 ? 22 : 0); });
+    });
+    req.on("timeout", () => { req.destroy(); process.exit(28); });
+    req.on("error", () => process.exit(7));
+    if (body !== null) req.write(body);
+    req.end();
+  ' -- "$@" 2>/dev/null
 }
+
+health_probe() { http_curl -fsS "http://127.0.0.1:${PORT}/api/health" 2>/dev/null; }
 
 wait_for_health() {
   log "Waiting for the service to report healthy ..."
@@ -747,7 +768,7 @@ json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 apply_admin_account() {
   [ -n "$ADMIN_USER" ] || [ -n "$ADMIN_PASSWORD" ] || return 0
   local login_resp token payload
-  login_resp="$(curl -fsS -m 10 -X POST "http://127.0.0.1:${PORT}/api/auth/login" \
+  login_resp="$(http_curl -fsS -m 10 -X POST "http://127.0.0.1:${PORT}/api/auth/login" \
     -H 'Content-Type: application/json' -d '{"username":"admin","password":"admin"}' 2>/dev/null || true)"
   token="$(printf '%s' "$login_resp" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
   if [ -z "$token" ]; then
@@ -761,7 +782,7 @@ apply_admin_account() {
     payload="${payload}\"newPassword\":\"$(json_escape "$ADMIN_PASSWORD")\""
   fi
   payload="${payload}}"
-  if curl -fsS -m 10 -X POST "http://127.0.0.1:${PORT}/api/setup/admin-account" \
+  if http_curl -fsS -m 10 -X POST "http://127.0.0.1:${PORT}/api/setup/admin-account" \
       -H 'Content-Type: application/json' -H "Authorization: Bearer $token" -d "$payload" >/dev/null 2>&1; then
     log "Admin account customized (username/password applied as requested)."
   else
@@ -773,7 +794,7 @@ print_health_validation() {
   local login_user login_pass login_resp token
   login_user="${ADMIN_USER:-admin}"
   login_pass="${ADMIN_PASSWORD:-admin}"
-  login_resp="$(curl -fsS -m 10 -X POST "http://127.0.0.1:${PORT}/api/auth/login" \
+  login_resp="$(http_curl -fsS -m 10 -X POST "http://127.0.0.1:${PORT}/api/auth/login" \
     -H 'Content-Type: application/json' -d "{\"username\":\"$(json_escape "$login_user")\",\"password\":\"$(json_escape "$login_pass")\"}" 2>/dev/null || true)"
   token="$(printf '%s' "$login_resp" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
   if [ -z "$token" ]; then
@@ -781,7 +802,7 @@ print_health_validation() {
     return 0
   fi
   local report
-  report="$(curl -fsS -m 15 "http://127.0.0.1:${PORT}/api/health/validate" -H "Authorization: Bearer $token" 2>/dev/null || true)"
+  report="$(http_curl -fsS -m 15 "http://127.0.0.1:${PORT}/api/health/validate" -H "Authorization: Bearer $token" 2>/dev/null || true)"
   [ -n "$report" ] || { log "Health validation: could not reach /api/health/validate."; return 0; }
   echo ""
   echo "  Health Validation"
