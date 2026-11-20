@@ -1,0 +1,75 @@
+name: Release tools (manual)
+
+# One-click helpers for release steps that otherwise need git or the GitHub release page.
+# Nothing runs by itself: open Actions -> "Release tools (manual)" -> Run workflow, pick an action.
+#   status          : show where the tag points and the state of its release (read-only).
+#   publish         : publish the draft release of the tag (keep "prerelease" ticked while testing).
+#   move-tag-build  : delete the tag's release, move the tag to a commit (default: latest commit of
+#                     release/commercial) and start the "Release - Commercial (licensed)" build on it.
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "What to do"
+        type: choice
+        options: [status, publish, move-tag-build]
+        default: status
+      tag:
+        description: "Tag name"
+        type: string
+        default: commercial-v3.2.2
+      commit:
+        description: "move-tag-build only: commit SHA to tag (empty = latest commit of release/commercial)"
+        type: string
+        default: ""
+      prerelease:
+        description: "publish only: mark as pre-release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TAG: ${{ inputs.tag }}
+      COMMIT: ${{ inputs.commit }}
+    steps:
+      - name: Check the tag name
+        run: |
+          case "$TAG" in commercial-v*|v*|delivery-*) ;; *) echo "::error::tag must start with commercial-v, v or delivery-"; exit 1;; esac
+
+      - name: status
+        if: inputs.action == 'status'
+        run: |
+          echo "tag -> $(gh api repos/$REPO/git/ref/tags/$TAG --jq .object.sha 2>/dev/null || echo 'does not exist')"
+          gh api "repos/$REPO/releases?per_page=100" --jq ".[]|select(.tag_name==\"$TAG\")|\"release: \(.name) draft=\(.draft) prerelease=\(.prerelease) assets=\(.assets|length)\""
+          echo "release/commercial -> $(gh api repos/$REPO/branches/release/commercial --jq .commit.sha)"
+
+      - name: publish
+        if: inputs.action == 'publish'
+        run: |
+          id=$(gh api "repos/$REPO/releases?per_page=100" --jq ".[]|select(.tag_name==\"$TAG\")|.id" | head -1)
+          [ -n "$id" ] || { echo "::error::no release found for $TAG (the build must finish first)"; exit 1; }
+          gh api -X PATCH repos/$REPO/releases/$id -F draft=false -F prerelease=${{ inputs.prerelease }} --jq '"published: \(.name) draft=\(.draft) prerelease=\(.prerelease) \(.html_url)"'
+
+      - name: move-tag-build
+        if: inputs.action == 'move-tag-build'
+        run: |
+          sha="$COMMIT"
+          [ -n "$sha" ] || sha=$(gh api repos/$REPO/branches/release/commercial --jq .commit.sha)
+          sha=$(gh api repos/$REPO/commits/$sha --jq .sha) || { echo "::error::commit not found"; exit 1; }
+          # remove the existing release of this tag (the build creates a fresh draft), then replace the tag
+          for id in $(gh api "repos/$REPO/releases?per_page=100" --jq ".[]|select(.tag_name==\"$TAG\")|.id"); do
+            gh api -X DELETE repos/$REPO/releases/$id && echo "deleted old release $id"
+          done
+          gh api -X DELETE repos/$REPO/git/refs/tags/$TAG 2>/dev/null && echo "deleted old tag" || echo "tag did not exist"
+          gh api -X POST repos/$REPO/git/refs -f ref="refs/tags/$TAG" -f sha="$sha" --jq '"tag \(.ref) -> \(.object.sha)"'
+          # a tag created with the workflow token does not start other workflows by itself, so start the build explicitly
+          gh workflow run release-commercial.yml --repo $REPO --ref "$TAG"
+          echo "Build started for $TAG on $sha - watch Actions -> Release - Commercial (licensed)."
