@@ -3457,7 +3457,7 @@ function MaterialMovements({ onUploadDocs, onApproveNamed, defaultApprover, move
                             React.createElement("input", { type: "checkbox", checked: filtered.length > 0 && filtered.every(m => selectedIds.has(m.id)), ref: el => { if (el)
                                     el.indeterminate = filtered.some(m => selectedIds.has(m.id)) && !filtered.every(m => selectedIds.has(m.id)); }, onChange: e => onSelectAll(e.target.checked, filtered.map(m => m.id)), style: { width: 15, height: 15, accentColor: "#6366F1", cursor: "pointer" } })),
                         MOVEMENT_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, sortKey: listSort.key, sortDir: listSort.dir, onSort: listSort.onSort, style: thBase })),
-                        React.createElement("th", { style: { ...thBase, textAlign: "right" } }))),
+                        React.createElement("th", { "data-mv-actions-head": "1", style: { ...thBase, textAlign: "left", whiteSpace: "nowrap" } }, "Action"))),
                 React.createElement("tbody", null,
                     filtered.length === 0 && React.createElement("tr", null,
                         React.createElement("td", { colSpan: MOVEMENT_COLUMNS.length + 1, style: { padding: "40px 0", textAlign: "center", color: "#64748B", fontFamily: "Inter", fontSize: 13 } }, "No material movement records match these filters.")),
