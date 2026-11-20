@@ -33,6 +33,7 @@ jobs:
           fi
           bash packaging/linux/build-rpm.sh
           bash packaging/linux/build-deb.sh
+          bash packaging/appliance/build-appliance.sh
           [ -n "${DCIM_INTEGRITY_SIGN_KEY_FILE:-}" ] && rm -f "$DCIM_INTEGRITY_SIGN_KEY_FILE"
           ls -la dist
       - uses: actions/upload-artifact@v4
@@ -41,6 +42,7 @@ jobs:
           path: |
             dist/*.rpm
             dist/*.deb
+            dist/*.run
 
   test-rpm-almalinux:
     needs: build
@@ -156,3 +158,52 @@ jobs:
           sudo apt-get remove -y dcim; sleep 3
           systemctl is-active dcim dcim-mariadb || true
           pgrep -fa "node server.js|mariadbd" && { echo "FAIL: leftover processes"; exit 1; } || echo "no leftover processes"
+
+  # The single universal Linux setup file (.run): one download for Ubuntu, Red Hat family (AlmaLinux/Rocky/RHEL) and others.
+  test-run-universal:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["almalinux/9-init", "almalinux/8-init", "ubuntu-22.04", "ubuntu-24.04"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: linux-pkgs, path: pkgs }
+      - name: Start a clean systemd machine
+        run: |
+          case "${{ matrix.image }}" in
+            ubuntu-*) v="${{ matrix.image }}"; img="jrei/systemd-ubuntu:${v#ubuntu-}" ;;
+            *) img="${{ matrix.image }}" ;;
+          esac
+          docker run -d --name dcimt --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw "$img"
+          for i in $(seq 1 30); do docker exec dcimt systemctl is-system-running 2>/dev/null | grep -qE "running|degraded" && break; sleep 2; done
+          docker exec dcimt systemctl is-system-running || true
+          docker exec dcimt cat /etc/os-release | head -2
+          docker cp pkgs/. dcimt:/root/pkgs
+          docker cp packaging/tools/smoke-test.js dcimt:/root/smoke-test.js
+      - name: Run the single setup file (nothing pre-installed except what the OS ships)
+        run: docker exec dcimt bash -c 'chmod +x /root/pkgs/*.run && /root/pkgs/dcim-appliance-*.run --mode install --yes --embedded-db --port 8974 --admin-user ciadmin --admin-password "CiAdmin#Pass123" 2>&1 | tail -30'
+      - name: Diagnostics
+        if: always()
+        run: docker exec dcimt bash -c 'systemctl status dcim dcim-mariadb --no-pager | head -30; journalctl -u dcim -u dcim-mariadb --no-pager -n 80' || true
+      - name: Services enabled for boot + customer smoke test
+        run: |
+          docker exec dcimt bash -c 'systemctl is-enabled dcim dcim-mariadb && systemctl is-active dcim dcim-mariadb'
+          docker exec dcimt /opt/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
+      - name: Kill the app, the database, then both - systemd must recover each time
+        run: |
+          docker exec dcimt bash -c 'pkill -9 -f "[n]ode server.js"; sleep 5; systemctl is-active dcim'
+          docker exec dcimt /opt/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
+          docker exec dcimt bash -c 'pkill -9 -x mariadbd; sleep 5; systemctl is-active dcim-mariadb'
+          docker exec dcimt /opt/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
+          docker exec dcimt bash -c 'pkill -9 -f "[n]ode server.js"; pkill -9 -x mariadbd; sleep 5; systemctl is-active dcim dcim-mariadb'
+          docker exec dcimt /opt/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
+      - name: Upgrade and repair from the same file
+        run: |
+          docker exec dcimt bash -c '/root/pkgs/dcim-appliance-*.run --mode upgrade --yes 2>&1 | tail -6; sleep 5; /root/pkgs/dcim-appliance-*.run --mode repair --yes 2>&1 | tail -6; sleep 5'
+          docker exec dcimt /opt/dcim/runtime/node/bin/node /root/smoke-test.js http://127.0.0.1:8974 ciadmin 'CiAdmin#Pass123'
+      - name: Final diagnostics (only on failure)
+        if: failure()
+        run: docker exec dcimt bash -c 'systemctl status dcim dcim-mariadb --no-pager | head -40; journalctl -u dcim -u dcim-mariadb --no-pager -n 150; ss -ltnp' || true
