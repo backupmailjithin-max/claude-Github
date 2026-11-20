@@ -3247,6 +3247,104 @@ const MOVEMENT_STATUS_COLORS = {
 };
 const MOVEMENT_ACTION_LABELS = { receive: "Material Received at Site", notReceived: "Material Not Received", outwardComplete: "Material Outward Complete", cancel: "Cancelled — Close Ticket" };
 const MOVEMENT_ACTION_VERBING = { receive: "Marking Received", notReceived: "Marking Not Received", outwardComplete: "Completing", cancel: "Cancelling" };
+// ---- Material Movement: readable actions, late DC copy / invoice upload, Review & Approve page (additive; existing handlers are reused) ----
+const MOVEMENT_DOC_LOCKED = new Set(["Rejected", "Cancelled", "Received at Site", "Outward Complete", "Not Received"]); // closed records: no more uploads from the row
+const MOVEMENT_DOC_MAX_BYTES = 15 * 1024 * 1024;
+function movActBtn(kind) {
+    const base = { display: "inline-flex", alignItems: "center", gap: 5, padding: "7px 11px", borderRadius: 11, fontFamily: "Inter", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap", margin: "0 6px 6px 0", cursor: "pointer", width: "auto", lineHeight: 1.2 };
+    return kind === "solid" ? { ...base, color: "#fff" } : { ...base, color: kind };
+}
+function MovementUploadButton({ movement, onUploadDocs, solid }) {
+    const inputRef = useRef(null);
+    const [busy, setBusy] = useState(false);
+    const hasDocs = movementDocs(movement).length > 0;
+    const pick = async (e) => {
+        const files = Array.from(e.target.files || []);
+        e.target.value = "";
+        if (!files.length) return;
+        const big = files.find((f) => f.size > MOVEMENT_DOC_MAX_BYTES);
+        if (big) { alert(`"${big.name}" is larger than 15 MB. Please compress it and try again.`); return; }
+        setBusy(true);
+        try { await onUploadDocs(movement.id, files); } finally { setBusy(false); }
+    };
+    return React.createElement(React.Fragment, null,
+        React.createElement("input", { ref: inputRef, type: "file", multiple: true, accept: ".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx", style: { display: "none" }, onChange: pick, "data-mv-upload-input": movement.id }),
+        React.createElement("button", { type: "button", disabled: busy, onClick: () => inputRef.current && inputRef.current.click(), className: "neu-btn-secondary", style: { ...movActBtn("#3157EE"), opacity: busy ? 0.6 : 1 }, title: hasDocs ? "Add another DC copy / invoice file" : "No DC copy / invoice yet - attach it now", "data-mv-action": "upload" },
+            React.createElement(Upload, { s: 12, c: "#3157EE" }), busy ? "Uploading…" : (hasDocs ? "Add document" : "Upload DC / Invoice")));
+}
+function MovementDocPreview({ movementId, doc }) {
+    const [state, setState] = useState({ loading: true, url: null, kind: "", error: "" });
+    useEffect(() => {
+        let dead = false, objUrl = null;
+        setState({ loading: true, url: null, kind: "", error: "" });
+        (async () => {
+            try {
+                const ext = String(doc.name || "").split(".").pop().toLowerCase();
+                const mime = { pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif" }[ext];
+                if (!mime) { if (!dead) setState({ loading: false, url: null, kind: "other", error: "" }); return; }
+                const token = getToken();
+                const path = doc.id ? "/material-movements/" + movementId + "/documents/" + doc.id : "/material-movements/" + movementId + "/document";
+                const res = await fetch(API_BASE + path, { headers: token ? { Authorization: "Bearer " + token } : {} });
+                if (!res.ok) throw new Error("Could not load the document");
+                const blob = await res.blob();
+                objUrl = window.URL.createObjectURL(new Blob([blob], { type: mime }));
+                if (!dead) setState({ loading: false, url: objUrl, kind: mime === "application/pdf" ? "pdf" : "image", error: "" });
+            } catch (e) { if (!dead) setState({ loading: false, url: null, kind: "", error: e.message }); }
+        })();
+        return () => { dead = true; if (objUrl) window.URL.revokeObjectURL(objUrl); };
+    }, [movementId, doc.id, doc.name]);
+    const box = { borderRadius: 12, background: "#fff", border: "1px solid #E2E8F0", height: 300, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", fontFamily: "Inter", fontSize: 12, color: "#64748B", textAlign: "center", padding: 12 };
+    if (state.loading) return React.createElement("div", { style: box }, "Loading preview…");
+    if (state.error) return React.createElement("div", { style: { ...box, color: "#DC2626" } }, state.error);
+    if (state.kind === "pdf") return React.createElement("iframe", { src: state.url, title: doc.name, "data-mv-preview": "pdf", style: { ...box, width: "100%", padding: 0, border: "1px solid #E2E8F0" } });
+    if (state.kind === "image") return React.createElement("div", { style: box }, React.createElement("img", { src: state.url, alt: doc.name, "data-mv-preview": "image", style: { maxWidth: "100%", maxHeight: "100%", objectFit: "contain" } }));
+    return React.createElement("div", { style: box }, "Preview is not available for this file type - use Open / Download below to check it.");
+}
+function MovementReviewModal({ movement: m, defaultApprover, onClose, onApprove, onReject, onViewDoc, onDownloadDoc, onDownload, onUploadDocs }) {
+    const docs = movementDocs(m);
+    const [sel, setSel] = useState(0);
+    const [checked, setChecked] = useState(false);
+    const [approver, setApprover] = useState(defaultApprover || "");
+    const [saving, setSaving] = useState(false);
+    const cur = docs[Math.min(sel, Math.max(0, docs.length - 1))];
+    const items = [
+        ["Item", m.itemName], ["Description", m.description], ...MOVEMENT_COLUMNS.filter((c) => !["itemName", "remarks", "status", "hasDocument", "ticketNo"].includes(c.key)).map((c) => [c.label, c.format ? c.format(m[c.key], m) : m[c.key]]), ["Remarks", m.remarks]];
+    const approve = async () => {
+        if (!checked || !approver.trim()) return;
+        setSaving(true);
+        try { const ok = await onApprove(m.id, approver.trim()); if (ok !== false) onClose(); } finally { setSaving(false); }
+    };
+    const k = { fontFamily: "Inter", fontSize: 9.5, fontWeight: 800, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.6 };
+    const v = { fontFamily: "Inter", fontSize: 12.5, fontWeight: 600, color: "#1E293B", marginTop: 2, wordBreak: "break-word" };
+    return ReactDOM.createPortal(React.createElement("div", { onClick: onClose, "data-mv-review": m.id, style: { position: "fixed", inset: 0, zIndex: 50, background: "rgba(14,18,28,0.35)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 } },
+        React.createElement("div", { onClick: (e) => e.stopPropagation(), className: "neu-card anim-in d1", style: { width: 760, maxWidth: "96vw", maxHeight: "92vh", overflowY: "auto", padding: 24 } },
+            React.createElement("div", { style: { fontFamily: "'JetBrains Mono'", fontSize: 10, fontWeight: 800, letterSpacing: 2.5, color: "#3157EE", textTransform: "uppercase" } }, "Review before approval"),
+            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#17345D", margin: "2px 0 14px" } }, `${m.movementType} · ${m.itemName || "movement"} · ${m.site}`),
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: "10px 18px" } },
+                items.filter((x) => x[1] != null && x[1] !== "").map((x) => React.createElement("div", { key: x[0] }, React.createElement("div", { style: k }, x[0]), React.createElement("div", { style: v }, String(x[1]))))),
+            React.createElement("div", { style: { ...k, margin: "16px 0 6px" } }, "DC copy / invoice"),
+            docs.length === 0
+                ? React.createElement("div", { "data-mv-review-nodoc": "1", style: { background: "#FFFBEB", border: "1px solid #FCD34D", color: "#92400E", borderRadius: 12, padding: "12px 14px", fontFamily: "Inter", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" } },
+                    React.createElement(AlertTriangle, { s: 16, c: "#B45309" }), React.createElement("span", { style: { flex: 1, minWidth: 200 } }, "No DC copy / invoice is attached to this request. You can still approve, but attaching it first is recommended."),
+                    onUploadDocs && React.createElement(MovementUploadButton, { movement: m, onUploadDocs }))
+                : React.createElement("div", null,
+                    docs.length > 1 && React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 } }, docs.map((d, i) => React.createElement("button", { key: (d.id || "legacy") + i, type: "button", onClick: () => setSel(i), className: i === sel ? "neu-btn-primary" : "neu-btn-secondary", style: { ...movActBtn(i === sel ? "solid" : "#475569"), margin: 0 } }, d.name))),
+                    React.createElement(MovementDocPreview, { movementId: m.id, doc: cur }),
+                    React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8, alignItems: "center" } },
+                        React.createElement("span", { style: { fontFamily: "Inter", fontSize: 11.5, fontWeight: 700, color: "#475569", marginRight: 6 } }, cur.name),
+                        React.createElement("button", { type: "button", onClick: () => onViewDoc(m.id, cur.id, cur.name), className: "neu-btn-secondary", style: { ...movActBtn("#0F766E"), margin: 0 } }, "Open full size"),
+                        React.createElement("button", { type: "button", onClick: () => (cur.id ? onDownloadDoc(m.id, cur.id, cur.name) : onDownload(m.id, cur.name)), className: "neu-btn-secondary", style: { ...movActBtn("#0EA5E9"), margin: 0 } }, "Download"),
+                        onUploadDocs && React.createElement(MovementUploadButton, { movement: m, onUploadDocs }))),
+            React.createElement("div", { style: { margin: "16px 0 10px" } },
+                React.createElement("div", { style: { ...k, marginBottom: 4 } }, "Approver name (shown on the record and in the notification email)"),
+                React.createElement("input", { className: "neu-input", value: approver, onChange: (e) => setApprover(e.target.value), placeholder: "Approver name", "data-mv-approver": "1" })),
+            React.createElement("label", { style: { display: "flex", gap: 8, alignItems: "center", fontFamily: "Inter", fontSize: 12.5, fontWeight: 600, color: "#1E293B", cursor: "pointer" } },
+                React.createElement("input", { type: "checkbox", checked: checked, onChange: (e) => setChecked(e.target.checked), "data-mv-confirm": "1", style: { width: 16, height: 16, accentColor: "#3157EE" } }), "I have checked the details and the document"),
+            React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18, flexWrap: "wrap" } },
+                React.createElement("button", { type: "button", onClick: onClose, className: "neu-btn-secondary", style: { padding: "10px 18px", fontSize: 13 } }, "Close"),
+                React.createElement("button", { type: "button", onClick: () => onReject(m.id), className: "neu-btn-secondary", style: { padding: "10px 18px", fontSize: 13, color: "#DC2626", fontWeight: 700 }, "data-mv-reject": "1" }, "Reject…"),
+                React.createElement("button", { type: "button", onClick: approve, disabled: !checked || !approver.trim() || saving, className: "neu-btn-primary", style: { padding: "10px 22px", fontSize: 13, opacity: (!checked || !approver.trim() || saving) ? 0.5 : 1 }, "data-mv-approve": "1" }, saving ? "Approving…" : "Approve")))), document.body);
+}
 function MovementCloseActionModal({ action, onClose, onConfirm }) {
     const [remarks, setRemarks] = useState("");
     const [receiverName, setReceiverName] = useState(action.defaultReceiverName || "");
@@ -3266,9 +3364,10 @@ function MovementCloseActionModal({ action, onClose, onConfirm }) {
                 React.createElement("button", { onClick: onClose, className: "neu-btn-secondary", style: { flex: 1, padding: "11px 0", fontSize: 13.5 } }, "Cancel"),
                 React.createElement("button", { onClick: confirm, disabled: saving, className: "neu-btn-primary", style: { flex: 1, padding: "11px 0", fontSize: 13.5, opacity: saving ? 0.6 : 1 } }, saving ? `${MOVEMENT_ACTION_VERBING[action.type] || label}…` : label)))), document.body);
 }
-function MaterialMovements({ movements, allowedSites, canEdit, isAdmin, canApprove, onEdit, onDelete, onApprove, onReject, onGenerateTicket, onReceive, onNotReceived, onOutwardComplete, onCancel, onDownload, onDownloadDoc, onViewDoc, onExportExcel, onExportCSV, onImport, importError, importProgress, importErrorDetails, selectedIds, onSelectId, onSelectAll, onDeleteSelected, onClearSelection }) {
+function MaterialMovements({ onUploadDocs, onApproveNamed, defaultApprover, movements, allowedSites, canEdit, isAdmin, canApprove, onEdit, onDelete, onApprove, onReject, onGenerateTicket, onReceive, onNotReceived, onOutwardComplete, onCancel, onDownload, onDownloadDoc, onViewDoc, onExportExcel, onExportCSV, onImport, importError, importProgress, importErrorDetails, selectedIds, onSelectId, onSelectAll, onDeleteSelected, onClearSelection }) {
     const movListCtl = useProgressiveList();
     const [expandedId, setExpandedId] = useState(null);
+    const [reviewId, setReviewId] = useState(null);
     const [closeAction, setCloseAction] = useState(null); // { id, type: "receive" | "notReceived" | "outwardComplete" | "cancel", itemName, defaultReceiverName }
     const [siteFilter, setSiteFilter] = useState("all");
     const [typeFilter, setTypeFilter] = useState("all");
@@ -3371,7 +3470,7 @@ function MaterialMovements({ movements, allowedSites, canEdit, isAdmin, canAppro
                             if (col.key === "hasDocument") {
                                 const docs = movementDocs(m);
                                 return React.createElement("td", { key: col.key, onClick: (e) => e.stopPropagation(), style: { padding: "10px 10px", borderBottom: "0.5px solid rgba(163,177,198,0.25)", fontFamily: "Inter", fontSize: 12, color: "#1E293B", minWidth: 140 }, "data-movement-docs": m.id },
-                                    docs.length === 0 ? "\u2014" : docs.map((d, di) => React.createElement("div", { key: (d.id || "legacy") + di, style: { display: "flex", alignItems: "center", gap: 6, marginBottom: di < docs.length - 1 ? 3 : 0 } },
+                                    docs.length === 0 ? (MOVEMENT_DOC_LOCKED.has(m.status) ? "\u2014" : React.createElement("span", { "data-mv-doc-missing": "1", title: "No DC copy / invoice attached yet - use Upload DC / Invoice", style: { display: "inline-flex", alignItems: "center", gap: 4, fontFamily: "Inter", fontSize: 10, fontWeight: 800, color: "#B45309", background: "#FEF3C7", borderRadius: 999, padding: "2px 8px" } }, React.createElement(AlertTriangle, { s: 10, c: "#B45309" }), "MISSING")) : docs.map((d, di) => React.createElement("div", { key: (d.id || "legacy") + di, style: { display: "flex", alignItems: "center", gap: 6, marginBottom: di < docs.length - 1 ? 3 : 0 } },
                                         React.createElement("button", { type: "button", onClick: () => onViewDoc(m.id, d.id, d.name), title: "Open " + d.name, "data-doc-view": d.name, style: { border: "none", background: "none", padding: 0, cursor: "pointer", color: "#0F766E", fontFamily: "Inter", fontSize: 12, fontWeight: 600, textAlign: "left", textDecoration: "underline", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, d.name),
                                         React.createElement("button", { type: "button", onClick: () => (d.id ? onDownloadDoc(m.id, d.id, d.name) : onDownload(m.id, d.name)), title: "Download " + d.name, "data-doc-download": d.name, className: "neu-icon-btn", style: { width: 24, height: 24, borderRadius: 8, display: "inline-flex", flexShrink: 0 } }, React.createElement(Download, { s: 11, c: "#0EA5E9" })))));
                             }
@@ -3384,21 +3483,16 @@ function MaterialMovements({ movements, allowedSites, canEdit, isAdmin, canAppro
                                     color: isType ? (m.movementType === "Inward" ? "#059669" : "#DC2626") : (col.key === "site" ? "#6366F1" : (col.key === "ticketNo" ? "#4F46E5" : "#1E293B")),
                                     fontWeight: isType || col.key === "site" || col.key === "ticketNo" ? 700 : 400 } }, WRAP_COLS.has(col.key) ? React.createElement("div", { style: wrapCellStyle(false) }, val != null && val !== "" ? val : "—") : (val != null && val !== "" ? val : "—"));
                         }),
-                        React.createElement("td", { onClick: (e) => e.stopPropagation(), style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px", textAlign: "right", whiteSpace: "nowrap" } },
-                            canApprove && m.status === "Pending Approval" && React.createElement("button", { onClick: () => onApprove(m.id), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Approve" },
-                                React.createElement(CheckCircle2, { s: 13, c: "#059669" })),
-                            canApprove && m.status === "Pending Approval" && React.createElement("button", { onClick: () => onReject(m.id), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Reject request" },
-                                React.createElement(X, { s: 13, c: "#DC2626" })),
-                            canEdit && m.status === "Approved" && React.createElement("button", { onClick: () => onGenerateTicket(m.id), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Generate ticket" },
-                                React.createElement(FileText, { s: 13, c: "#7C3AED" })),
-                            canEdit && m.status === "Ticket Issued" && m.movementType === "Inward" && React.createElement("button", { onClick: () => setCloseAction({ id: m.id, type: "receive", itemName: m.itemName, defaultReceiverName: m.receiverName }), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Material Received at Site" },
-                                React.createElement(CheckCircle2, { s: 13, c: "#059669" })),
-                            canEdit && m.status === "Ticket Issued" && m.movementType === "Inward" && React.createElement("button", { onClick: () => setCloseAction({ id: m.id, type: "notReceived", itemName: m.itemName }), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Material Not Received" },
-                                React.createElement(X, { s: 13, c: "#DC2626" })),
-                            canEdit && m.status === "Ticket Issued" && m.movementType === "Outward" && React.createElement("button", { onClick: () => setCloseAction({ id: m.id, type: "outwardComplete", itemName: m.itemName }), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Material Outward Complete" },
-                                React.createElement(CheckCircle2, { s: 13, c: "#059669" })),
-                            canEdit && (m.status === "Approved" || m.status === "Ticket Issued") && m.movementType === "Outward" && React.createElement("button", { onClick: () => setCloseAction({ id: m.id, type: "cancel", itemName: m.itemName }), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Cancelled — Close Ticket" },
-                                React.createElement(X, { s: 13, c: "#DC2626" })),
+                        React.createElement("td", { onClick: (e) => e.stopPropagation(), style: { borderBottom: "0.5px solid rgba(163,177,198,0.25)", padding: "10px 8px", textAlign: "right", whiteSpace: "normal", minWidth: 250 } },
+                            // Every workflow action carries a readable name (the old icon-only tick meant approve / received / complete depending on the row).
+                            canApprove && m.status === "Pending Approval" && React.createElement("button", { onClick: () => setReviewId(m.id), className: "neu-btn-primary", style: movActBtn("solid"), title: "Open the review page: details + DC copy / invoice, then approve", "data-mv-action": "review" }, React.createElement(CheckCircle2, { s: 12, c: "#fff" }), "Review & Approve"),
+                            canApprove && m.status === "Pending Approval" && React.createElement("button", { onClick: () => onReject(m.id), className: "neu-btn-secondary", style: movActBtn("#DC2626"), title: "Reject request", "data-mv-action": "reject" }, React.createElement(X, { s: 12, c: "#DC2626" }), "Reject"),
+                            canEdit && m.status === "Approved" && React.createElement("button", { onClick: () => onGenerateTicket(m.id), className: "neu-btn-secondary", style: movActBtn("#7C3AED"), title: "Generate ticket", "data-mv-action": "ticket" }, React.createElement(FileText, { s: 12, c: "#7C3AED" }), "Generate Ticket"),
+                            canEdit && m.status === "Ticket Issued" && m.movementType === "Inward" && React.createElement("button", { onClick: () => setCloseAction({ id: m.id, type: "receive", itemName: m.itemName, defaultReceiverName: m.receiverName }), className: "neu-btn-secondary", style: movActBtn("#047857"), title: "Material received at site", "data-mv-action": "receive" }, React.createElement(CheckCircle2, { s: 12, c: "#059669" }), "Received at site"),
+                            canEdit && m.status === "Ticket Issued" && m.movementType === "Inward" && React.createElement("button", { onClick: () => setCloseAction({ id: m.id, type: "notReceived", itemName: m.itemName }), className: "neu-btn-secondary", style: movActBtn("#DC2626"), title: "Material not received at site", "data-mv-action": "notReceived" }, React.createElement(X, { s: 12, c: "#DC2626" }), "Not received at site"),
+                            canEdit && m.status === "Ticket Issued" && m.movementType === "Outward" && React.createElement("button", { onClick: () => setCloseAction({ id: m.id, type: "outwardComplete", itemName: m.itemName }), className: "neu-btn-secondary", style: movActBtn("#047857"), title: "Material outward complete", "data-mv-action": "outwardComplete" }, React.createElement(CheckCircle2, { s: 12, c: "#059669" }), "Outward complete"),
+                            canEdit && (m.status === "Approved" || m.status === "Ticket Issued") && m.movementType === "Outward" && React.createElement("button", { onClick: () => setCloseAction({ id: m.id, type: "cancel", itemName: m.itemName }), className: "neu-btn-secondary", style: movActBtn("#DC2626"), title: "Cancelled — Close Ticket", "data-mv-action": "cancel" }, React.createElement(X, { s: 12, c: "#DC2626" }), "Cancel"),
+                            canEdit && onUploadDocs && !MOVEMENT_DOC_LOCKED.has(m.status) && React.createElement(MovementUploadButton, { movement: m, onUploadDocs: onUploadDocs }),
                             movementDocs(m).length === 1 && React.createElement("button", { onClick: () => { const d = movementDocs(m)[0]; if (d.id) onDownloadDoc(m.id, d.id, d.name); else onDownload(m.id, d.name); }, className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Download DC/Invoice" },
                                 React.createElement(Download, { s: 13, c: "#0EA5E9" })),
                             canEdit && m.status === "Pending Approval" && React.createElement("button", { onClick: () => onEdit(m), className: "neu-icon-btn", style: { width: 34, height: 34, borderRadius: 10, display: "inline-flex", marginRight: 6 }, title: "Edit record" },
@@ -3411,6 +3505,7 @@ function MaterialMovements({ movements, allowedSites, canEdit, isAdmin, canAppro
                             ...MOVEMENT_COLUMNS.filter((c) => c.key !== "itemName" && c.key !== "remarks").map((c) => ({ label: c.label, value: c.format ? c.format(m[c.key], m) : m[c.key] })),
                             { label: "Remarks", value: m.remarks, wide: true }] })); })))),
         openFilter && React.createElement(ValueListFilterPopup, { column: openFilter, currentFilter: columnFilters[openFilter.key], optionRows: optionRowsForColumn(openFilter.key), onApply: (value) => setColumnFilters((prev) => ({ ...prev, [openFilter.key]: value })), onClose: () => setOpenFilter(null) }),
+        reviewId && (movements || []).find((x) => x.id === reviewId) && React.createElement(MovementReviewModal, { movement: (movements || []).find((x) => x.id === reviewId), defaultApprover: defaultApprover, onClose: () => setReviewId(null), onApprove: onApproveNamed, onReject: (id) => { setReviewId(null); onReject(id); }, onViewDoc: onViewDoc, onDownloadDoc: onDownloadDoc, onDownload: onDownload, onUploadDocs: onUploadDocs }),
         closeAction && React.createElement(MovementCloseActionModal, { action: closeAction, onClose: () => setCloseAction(null), onConfirm: (id, type, remarks, receiverName) => {
                 if (type === "receive") return onReceive(id, remarks, receiverName);
                 if (type === "notReceived") return onNotReceived(id, remarks);
@@ -17148,6 +17243,16 @@ function DataCenterDashboard() {
             alert(e.message);
         }
     };
+    // Review & Approve page: same API call as approveMovement, with the approver name taken from the page instead of a prompt().
+    const approveMovementNamed = async (id, approverName) => {
+        try { await api.approveMaterialMovement(id, approverName); await loadAll(true); return true; }
+        catch (e) { alert(e.message); return false; }
+    };
+    // Late DC copy / invoice upload (the server endpoint accepts it for any site you can edit).
+    const uploadMovementDocs = async (id, files) => {
+        try { await api.uploadMovementDocuments(id, files); await loadAll(true); } // silent reload: keeps the Review page open
+        catch (e) { alert(e.message); }
+    };
     const rejectMovement = async (id) => {
         const approverName = prompt("Approver name:", (currentUser && currentUser.name) || "");
         if (approverName === null) return;
@@ -18702,7 +18807,7 @@ function DataCenterDashboard() {
                 canEdit && React.createElement("button", { onClick: () => setMovementModalOpen(true), className: "neu-btn-secondary", style: { display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, padding: "9px 14px", color: "#0EA5E9" }, title: "Record material movement" },
                     React.createElement(Package, { s: 14, c: "#0EA5E9" }),
                     " Record Movement")),
-            React.createElement(MaterialMovements, { onDownloadDoc: downloadMovementDocumentById, onViewDoc: viewMovementDocument, movements: siteRestrictedMovements, allowedSites: allowedSites, canEdit: canEdit, isAdmin: isAdmin, canApprove: canApprove, onEdit: (m) => setEditingMovement(m), onDelete: deleteMovement, onApprove: approveMovement, onReject: rejectMovement, onGenerateTicket: generateMovementTicket, onReceive: receiveMovement, onNotReceived: notReceivedMovement, onOutwardComplete: outwardCompleteMovement, onCancel: cancelMovement, selectedIds: selectedMovementIds, onSelectId: (id, checked) => setSelectedMovementIds(prev => { const n = new Set(prev); checked ? n.add(id) : n.delete(id); return n; }), onSelectAll: (checked, ids) => setSelectedMovementIds(prev => { const n = new Set(prev); ids.forEach(id => checked ? n.add(id) : n.delete(id)); return n; }), onDeleteSelected: deleteSelectedMovements, onClearSelection: () => setSelectedMovementIds(new Set()), onDownload: downloadMovementDocument, onExportExcel: handleExportMovementsXlsx, onExportCSV: handleExportMovementsCsv, onImport: handleImportMovements, importError: importError, importProgress: importProgress, importErrorDetails: importErrorDetails }),
+            React.createElement(MaterialMovements, { onUploadDocs: uploadMovementDocs, onApproveNamed: approveMovementNamed, defaultApprover: (currentUser && currentUser.name) || "", onDownloadDoc: downloadMovementDocumentById, onViewDoc: viewMovementDocument, movements: siteRestrictedMovements, allowedSites: allowedSites, canEdit: canEdit, isAdmin: isAdmin, canApprove: canApprove, onEdit: (m) => setEditingMovement(m), onDelete: deleteMovement, onApprove: approveMovement, onReject: rejectMovement, onGenerateTicket: generateMovementTicket, onReceive: receiveMovement, onNotReceived: notReceivedMovement, onOutwardComplete: outwardCompleteMovement, onCancel: cancelMovement, selectedIds: selectedMovementIds, onSelectId: (id, checked) => setSelectedMovementIds(prev => { const n = new Set(prev); checked ? n.add(id) : n.delete(id); return n; }), onSelectAll: (checked, ids) => setSelectedMovementIds(prev => { const n = new Set(prev); ids.forEach(id => checked ? n.add(id) : n.delete(id)); return n; }), onDeleteSelected: deleteSelectedMovements, onClearSelection: () => setSelectedMovementIds(new Set()), onDownload: downloadMovementDocument, onExportExcel: handleExportMovementsXlsx, onExportCSV: handleExportMovementsCsv, onImport: handleImportMovements, importError: importError, importProgress: importProgress, importErrorDetails: importErrorDetails }),
             movementModalOpen && React.createElement(RecordMovementModal, { onClose: () => setMovementModalOpen(false), onSave: createMovement, assets: siteRestrictedAssets, zones: siteRestrictedZones, onDownload: downloadMovementDocument, onRemoveDocument: removeMovementDocument, onDownloadDoc: downloadMovementDocumentById, onRemoveDoc: removeMovementDocumentById }),
             editingMovement && React.createElement(RecordMovementModal, { initial: editingMovement, onClose: () => setEditingMovement(null), onSave: (f, files, ocrMeta) => updateMovement({ ...editingMovement, ...f }, files, ocrMeta), assets: siteRestrictedAssets, zones: siteRestrictedZones, onDownload: downloadMovementDocument, onRemoveDocument: removeMovementDocument, onDownloadDoc: downloadMovementDocumentById, onRemoveDoc: removeMovementDocumentById })),
         !loading && approvalAccess && tab === "visitors" && React.createElement(React.Fragment, null,
