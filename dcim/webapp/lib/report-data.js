@@ -111,7 +111,8 @@ async function computeState(pool, sites) {
     const make = {};
     for (const a of act) { const m = makeLabel(a.manufacturer); make[m] = (make[m] || 0) + 1; }
     const servers = act.filter((a) => /server/i.test(a.hardware_type || '') && a.mgmt_ip && !num(a.redfish_monitor_ignored));
-    const known = servers.filter((a) => a.power_state);
+    // 'Checked' = servers whose last poll produced an answer: a power state OR an error. Unreachable servers must count against the online %, otherwise 2 unreachable out of 11 still read 100% online.
+    const known = servers.filter((a) => a.power_state || a.last_redfish_error);
     const fwChecked = []; let fwOk = 0;
     for (const a of act) {
       const vendor = /dell/i.test(a.manufacturer || '') ? 'ome' : /hp/i.test(a.manufacturer || '') ? 'oneview' : '';
@@ -130,7 +131,7 @@ async function computeState(pool, sites) {
       make,
       zones,
       racksHot: rl.filter((r) => r.cap && r.used / r.cap >= 0.85).map((r) => ({ zone: r.zone, rack: r.rack, pct: Math.round(r.used / r.cap * 100) })),
-      servers: { total: servers.length, known: known.length, online: known.filter((a) => /^on$/i.test(a.power_state)).length,
+      servers: { total: servers.length, known: known.length, online: known.filter((a) => /^on$/i.test(a.power_state) && !a.last_redfish_error).length,
         unreachable: servers.filter((a) => a.last_redfish_error).length },
       fw: { checked: fwChecked.length, ok: fwOk },
       pendingTransfers: num((pend.find((p) => p.site === site) || {}).c),
@@ -237,7 +238,7 @@ async function loadEvents(pool, sites, firstKey, lastKey) {
   const from = monthStart(firstKey), toExcl = monthEndExcl(lastKey);
   const P = qs(sites);
   const [issues] = await pool.query(
-    `SELECT id, ticket_no, title, site, severity, part_required, reported_date, completed_date, cancelled_date, moved_to_store_date, returned_to_oem_date
+    `SELECT id, ticket_no, title, site, severity, part_required, COALESCE(reported_date, created_at) AS reported_date, completed_date, cancelled_date, moved_to_store_date, returned_to_oem_date
        FROM issues WHERE site IN (${P})`, sites);
   const [mm] = await pool.query(
     `SELECT site, movement_type, item_name, quantity, movement_date, status FROM material_movements WHERE site IN (${P}) AND movement_date >= ? AND movement_date < ?`,
@@ -428,7 +429,7 @@ async function buildReport(pool, { sites, month, scopeLabel, now = new Date() })
   add('ops', 'Servers unreachable', st((s) => (s.servers.total ? s.servers.unreachable : null)), { kind: 'stock', good: false, watch: true });
   add('ops', 'Firmware compliant', st((s) => (s.fw.checked ? pctOf(s.fw.ok, s.fw.checked) : null)), { kind: 'stock', unit: '%', good: true });
   add('ops', 'Visits approved', (e) => e.visits);
-  add('ops', 'Transfers waiting for approval', st((s) => (s._estimated ? null : s.pendingTransfers)), { kind: 'stock', good: false });
+  add('ops', 'Material movements awaiting approval', st((s) => (s._estimated ? null : s.pendingTransfers)), { kind: 'stock', good: false });
 
   add('issues', 'Reported', (e) => e.reported);
   add('issues', 'Resolved / closed', (e) => e.resolved, { good: true });

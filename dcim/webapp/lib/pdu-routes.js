@@ -294,6 +294,7 @@ module.exports = function registerPduRoutes(app, deps) {
   app.post('/api/pdus', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
     try {
       const b = req.body || {};
+      for (const k of ['site', 'zone', 'rackNo', 'feedLabel', 'ipAddress']) if (typeof b[k] === 'string') b[k] = b[k].replace(/\s+/g, ' ').trim(); // same hygiene as assets: ' R01 ' must match rack R01
       for (const f of ['site', 'rackNo', 'feedLabel', 'ipAddress']) {
         if (!b[f] || !String(b[f]).trim()) return res.status(400).json({ error: `"${f}" is required.` });
       }
@@ -322,6 +323,7 @@ module.exports = function registerPduRoutes(app, deps) {
       if (!existing.length) return res.status(404).json({ error: 'PDU not found' });
       await assertSiteAccess(req.user, existing[0].site);
       const b = req.body || {};
+      for (const k of ['site', 'zone', 'rackNo', 'feedLabel', 'ipAddress']) if (typeof b[k] === 'string') b[k] = b[k].replace(/\s+/g, ' ').trim();
       if (b.site) await assertSiteAccess(req.user, b.site);
       await pool.query(
         `UPDATE pdus SET site=?, zone=?, rack_type=?, rack_no=?, feed_label=?, ip_address=?, vendor=?, model=?, serial_number=?,

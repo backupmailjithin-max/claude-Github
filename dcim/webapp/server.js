@@ -5845,6 +5845,64 @@ app.get('/api/assets/recent', authenticateToken, async (req, res) => {
   }
 });
 
+// ---- Asset input hygiene ----
+// "AZ-1", "az-1" and " AZ-1" (or "DellServer" / "dellserver ", rack "R01" / "r01 ") are one zone / type / rack to the people typing them,
+// but every module groups by the stored text - so each variant used to appear as a separate zone, rack or hardware row and the counts
+// stopped agreeing between Dashboard, DC Capacity, Overall Summary and the reports. Applied to every asset create / edit / import:
+// text is trimmed, inner spaces collapsed, and site / zone / hardware type / rack are snapped to the spelling that already exists.
+let assetCanonCache = null;
+async function getAssetCanon() {
+  if (assetCanonCache && Date.now() - assetCanonCache.at < 5000) return assetCanonCache;
+  const c = { at: Date.now(), sites: new Map(), zones: new Map(), hw: new Map(), racks: new Map() };
+  try {
+    const [l] = await pool.query('SELECT name FROM locations'); l.forEach((r) => c.sites.set(String(r.name).trim().toLowerCase(), r.name));
+    const [z] = await pool.query('SELECT site, zone_name FROM zones'); z.forEach((r) => c.zones.set(`${String(r.site).trim().toLowerCase()}|${String(r.zone_name).trim().toLowerCase()}`, r.zone_name));
+    const [h] = await pool.query('SELECT name FROM hardware_types'); h.forEach((r) => c.hw.set(String(r.name).trim().toLowerCase(), r.name));
+    const [r] = await pool.query("SELECT site, COALESCE(zone, 'AZ-1') zone, rack_no, COUNT(*) n FROM assets WHERE rack_no IS NOT NULL AND rack_no <> '' GROUP BY 1, 2, 3 ORDER BY n DESC");
+    r.forEach((x) => { const k = `${String(x.site).toLowerCase()}|${String(x.zone).trim().toLowerCase()}|${String(x.rack_no).trim().toUpperCase()}`; if (!c.racks.has(k)) c.racks.set(k, String(x.rack_no).trim()); });
+  } catch (e) { /* tables not ready - fall back to trimming only */ }
+  assetCanonCache = c; return c;
+}
+// A zone that only exists on assets / racks (typed in, or imported before it was registered) is missing from Settings, Monitoring and every
+// zone list, while the Dashboard still counts its devices - the classic "numbers don't match" gap. Register every zone that is in use.
+let zoneSyncRunning = false;
+async function autoRegisterZones() {
+  if (zoneSyncRunning) return 0; zoneSyncRunning = true;
+  try {
+    const parts = ["SELECT site, TRIM(zone) AS zone FROM assets WHERE zone IS NOT NULL AND TRIM(zone) <> ''", "SELECT site, TRIM(zone) FROM racks WHERE zone IS NOT NULL AND TRIM(zone) <> ''", "SELECT site, TRIM(zone) FROM rack_components WHERE zone IS NOT NULL AND TRIM(zone) <> ''"];
+    let n = 0;
+    for (const p of parts) {
+      try {
+        const [r] = await pool.query(`INSERT IGNORE INTO zones (id, site, zone_name, created_by) SELECT CONCAT('ZN-AUTO-', UUID_SHORT()), x.site, x.zone, 'System (auto-registered)' FROM (SELECT DISTINCT site, zone FROM (${p}) u) x WHERE x.site IN (SELECT name FROM locations) AND NOT EXISTS (SELECT 1 FROM zones z WHERE z.site = x.site AND z.zone_name = x.zone)`);
+        n += r.affectedRows || 0;
+      } catch (e) { /* table / column not present in this schema */ }
+    }
+    if (n) log.info(`[data] auto-registered ${n} zone(s) that were in use but missing from Settings`);
+    return n;
+  } finally { zoneSyncRunning = false; }
+}
+function tidyText(v) { return typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : v; }
+async function normalizeAssetBody(a, canon) {
+  if (!a || typeof a !== 'object' || Array.isArray(a)) return a;
+  for (const k of ['site', 'zone', 'rackType', 'rackNo', 'position', 'height', 'hardwareType', 'manufacturer', 'model', 'serialNumber', 'assetTag', 'deviceName', 'mgmtIp']) if (typeof a[k] === 'string') a[k] = tidyText(a[k]);
+  if (a.site) a.site = canon.sites.get(a.site.toLowerCase()) || a.site;
+  if (a.zone && a.site) a.zone = canon.zones.get(`${a.site.toLowerCase()}|${a.zone.toLowerCase()}`) || a.zone;
+  if (a.hardwareType) a.hardwareType = canon.hw.get(a.hardwareType.toLowerCase()) || a.hardwareType;
+  if (a.rackNo && a.site) a.rackNo = canon.racks.get(`${a.site.toLowerCase()}|${String(a.zone || 'AZ-1').toLowerCase()}|${a.rackNo.toUpperCase()}`) || a.rackNo;
+  return a;
+}
+app.use(['/api/assets', '/api/assets/bulk-upsert', '/api/assets/validate-import', '/api/assets/:id', '/api/rack-components', '/api/rack-components/bulk-upsert', '/api/rack-components/:id', '/api/racks'], async (req, res, next) => {
+  try {
+    if (!['POST', 'PATCH', 'PUT'].includes(req.method) || !req.body || typeof req.body !== 'object') return next();
+    const p = req.originalUrl.split('?')[0].replace(/\/+$/, '');
+    const isAssetWrite = ['/api/assets', '/api/assets/bulk-upsert', '/api/assets/validate-import', '/api/rack-components', '/api/rack-components/bulk-upsert', '/api/racks'].includes(p) || (req.method === 'PATCH' && /^\/api\/(assets|rack-components)\/[^/]+$/.test(p));
+    if (!isAssetWrite) return next();
+    res.on('finish', () => { if (res.statusCode < 300) autoRegisterZones().catch(() => {}); });
+    const canon = await getAssetCanon();
+    if (Array.isArray(req.body)) { for (const it of req.body) await normalizeAssetBody(it, canon); } else await normalizeAssetBody(req.body, canon);
+  } catch (e) { /* never block a save because of tidying */ }
+  next();
+});
 app.post('/api/assets', authenticateToken, requireRole(['Admin','Operator']), async (req, res) => {
   let tx = null;
   try {
@@ -6050,6 +6108,29 @@ app.delete('/api/assets/:id', authenticateToken, requireRole(['Admin','Operator'
   }
 });
 
+// Field checks shared by "Validate" and the real import, so a file that validates clean can never be rejected (or half-accepted) later.
+// Manual Add Asset already refuses these; the import used to store "abc" or "99U" as a position and silently drop an invalid install date.
+async function loadRackCaps(q) {
+  const m = new Map();
+  try { const [r] = await q('SELECT site, zone, rack_no, u_size FROM racks'); r.forEach((x) => { if (Number(x.u_size) > 0) m.set(`${x.site}|${String(x.zone || 'AZ-1').trim().toLowerCase()}|${String(x.rack_no).trim().toUpperCase()}`, Number(x.u_size)); }); } catch (e) { /* racks table not ready */ }
+  return m;
+}
+function importFieldErrors(item, rackCaps) {
+  const errs = [];
+  const pos = String(item.position || '').trim();
+  if (pos) {
+    const p = parseUPos(pos);
+    if (!p || !p.valid || p.start < 1) errs.push(`Invalid U position "${pos}". Use 1U, 2U, 12U, or a range like 3-4U.`);
+    else if (item.rackNo && item.site) {
+      const cap = rackCaps.get(`${item.site}|${String(item.zone || 'AZ-1').trim().toLowerCase()}|${String(item.rackNo).trim().toUpperCase()}`);
+      const end = Math.max(p.end, p.start + (parseHeightU(item.height) || 1) - 1);
+      if (cap && end > cap) errs.push(`U position ${pos} does not fit rack ${String(item.rackNo).trim()} (${cap}U)`);
+    }
+  }
+  const d = item.installationDate;
+  if (d !== undefined && d !== null && String(d).trim() !== '' && !normalizeDateInput(d)) errs.push(`Installation date "${d}" is not a valid date`);
+  return errs;
+}
 app.post('/api/assets/validate-import', authenticateToken, requireRole(['Admin','Operator']), async (req, res) => {
   try {
     const items = req.body;
@@ -6075,6 +6156,11 @@ app.post('/api/assets/validate-import', authenticateToken, requireRole(['Admin',
     // A serial that already exists is an UPDATE (that is what bulk-upsert does), not an error.
     // An asset tag is only a conflict when it belongs to a *different* serial number.
     const tagOwner = new Map(existingRows.filter(r => r.asset_tag).map(r => [r.asset_tag, r.serial_number]));
+    const rackCapsV = await loadRackCaps((sql, a) => pool.query(sql, a));
+    const [occAV] = await pool.query('SELECT site, zone, rack_no, position, height, serial_number FROM assets');
+    const [occCV] = await pool.query('SELECT site, zone, rack_no, position, height, component_code FROM rack_components');
+    const occupiedV = [...occAV.map((r) => ({ site: r.site, zone: String(r.zone || 'AZ-1'), rackNo: String(r.rack_no || '').trim().toUpperCase(), label: r.serial_number, u: parseUPos(r.position), h: parseHeightU(r.height) || 1 })),
+      ...occCV.map((r) => ({ site: r.site, zone: String(r.zone || 'AZ-1'), rackNo: String(r.rack_no || '').trim().toUpperCase(), label: r.component_code, u: parseUPos(r.position), h: parseHeightU(r.height) || 1 }))].filter((r) => r.u && r.u.valid && r.rackNo);
 
     items.forEach((item, idx) => {
       const row = idx + 2; // assuming header is row 1
@@ -6091,17 +6177,26 @@ app.post('/api/assets/validate-import', authenticateToken, requireRole(['Admin',
 
       const tag = item.assetTag ? String(item.assetTag).trim() : '';
       const serial = item.serialNumber ? String(item.serialNumber).trim() : '';
+      importFieldErrors(item, rackCapsV).forEach((m) => rowErrors.push(m));
 
       if (tag) {
-        if (seenTags.has(tag)) rowErrors.push(`Duplicate asset tag "${tag}" in import batch`);
+        if (seenTags.has(tag.toLowerCase())) rowErrors.push(`Duplicate asset tag "${tag}" in import batch`);
         else if (tagOwner.has(tag) && tagOwner.get(tag) !== serial) rowErrors.push(`Asset tag "${tag}" is already used by another asset`);
-        seenTags.add(tag);
+        seenTags.add(tag.toLowerCase());
       }
       if (serial) {
-        if (seenSerials.has(serial)) rowErrors.push(`Duplicate serial number "${serial}" in import batch`);
-
-        seenSerials.add(serial);
+        if (seenSerials.has(serial.toLowerCase())) rowErrors.push(`Duplicate serial number "${serial}" in import batch`);
+        seenSerials.add(serial.toLowerCase());
       }
+      // Same U-overlap rule the real import applies (existing devices + components + earlier rows of this file)
+      { const nu = parseUPos(item.position);
+        if (nu && nu.valid && item.rackNo && String(item.rackNo).trim() && item.site) {
+          const zk = String(item.zone || 'AZ-1'), rk = String(item.rackNo).trim().toUpperCase();
+          const ns = nu.start, ne = Math.max(nu.end, nu.start + (parseHeightU(item.height) || 1) - 1);
+          const clash = occupiedV.find((o) => o.site === item.site && o.zone === zk && o.rackNo === rk && o.label !== serial && o.u.start <= ne && ns <= Math.max(o.u.end, o.u.start + o.h - 1));
+          if (clash) rowErrors.push(`Other asset already available at same U position (${clash.u.start}${clash.h > 1 ? '-' + (clash.u.start + clash.h - 1) : ''}U, ${clash.label || 'occupied'})`);
+          else if (!rowErrors.length) { for (let oi = occupiedV.length - 1; oi >= 0; oi--) { if (occupiedV[oi].label === serial) occupiedV.splice(oi, 1); } occupiedV.push({ site: item.site, zone: zk, rackNo: rk, label: serial, u: nu, h: parseHeightU(item.height) || 1 }); }
+        } }
 
       if (rowErrors.length) errors.push({ row, assetTag: tag || '(empty)', serialNumber: serial || '(empty)', errors: rowErrors });
     });
@@ -6149,6 +6244,7 @@ app.post('/api/assets/bulk-upsert', authenticateToken, requireRole(['Admin','Ope
     const [zoneRowsAll2] = await conn.query('SELECT site, zone_name FROM zones');
     const zonesBySite = {}; zoneRowsAll2.forEach(r => { (zonesBySite[r.site] = zonesBySite[r.site] || []).push(r.zone_name); });
     const allowedForUser = await getAllowedSitesForUser(user); // once, not once per row
+    const rackCapsB = await loadRackCaps((sql, a) => conn.query(sql, a));
     // Rack components live in their own table/import now - a Component-category
     // hardware type in this (device) import is rejected, not silently relaxed.
     const [compTypeRowsB] = await conn.query("SELECT name FROM hardware_types WHERE category = 'Component'");
@@ -6206,6 +6302,7 @@ app.post('/api/assets/bulk-upsert', authenticateToken, requireRole(['Admin','Ope
       if (zone && site && validSites.includes(site) && !(zonesBySite[site] || []).includes(zone)) rowErrors.push(`Zone "${zone}" is not defined for ${site}. Available: ${(zonesBySite[site] || []).join(', ') || 'none'}`);
 
       // Cross-validate U position against existing inventory (devices + components) + earlier rows in this batch
+      importFieldErrors(item, rackCapsB).forEach((m) => rowErrors.push(m));
       const newU = parseUPos(item.position);
       if (newU && newU.valid && item.rackNo && String(item.rackNo).trim()) {
         const newH = parseHeightU(item.height) || 1;
@@ -6846,7 +6943,7 @@ app.get('/api/issues', authenticateToken, async (req, res) => {
       id: r.id, ticketNo: r.ticket_no, assetId: r.asset_id, assetType: r.asset_type, site: r.site, zone: r.zone,
       rackNo: r.rack_no, uPosition: r.u_position, locationDetail: r.location_detail, title: r.title,
       description: r.description, severity: r.severity, partRequired: !!r.part_required, partName: r.part_name,
-      reportedDate: toDateTimeStr(r.reported_date), diagnosedDate: toDateTimeStr(r.diagnosed_date), receivedDate: toDateTimeStr(r.received_date),
+      reportedDate: toDateTimeStr(r.reported_date || r.created_at), // an issue saved without a reported date counts from the day it was recorded diagnosedDate: toDateTimeStr(r.diagnosed_date), receivedDate: toDateTimeStr(r.received_date),
       scheduledDate: toDateTimeStr(r.scheduled_date), completedDate: toDateTimeStr(r.completed_date),
       movedToStoreDate: toDateTimeStr(r.moved_to_store_date), returnedToOemDate: toDateTimeStr(r.returned_to_oem_date), notes: r.notes,
       cancelledDate: toDateTimeStr(r.cancelled_date), cancelReason: r.cancel_reason
@@ -7391,8 +7488,9 @@ app.post('/api/assets/:id/lifecycle', authenticateToken, requireRole(['Admin','O
         return res.status(400).json({ error: 'Only an asset in Transferred or Transfer Refused status can be received and installed.' });
       }
       await assertSiteAccess(req.user, asset.site);
-      const destinationZone = String(req.body.destinationZone || '').trim();
-      const destinationRack = String(req.body.destinationRackNo || '').trim();
+      const canonLc = await getAssetCanon();
+      const destinationZone = (() => { const z = tidyText(String(req.body.destinationZone || '')); return canonLc.zones.get(`${String(asset.site).toLowerCase()}|${z.toLowerCase()}`) || z; })();
+      const destinationRack = (() => { const r = tidyText(String(req.body.destinationRackNo || '')); return canonLc.racks.get(`${String(asset.site).toLowerCase()}|${destinationZone.toLowerCase()}|${r.toUpperCase()}`) || r; })();
       const destinationPositionRaw = String(req.body.destinationPosition || '').trim();
       if (!destinationZone) return res.status(400).json({ error: 'Destination zone is required for installation.' });
       if (!destinationRack) return res.status(400).json({ error: 'Destination rack is required for installation.' });
@@ -9798,6 +9896,7 @@ app.get('/api/monitoring/server-power-consumption', authenticateToken, async (re
               hw_power_watts, hw_psu_rating_watts, hw_power_source, hw_power_synced_at, redfish_power_watts, redfish_psu_max_watts
          FROM assets
         WHERE site IN (?) AND (lifecycle_status IS NULL OR lifecycle_status = 'Active')
+          AND LOWER(COALESCE(hardware_type, '')) LIKE '%server%' /* servers only - same definition as Server Count / Firmware / reports */
           AND (hw_power_watts IS NOT NULL OR hw_psu_rating_watts IS NOT NULL OR redfish_power_watts IS NOT NULL)`, [allowed]);
     // Supply rating is a property of the MODEL: the largest one-supply rating reported by any server of that model, used for all of them (on or off).
     const [ratingRows] = await pool.query('SELECT manufacturer, model, hw_psu_rating_watts, redfish_psu_max_watts FROM assets WHERE hw_psu_rating_watts IS NOT NULL OR redfish_psu_max_watts IS NOT NULL');
@@ -10184,6 +10283,19 @@ process.on('unhandledRejection', (reason) => { log.error('[unhandledRejection]',
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
+// One-time-safe (idempotent) clean-up of text that was saved before input hygiene existed: stray spaces and zone / hardware-type spelling
+// variants made the same zone, rack or hardware type appear twice in the Dashboard, DC Capacity and reports. Values are only trimmed or
+// snapped to the spelling already registered in Settings; nothing is deleted and no row is re-assigned to a different place.
+async function tidyExistingAssetText() {
+  let n = 0;
+  const run = async (sql, args) => { const [r] = await pool.query(sql, args || []); n += r.affectedRows || 0; };
+  for (const [t, cols] of [['assets', ['site', 'zone', 'rack_no', 'rack_type', 'hardware_type', 'manufacturer', 'model', 'position']], ['rack_components', ['zone', 'rack_no']], ['racks', ['zone', 'rack_no']]]) {
+    for (const c of cols) { try { await run(`UPDATE \`${t}\` SET \`${c}\` = TRIM(\`${c}\`) WHERE \`${c}\` IS NOT NULL AND \`${c}\` <> TRIM(\`${c}\`)`); } catch (e) { /* column not in this schema */ } }
+  }
+  try { await run("UPDATE assets a JOIN zones z ON z.site = a.site AND LOWER(z.zone_name) = LOWER(a.zone) SET a.zone = z.zone_name WHERE a.zone <> z.zone_name COLLATE utf8mb4_bin"); } catch (e) { /* zones table / collation differs */ }
+  try { await run("UPDATE assets a JOIN hardware_types h ON LOWER(h.name) = LOWER(a.hardware_type) SET a.hardware_type = h.name WHERE a.hardware_type <> h.name COLLATE utf8mb4_bin"); } catch (e) { /* ignore */ }
+  if (n) log.info(`[data] tidied ${n} asset text value(s) (spaces / zone & hardware-type spelling)`);
+}
 async function startServer() {
   try {
     await ensureDatabase();
@@ -10201,6 +10313,8 @@ async function startServer() {
     } else {
       await initDB();
       try { await migrateModelNames(); } catch (e) { log.warn('[models] model-name standardisation skipped: ' + e.message); }
+      try { await autoRegisterZones(); } catch (e) { log.warn('[data] zone sync skipped: ' + e.message); }
+      try { await tidyExistingAssetText(); } catch (e) { log.warn('[data] asset text tidy skipped: ' + e.message); }
       await setupRoutesModule.applyIntegrationEnv();
       await pduRoutesModule.ensureSchema();
       await visitorRoutesModule.ensureSchema();

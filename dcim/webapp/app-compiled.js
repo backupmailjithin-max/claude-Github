@@ -3322,7 +3322,7 @@ function MaterialMovements({ movements, allowedSites, canEdit, isAdmin, canAppro
                     React.createElement("div", { style: { fontSize: 11.5, color: "#64748B", marginBottom: 4 } }, "Control coverage"),
                     React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8 } },
                         React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontSize: 24, fontWeight: 800, color: "#020617" } }, withDocs),
-                        React.createElement("span", { style: { fontFamily: "Inter", fontSize: 10, color: "#64748B" } }, "with DC/Invoice")),
+                        React.createElement("span", { style: { fontFamily: "Inter", fontSize: 10, color: "#64748B" } }, `of ${(movements || []).length} with DC/Invoice copy attached`)),
                     React.createElement("div", { style: { fontFamily: "'JetBrains Mono'", fontSize: 10, color: "#0891B2", marginTop: 5 } },
                         recent,
                         " in last 30 days"));
@@ -18164,7 +18164,11 @@ function DataCenterDashboard() {
                         inventoryActiveAssets.forEach((a) => { if (isComponentHwType(a.hardwareType))
                                 return; const site = assetSiteValue(a) || "Unknown"; const z = a.zone || "AZ-1"; const key = site + "||" + z; if (!zoneSiteCounts[key])
                                 zoneSiteCounts[key] = { site, zone: z, n: 0 }; zoneSiteCounts[key].n += 1; });
-                        const zoneEntries = Object.values(zoneSiteCounts).sort((x, y) => y.n - x.n).map((e) => [`${siteAbbr(e.site)}-${e.zone}`, e.n, e.site, e.zone]);
+                        // Two locations can share the same 3-letter code ("Sample Site A" / "Sample Site B" are both SAM) - then use the initials of every
+        // word (SSA / SSB) so each bar is unambiguous.
+        const abbrUse = {}; Object.values(zoneSiteCounts).forEach((e) => { const k = siteAbbr(e.site); (abbrUse[k] = abbrUse[k] || new Set()).add(e.site); });
+        const siteTag = (site) => { const k = siteAbbr(site); if (!abbrUse[k] || abbrUse[k].size < 2) return k; const w = String(site).trim().split(/[^A-Za-z0-9]+/).filter(Boolean); return (w.length > 1 ? w.map((x) => x[0]).join("") : String(site).slice(0, 6)).toUpperCase(); };
+        const zoneEntries = Object.values(zoneSiteCounts).sort((x, y) => y.n - x.n).map((e) => [`${siteTag(e.site)}-${e.zone}`, e.n, e.site, e.zone]);
                         const zoneMax = Math.max(1, ...zoneEntries.map(([, n]) => n));
                         const zoneDeviceTotal = zoneEntries.reduce((sum, [, n]) => sum + n, 0);
                         return React.createElement("div", { className: "neu-card anim-in d1 loc-zone-card", style: { padding: "16px 18px", display: "flex", flexDirection: "column" } },
