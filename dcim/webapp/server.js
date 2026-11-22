@@ -9685,6 +9685,7 @@ function iloCollectPorts(obj, out, depth) {
 }
 async function iloPortLinks(session, hdrs, serverUri) {
   const out = { ports: [], note: '' };
+  let iloAddrTried = '';
   try {
     if (!/^\/rest\/server-hardware\/[A-Za-z0-9_-]+$/.test(serverUri || '')) { out.note = 'Link status unavailable (unexpected server reference)'; return out; }
     const r = await monitorFetch(`${session.host}${serverUri}/remoteConsoleUrl`, { headers: hdrs });
@@ -9696,6 +9697,7 @@ async function iloPortLinks(session, hdrs, serverUri) {
     try { addr = decodeURIComponent(addr); } catch (e) { /* keep raw */ }
     if (!addr || !key) { out.note = 'Link status unavailable: OneView returned no iLO address / session'; return out; }
     if (!/^[A-Za-z0-9.-]{1,253}(:\d{1,5})?$/.test(addr)) { out.note = 'Link status unavailable: unexpected iLO address'; return out; }
+    iloAddrTried = addr;
     const base = `${ILO_SCHEME}://${addr}`;
     const get = async (path) => {
       const rr = await monitorFetch(base + path, { headers: { 'X-Auth-Token': key, Accept: 'application/json' }, signal: AbortSignal.timeout(10000) });
@@ -9720,7 +9722,7 @@ async function iloPortLinks(session, hdrs, serverUri) {
     }
     if (!out.ports.length) out.note = 'Link status unavailable: the iLO answered but listed no port link data (older iLO firmware?)';
   } catch (e) {
-    out.note = `Link status unavailable: iLO not reachable from this server (${String(e && e.message || e).slice(0, 80)})`;
+    out.note = `Link status unavailable: the iLO ${iloAddrTried || ''} could not be reached from the DCIM server (${String(e && e.message || e).slice(0, 80)}). HPE OneView does not report port link state, only the iLO does - allow HTTPS (443) from the DCIM server to the iLO.`.replace('iLO  ', 'iLO ');
   }
   return out;
 }
