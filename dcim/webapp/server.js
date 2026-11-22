@@ -9775,9 +9775,22 @@ async function pullOneviewHardware(site, zone, serial) {
       const rr = await monitorFetch(`${session.host}${p}`, { headers: hdrs, signal: AbortSignal.timeout(8000) });
       if (!rr.ok) { probe.push(`${p.split('/').pop()}: HTTP ${rr.status}`); return; }
       const jj = await rr.json().catch(() => null);
-      const got = oneviewLinks.collectOneviewLinks(jj, []);
+      let got = oneviewLinks.collectOneviewLinks(jj, []);
+      let followed = 0;
+      if (!got.length) {
+        // The answer may only list links to each adapter / port: follow them (bounded).
+        const kids = [...new Set(oneviewLinks.childUris(jj, s.uri, []))].filter((u) => u !== p).slice(0, 24);
+        for (const u of kids) {
+          try {
+            const r2 = await monitorFetch(`${session.host}${u}`, { headers: hdrs, signal: AbortSignal.timeout(8000) });
+            if (!r2.ok) continue;
+            followed++;
+            got = got.concat(oneviewLinks.collectOneviewLinks(await r2.json().catch(() => null), []));
+          } catch (e) { /* next */ }
+        }
+      }
       ovLinks.push(...got);
-      probe.push(`${p.split('/').pop()}: ${got.length ? got.length + ' port(s) with link data' : 'answered, no link fields'}`);
+      probe.push(`${p.split('/').pop()}: ${got.length ? got.length + ' port(s) with link data' : 'answered, no link fields' + (followed ? ` (followed ${followed} links)` : '') + ' - layout: ' + oneviewLinks.shapeOf(jj)}`);
     } catch (e) { probe.push(`${p.split('/').pop()}: ${String(e && e.message || e).slice(0, 40)}`); }
   }));
   let linked = 0;

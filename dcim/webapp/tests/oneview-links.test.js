@@ -19,3 +19,13 @@ test('ignores objects without both a MAC and a link field', () => {
   assert.strictEqual(collectOneviewLinks({ linkStatus: 'LinkUp' }, []).length, 0);
   assert.strictEqual(collectOneviewLinks(null, []).length, 0);
 });
+test('follows-links helpers and layout report never expose values', () => {
+  const { childUris, shapeOf } = require('../lib/oneview-links');
+  const doc = { members: [{ uri: '/rest/server-hardware/ABC/networkAdapters/1', secret: 'topsecret' }, { uri: '/rest/other/2' }] };
+  assert.deepStrictEqual(childUris(doc, '/rest/server-hardware/ABC', []), ['/rest/server-hardware/ABC/networkAdapters/1']);
+  assert.ok(!shapeOf(doc).includes('topsecret'));
+  assert.ok(shapeOf(doc).includes('members[]'));
+});
+test('MAC without separators is accepted', () => {
+  assert.strictEqual(collectOneviewLinks({ macAddress: 'C470BD99AC08', linkStatus: 'LinkUp' }, []).length, 1);
+});
