@@ -81,31 +81,34 @@ function spark(p, x, y, w, h, vals, col) {
   return true;
 }
 
-// A module made of measure rows: MEASURE | prev | cur | CHANGE | % | 6-MONTH TREND
+// A module made of measure rows: MEASURE | 2 months ago | prev | cur | arrow+CHANGE | % | 6-MONTH TREND
+// Arrow+change and % sit in their own fixed columns so they can never overlap each other.
 function measureCard(L, title, sub, rows, color, extraLine) {
   const rep = L.rep, h = 20.5 + rows.length * RH + (extraLine ? 7 : 3);
   L.ensure(h);
   const p = L.page, b = L.card(h, title, sub);
-  const cols = [{ label: 'MEASURE', x: 0, w: 66 }, { label: rep.meta.prevShort.toUpperCase(), x: 66, w: 18, align: 'right' }, { label: rep.meta.shortLabel.toUpperCase(), x: 88, w: 18, align: 'right' },
-    { label: 'CHANGE', x: 110, w: 24, align: 'right' }, { label: '%', x: 138, w: 12, align: 'right' }, { label: '6-MONTH TREND', x: 154, w: 26, align: 'center' }];
+  const m2 = rep.meta.prev2Short || '';
+  const cols = [{ label: 'MEASURE', x: 0, w: 56 }, { label: m2.toUpperCase(), x: 58, w: 16, align: 'right' }, { label: rep.meta.prevShort.toUpperCase(), x: 76, w: 16, align: 'right' }, { label: rep.meta.shortLabel.toUpperCase(), x: 94, w: 16, align: 'right' },
+    { label: 'CHANGE', x: 114, w: 22, align: 'right' }, { label: '%', x: 140, w: 12, align: 'right' }, { label: '6-MONTH TREND', x: 156, w: 24, align: 'center' }];
   L.head(b.x, b.y - 2.4, cols, b.w);
   rows.forEach((r, i) => {
     const y = b.y + 5.6 + i * RH;
     if (i) p.line(b.x, y - 5, b.x + b.w, y - 5, { stroke: C.row, lw: 0.15 });
-    const lw = p.text(r.label, b.x, y, { size: 8.4, font: 'HB', color: C.white, maxW: 64 });
-    if (r.watch) { const x0 = b.x + Math.min(lw, 64) + 2; p.rect(x0, y - 3, 10.5, 4.1, { fill: '#3B1318', stroke: '#7F1D1D', lw: 0.15, r: 1 }); p.text('WATCH', x0 + 5.25, y - 0.1, { size: 4.8, font: 'HB', color: '#FCA5A5', align: 'center', spacing: 0.3 }); }
-    p.text(fmtNum(r.prev, r.unit, r.dec), b.x + 84 - (r.prevEst ? 1.6 : 0), y, { size: 8.4, color: C.dim, align: 'right' });
-    if (r.prevEst) p.text('*', b.x + 84 + 0.2, y - 0.8, { size: 8, font: 'HB', color: C.amber });
-    const cw = p.text(fmtNum(r.cur, r.unit, r.dec), b.x + 106 - (r.approx ? 1.6 : 0), y, { size: 8.6, font: 'HB', color: C.white, align: 'right' });
-    if (r.approx) p.text('*', b.x + 106 + 0.2, y - 0.8, { size: 8, font: 'HB', color: C.amber });
+    const lw = p.text(r.label, b.x, y, { size: 8.4, font: 'HB', color: C.white, maxW: 55 });
+    if (r.watch) { const x0 = b.x + Math.min(lw, 55) + 1.5; p.rect(x0, y - 3, 10.5, 4.1, { fill: '#3B1318', stroke: '#7F1D1D', lw: 0.15, r: 1 }); p.text('WATCH', x0 + 5.25, y - 0.1, { size: 4.8, font: 'HB', color: '#FCA5A5', align: 'center', spacing: 0.3 }); }
+    p.text(fmtNum(r.prev2, r.unit, r.dec), b.x + 74, y, { size: 8.2, color: C.dim, align: 'right' });
+    p.text(fmtNum(r.prev, r.unit, r.dec), b.x + 92 - (r.prevEst ? 1.6 : 0), y, { size: 8.4, color: C.dim, align: 'right' });
+    if (r.prevEst) p.text('*', b.x + 92 + 0.2, y - 0.8, { size: 8, font: 'HB', color: C.amber });
+    p.text(fmtNum(r.cur, r.unit, r.dec), b.x + 110 - (r.approx ? 1.6 : 0), y, { size: 8.6, font: 'HB', color: C.white, align: 'right' });
+    if (r.approx) p.text('*', b.x + 110 + 0.2, y - 0.8, { size: 8, font: 'HB', color: C.amber });
     if (r.first || r.prev == null || r.cur == null) {
-      p.text('—', b.x + 134, y, { size: 8.4, color: C.dim, align: 'right' });
-      if (r.first) p.text('first record', b.x + 167, y, { size: 6.8, color: C.dim, align: 'center' });
-      else if (r.cur == null) p.text('not recorded', b.x + 167, y, { size: 6.8, color: C.dim, align: 'center' });
+      p.text('\u2014', b.x + 136, y, { size: 8.4, color: C.dim, align: 'right' });
+      if (r.first) p.text('first record', b.x + 168, y, { size: 6.8, color: C.dim, align: 'center' });
+      else if (r.cur == null) p.text('not recorded', b.x + 168, y, { size: 6.8, color: C.dim, align: 'center' });
     } else {
-      L.deltaAt(b.x + 134, y, r.delta, r.good, r.unit === '%' ? '%' : '', r.dec || 0, 8);
-      p.text(r.unit === '%' ? '' : pctChange(r.prev, r.cur), b.x + 150, y, { size: 7.4, color: C.dim, align: 'right' });
-      if (!spark(p, b.x + 155, y - 4.2, 24, 5, r.series, color)) p.text('—', b.x + 167, y, { size: 7, color: C.dim, align: 'center' });
+      L.deltaAt(b.x + 136, y, r.delta, r.good, r.unit === '%' ? '%' : '', r.dec || 0, 8);
+      p.text(r.unit === '%' ? '' : pctChange(r.prev, r.cur), b.x + 152, y, { size: 7.4, color: C.dim, align: 'right' });
+      if (!spark(p, b.x + 156, y - 4.2, 24, 5, r.series, color)) p.text('\u2014', b.x + 168, y, { size: 7, color: C.dim, align: 'center' });
     }
   });
   if (extraLine) p.text(extraLine, b.x, b.y + 5.6 + rows.length * RH - 1, { size: 7.2, color: C.mute, maxW: b.w });

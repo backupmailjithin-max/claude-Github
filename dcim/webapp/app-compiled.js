@@ -472,6 +472,60 @@ const { useState, useMemo, useRef, useEffect } = React;
 /* PERF (Phase-2): long lists draw the first LIST_PAGE rows and add more as the user scrolls (or presses "Show all").
    Filtering, selection, sorting, counts and exports still work on the FULL list - only the number of drawn rows is limited. */
 const LIST_PAGE = 150;
+// ---- Month-wise collage (Issue Tracker, Material Movements) ----
+// Additive card: hidden until "Show preview" is clicked. Picking a month tile filters the module's own list.
+const MW_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function monthKeyOf(v) {
+    if (!v)
+        return "";
+    const s = String(v);
+    const m = /^(\d{4})-(\d{2})/.exec(s);
+    if (m)
+        return m[1] + "-" + m[2];
+    const d = new Date(s);
+    return Number.isNaN(d.getTime()) ? "" : d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+}
+function monthLabelOf(k) { const p = String(k).split("-"); return (MW_MONTHS[Number(p[1]) - 1] || p[1]) + " " + p[0]; }
+function MonthWiseCollage({ title, hint, items, dateOf, metrics, selected, onSelect, listLabel }) {
+    const [open, setOpen] = useState(false);
+    const [q, setQ] = useState("");
+    const [sort, setSort] = useState("new");
+    const months = useMemo(() => {
+        const set = new Set();
+        (items || []).forEach((it) => { const k = monthKeyOf(dateOf(it)); if (k)
+            set.add(k); });
+        return [...set].sort().reverse().slice(0, 12);
+    }, [items]);
+    const cards = months.map((k) => ({ key: k, label: monthLabelOf(k), vals: metrics.map((m) => m.fn(k, items || [])) }));
+    const needle = q.trim().toLowerCase();
+    const shown = cards.filter((c) => !needle || c.label.toLowerCase().includes(needle)).sort((a, b) => sort === "old" ? a.key.localeCompare(b.key) : sort === "high" ? (b.vals[0] - a.vals[0]) || b.key.localeCompare(a.key) : b.key.localeCompare(a.key));
+    const maxV = Math.max(1, ...cards.map((c) => c.vals[0]));
+    const fmtV = (v) => (v == null ? "—" : v);
+    return React.createElement("div", { className: "neu-card anim-in d1 month-wise-card", "data-month-wise": "1", style: { padding: "14px 16px", marginBottom: 18 } },
+        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" } },
+            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#17345D" } }, title),
+            selected && React.createElement("span", { style: { fontFamily: "Inter", fontSize: 11, fontWeight: 700, color: "#3157EE", background: "#EEF2FF", padding: "3px 9px", borderRadius: 999 } }, "Showing " + monthLabelOf(selected)),
+            React.createElement("button", { type: "button", "data-month-wise-toggle": "1", onClick: () => setOpen(!open), className: "neu-btn-primary", style: { marginLeft: "auto", fontSize: 11.5, padding: "7px 16px", borderRadius: 999 } }, open ? "Hide preview" : "Show preview")),
+        open && React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12, marginTop: 12 } },
+            React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" } },
+                React.createElement("button", { type: "button", onClick: () => onSelect(""), className: selected ? "neu-btn-secondary" : "neu-btn-primary", style: { fontSize: 11, padding: "6px 14px", borderRadius: 999 } }, "All months"),
+                React.createElement("div", { style: { marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" } },
+                    React.createElement("input", { value: q, onChange: (e) => setQ(e.target.value), placeholder: "Filter month…", "aria-label": "Filter months", className: "neu-input", style: { fontSize: 12, padding: "7px 12px", width: 150 } }),
+                    React.createElement(ThemedSelect, { value: sort, onChange: (e) => setSort(e.target.value), className: "neu-input", style: { width: "auto", fontSize: 12, padding: "7px 12px" } },
+                        React.createElement("option", { value: "new" }, "Sort: Newest first"),
+                        React.createElement("option", { value: "old" }, "Sort: Oldest first"),
+                        React.createElement("option", { value: "high" }, "Sort: Highest " + metrics[0].label.toLowerCase())))),
+            shown.length === 0 ? React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", padding: "8px 2px" } }, cards.length ? "No month matches the filter." : "No dated records yet.") :
+                React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 14 } },
+                    shown.map((c) => React.createElement("button", { type: "button", key: c.key, "data-month-tile": c.key, onClick: () => onSelect(selected === c.key ? "" : c.key), "aria-pressed": selected === c.key, style: { textAlign: "left", border: "none", cursor: "pointer", borderRadius: 16, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 7, fontFamily: "Inter", background: selected === c.key ? "linear-gradient(145deg,#EEF2FF,#DFE7FF)" : "linear-gradient(145deg,#FFFFFF,#EAF0F9)", boxShadow: selected === c.key ? "0 0 0 2px #3157EE, 6px 6px 14px rgba(49,87,238,0.22)" : "6px 6px 14px rgba(163,177,198,0.4), -5px -5px 12px #FFFFFF" } },
+                        React.createElement("div", { style: { fontSize: 10, fontWeight: 800, letterSpacing: 1.2, color: "#8696AD", textTransform: "uppercase" } }, c.label),
+                        React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 26, fontWeight: 800, color: "#17345D" } }, c.vals[0], " ", React.createElement("span", { style: { fontFamily: "Inter", fontSize: 10, fontWeight: 600, color: "#64748B" } }, metrics[0].label)),
+                        React.createElement("div", { style: { height: 5, borderRadius: 3, background: "rgba(148,163,184,0.25)" } }, React.createElement("div", { style: { height: 5, borderRadius: 3, width: Math.round(c.vals[0] / maxV * 100) + "%", background: "#3157EE" } })),
+                        metrics.slice(1).map((m, i) => React.createElement("div", { key: m.label, style: { display: "flex", justifyContent: "space-between", fontSize: 11, color: "#475569" } },
+                            React.createElement("span", null, m.label),
+                            React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontWeight: 700, color: "#17345D" } }, fmtV(c.vals[i + 1]))))))),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748B" } }, "Click a tile to filter " + listLabel + " to that month; click it again or choose All months to clear.")));
+}
 function useProgressiveList() { return useState({ lim: LIST_PAGE, key: -1 }); }
 function ListMore({ shown, total, onMore, onAll, asRow, colSpan }) {
     const ref = useRef(null);
@@ -3382,12 +3436,15 @@ function MaterialMovements({ onUploadDocs, onApproveNamed, defaultApprover, move
     const [typeFilter, setTypeFilter] = useState("all");
     const [search, setSearch] = useState("");
     const [columnFilters, setColumnFilters] = useState(() => makeEmptyListColumnFilters(MOVEMENT_COLUMNS));
+    const [moveMonth, setMoveMonth] = useState("");
     const listSort = useListSort();
     const [openFilter, setOpenFilter] = useState(null);
     const baseRows = (movements || []).filter((m) => {
         if (siteFilter !== "all" && m.site !== siteFilter)
             return false;
         if (typeFilter !== "all" && m.movementType !== typeFilter)
+            return false;
+        if (moveMonth && monthKeyOf(m.movementDate) !== moveMonth)
             return false;
         if (search.trim()) {
             const q = search.trim().toLowerCase();
@@ -3435,6 +3492,13 @@ function MaterialMovements({ onUploadDocs, onApproveNamed, defaultApprover, move
                         recent,
                         " in last 30 days"));
             })()),
+        React.createElement(MonthWiseCollage, { title: "Month-wise", listLabel: "the movements list", items: (movements || []).filter((m) => siteFilter === "all" || m.site === siteFilter), dateOf: (m) => m.movementDate, selected: moveMonth, onSelect: setMoveMonth, metrics: [
+                { label: "Inward", fn: (k, it) => it.filter((m) => m.movementType === "Inward" && monthKeyOf(m.movementDate) === k).length },
+                { label: "Items received", fn: (k, it) => it.filter((m) => m.movementType === "Inward" && monthKeyOf(m.movementDate) === k).reduce((a, m) => a + (parseInt(m.quantity, 10) || 1), 0) },
+                { label: "Outward", fn: (k, it) => it.filter((m) => m.movementType === "Outward" && monthKeyOf(m.movementDate) === k).length },
+                { label: "Items sent out", fn: (k, it) => it.filter((m) => m.movementType === "Outward" && monthKeyOf(m.movementDate) === k).reduce((a, m) => a + (parseInt(m.quantity, 10) || 1), 0) },
+                { label: "Pending approval", fn: (k, it) => it.filter((m) => m.status === "Pending Approval" && monthKeyOf(m.movementDate) === k).length }
+            ] }),
         React.createElement("div", { className: "neu-card anim-in d1", style: { display: "flex", gap: 10, alignItems: "center", marginBottom: 18, flexWrap: "wrap", padding: "14px 16px" } },
             React.createElement("div", { className: "neu-pressed", style: { display: "flex", alignItems: "center", gap: 10, borderRadius: 14, padding: "10px 14px", flex: "1 1 220px", minWidth: 200 } },
                 React.createElement(Search, { s: 15, c: "#64748B" }),
@@ -16750,6 +16814,7 @@ function DataCenterDashboard() {
     ], []);
     const [issueColumnFilters, setIssueColumnFilters] = useState(() => makeEmptyListColumnFilters(ISSUE_LIST_COLUMNS));
     const issueSort = useListSort();
+    const [issueMonth, setIssueMonth] = useState("");
     const [issueOpenFilter, setIssueOpenFilter] = useState(null);
     const [selectedIssueIds, setSelectedIssueIds] = useState(new Set());
     const [selectedActivityIds, setSelectedActivityIds] = useState(new Set());
@@ -18087,7 +18152,7 @@ function DataCenterDashboard() {
     }, [issues, assets, allowedSites.join("|")]);
     const recentIssues = useMemo(() => [...issues].filter((i) => allowedSites.includes(i.site)).sort((a, b) => new Date(b.reportedDate || 0) - new Date(a.reportedDate || 0)).slice(0, 6), [issues, allowedSites]);
     const recentActivities = useMemo(() => [...activities].filter((a) => allowedSites.includes(a.site)).sort((a, b) => new Date(b.startDate || b.completionDate || 0) - new Date(a.startDate || a.completionDate || 0)).slice(0, 6), [activities, allowedSites]);
-    const issueBaseFiltered = siteRestrictedIssues.filter((i) => { const status = getStatus(i).label; const matchesSearch = !search || [i.id, i.ticketNo, i.assetId, i.title, i.zone, i.partName, i.site, i.rackNo, i.uPosition].join(" ").toLowerCase().includes(search.toLowerCase()); const matchesStatus = statusFilter === "all" || (statusFilter === "Active" ? isIssueOpen(i) : statusFilter === "Closed" ? !isIssueOpen(i) : status === statusFilter); const matchesSeverity = severityFilter === "all" || i.severity === severityFilter; const matchesSite = siteFilter === "all" || i.site === siteFilter; return matchesSearch && matchesStatus && matchesSeverity && matchesSite; });
+    const issueBaseFiltered = siteRestrictedIssues.filter((i) => { const status = getStatus(i).label; const matchesSearch = !search || [i.id, i.ticketNo, i.assetId, i.title, i.zone, i.partName, i.site, i.rackNo, i.uPosition].join(" ").toLowerCase().includes(search.toLowerCase()); const matchesStatus = statusFilter === "all" || (statusFilter === "Active" ? isIssueOpen(i) : statusFilter === "Closed" ? !isIssueOpen(i) : status === statusFilter); const matchesSeverity = severityFilter === "all" || i.severity === severityFilter; const matchesSite = siteFilter === "all" || i.site === siteFilter; const matchesMonth = !issueMonth || monthKeyOf(i.reportedDate) === issueMonth; return matchesSearch && matchesStatus && matchesSeverity && matchesSite && matchesMonth; });
     const filteredIssuesDefault = issueBaseFiltered.filter((row) => ISSUE_LIST_COLUMNS.every((col) => listColumnFilterMatches(issueColumnFilters[col.key], col, row))).sort((a, b) => new Date(b.reportedDate || 0) - new Date(a.reportedDate || 0));
     const filtered = issueSort.apply(filteredIssuesDefault, ISSUE_LIST_COLUMNS);
     const issueOptionRowsForColumn = (key) => issueBaseFiltered.filter((row) => ISSUE_LIST_COLUMNS.every((col) => col.key === key || listColumnFilterMatches(issueColumnFilters[col.key], col, row)));
@@ -18233,6 +18298,13 @@ function DataCenterDashboard() {
                     React.createElement("div", { style: { fontSize: 12, color: "#075985", fontWeight: 600, marginBottom: 6 } }, "Assets with Open Issues"),
                     React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 30, fontWeight: 800, color: "#0369A1" } }, overallStats.assetsWithOpenIssues),
                     React.createElement("div", { style: { fontFamily: "'JetBrains Mono'", fontSize: 11, color: "#64748B", marginTop: 6 } }, "distinct asset(s) affected"))),
+            React.createElement(MonthWiseCollage, { title: "Month-wise", listLabel: "the issue list", items: siteRestrictedIssues, dateOf: (i) => i.reportedDate, selected: issueMonth, onSelect: setIssueMonth, metrics: [
+                    { label: "Reported", fn: (k, it) => it.filter((i) => monthKeyOf(i.reportedDate) === k).length },
+                    { label: "Resolved", fn: (k, it) => it.filter((i) => monthKeyOf(i.completedDate) === k).length },
+                    { label: "Still open", fn: (k, it) => it.filter((i) => monthKeyOf(i.reportedDate) === k && isIssueOpen(i)).length },
+                    { label: "Critical", fn: (k, it) => it.filter((i) => monthKeyOf(i.reportedDate) === k && i.severity === "critical").length },
+                    { label: "Avg days to close", fn: (k, it) => { const d = it.filter((i) => monthKeyOf(i.completedDate) === k && i.reportedDate).map((i) => daysBetween(String(i.reportedDate).slice(0, 10), String(i.completedDate).slice(0, 10))).filter((n) => Number.isFinite(n) && n >= 0); return d.length ? Math.round(d.reduce((a, b) => a + b, 0) / d.length * 10) / 10 : null; } }
+                ] }),
             React.createElement("div", { className: "neu-card anim-in d6 issue-filter-bar", style: { display: "flex", gap: 10, alignItems: "center", marginBottom: 18, flexWrap: "wrap", padding: "14px 16px" } },
                 React.createElement("div", { className: "neu-pressed", style: { display: "flex", alignItems: "center", gap: 10, borderRadius: 14, padding: "10px 14px", flex: "1 1 220px", minWidth: 200 } },
                     React.createElement(Search, { s: 15, c: "#64748B" }),

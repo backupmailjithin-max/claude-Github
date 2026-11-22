@@ -401,11 +401,11 @@ async function buildReport(pool, { sites, month, scopeLabel, now = new Date() })
   const add = (mod, label, fn, o = {}) => {
     const series = keys.map((k, i) => { try { const v = fn(E[k], i === keys.length - 1 ? sCur : S[k], k); return v == null || Number.isNaN(v) ? null : v; } catch (e) { return null; } });
     const exactSeries = series.slice(0, -1).concat([o.kind === 'stock' && approx ? null : series[series.length - 1]]);
-    const prev = series[series.length - 2], curV = series[series.length - 1];
+    const prev = series[series.length - 2], curV = series[series.length - 1], prev2 = series.length > 2 ? series[series.length - 3] : null;
     const delta = chg(curV, prev, o.dec || 0);
     const good = o.good == null ? null : o.good;
     const watch = !!o.watch && curV != null && curV > 0 && (prev == null || curV > prev);
-    (rows[mod] || (rows[mod] = [])).push({ label: typeof label === 'function' ? label(sCur) : label, prev, cur: curV, delta, unit: o.unit || '', dec: o.dec || 0, good, kind: o.kind || 'event',
+    (rows[mod] || (rows[mod] = [])).push({ label: typeof label === 'function' ? label(sCur) : label, prev2, prev, cur: curV, delta, unit: o.unit || '', dec: o.dec || 0, good, kind: o.kind || 'event',
       series: exactSeries, first: o.kind === 'stock' && prev == null && curV != null, approx: o.kind === 'stock' && approx && curV != null, prevEst: o.kind === 'stock' && prevEst && prev != null, watch });
   };
   const st = (fn) => (e, s) => (s ? fn(s) : null);
@@ -468,7 +468,7 @@ async function buildReport(pool, { sites, month, scopeLabel, now = new Date() })
   const stockKnown = !!sCur;
   return {
     meta: {
-      month, prevMonth: prevKey, label: monthLabel(month), prevLabel: monthLabel(prevKey), shortLabel: monthShort(month), prevShort: monthShort(prevKey),
+      month, prevMonth: prevKey, label: monthLabel(month), prevLabel: monthLabel(prevKey), shortLabel: monthShort(month), prevShort: monthShort(prevKey), prev2Short: monthShort(addMonths(month, -2)),
       scope: scopeLabel || (multi ? 'All locations' : sites[0]), sites, multi, isCurrent, generatedAt: now.toISOString(), monthsShown: keys.map(monthShort),
       firstRecord: stockKnown && !sPrv && !(sCur && sCur._estimated) ? { asOf: approx ? sCur.takenAt : (isCurrent ? dstr(now) : (sCur.takenAt || '')), approx } : null,
       stockMissing: !stockKnown, prevEstimated: prevEst, curEstimated: !!(sCur && sCur._estimated),
