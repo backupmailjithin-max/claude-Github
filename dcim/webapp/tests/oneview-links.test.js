@@ -51,3 +51,17 @@ test('Up/Down is filled by adapter model + position when MACs do not match', () 
   assert.strictEqual(nics[0].ports[0].link, 'Up');
   assert.strictEqual(nics[0].ports[1].link, 'Down');
 });
+test('real DL380 Gen10 Plus OneView answer: every port gets Up/Down by PCI slot, LinkStatus beats LinkState', () => {
+  const { mergeAdapterLinks, nicsFromAdapters } = require('../lib/oneview-links');
+  const diag = require('./fixtures/oneview-dl380g10plus-diag.json');
+  const nics = diag.serverRecordPortMap.deviceSlots.map((d) => ({ name: d.deviceName, id: d.location, slot: String(d.slotNumber), partNumber: '', ports: d.physicalPorts.map((p) => ({ id: String(p.portNumber), mac: p.mac || p.wwn || '', link: '', speed: '' })) }));
+  const filled = mergeAdapterLinks(nics, nicsFromAdapters(diag.networkAdapters.body));
+  const by = {}; nics.forEach((n) => { by[n.slot] = n.ports.map((p) => p.link + (p.speed ? ' ' + p.speed : '')); });
+  assert.strictEqual(filled, 14);
+  assert.deepStrictEqual(by['10'], ['Down', 'Down', 'Down', 'Down']);
+  assert.deepStrictEqual(by['6'], ['Up 32 Gbps', 'Up 32 Gbps']);
+  assert.deepStrictEqual(by['1'], ['Up 25 Gbps', 'Up 25 Gbps']);
+  assert.deepStrictEqual(by['3'], ['Up 25 Gbps', 'Up 25 Gbps']);
+  assert.deepStrictEqual(by['7'], ['Up 25 Gbps', 'Down']);
+  assert.deepStrictEqual(by['4'], ['Down', 'Down']);
+});

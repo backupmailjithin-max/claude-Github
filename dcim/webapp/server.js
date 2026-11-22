@@ -9757,7 +9757,7 @@ async function pullOneviewHardware(site, zone, serial) {
   const nicList = slots.map((d, i) => ({
     name: String(d.deviceName || `Adapter ${d.slotNumber != null ? d.slotNumber : i + 1}`).trim(),
     id: String(d.location || (d.slotNumber != null ? `Slot ${d.slotNumber}` : '')).trim(),
-    partNumber: '', firmware: '',
+    slot: d.slotNumber != null ? String(d.slotNumber) : '', partNumber: '', firmware: '',
     ports: (Array.isArray(d.physicalPorts) ? d.physicalPorts : []).map((p) => ({
       id: String(p.portNumber != null ? p.portNumber : '').trim(),
       mac: hwPickMacs(p) || String(p.wwn || '').trim(),
@@ -9801,14 +9801,15 @@ async function pullOneviewHardware(site, zone, serial) {
     if (alt.length) { nicList.splice(0, nicList.length, ...alt); const pc = alt.reduce((t, n) => t + n.ports.length, 0); if (!summary.some((x) => x.label === 'Network')) summary.push({ label: 'Network', value: `${alt.length} adapter${alt.length === 1 ? '' : 's'}${pc ? `, ${pc} port${pc === 1 ? '' : 's'}` : ''}` }); }
   }
   let linked = 0;
+  if (adapterDoc) { try { linked += oneviewLinks.mergeAdapterLinks(nicList, oneviewLinks.nicsFromAdapters(adapterDoc)); } catch (e) { /* best effort */ } }
   if (ovLinks.length) {
     nicList.forEach((nic) => nic.ports.forEach((q) => {
+      if (/^(up|down)$/i.test(String(q.link || ''))) return;
       const keys = String(q.mac || '').split(',').map(oneviewLinks.macKey).filter(Boolean);
       const hit = ovLinks.find((x) => x.keys.some((k) => keys.includes(k)));
       if (hit) { q.link = hit.link; if (hit.mbps) q.speed = `${Math.round(hit.mbps / 10) / 100} Gbps`; linked++; }
     }));
   }
-  if (adapterDoc) { try { linked += oneviewLinks.mergeAdapterLinks(nicList, oneviewLinks.nicsFromAdapters(adapterDoc)); } catch (e) { /* best effort */ } }
   // Enabled/Disabled is the port's admin setting, not link state: never show it in the Link column.
   nicList.forEach((n) => n.ports.forEach((q) => { if (/^(enabled|disabled)$/i.test(String(q.link || ''))) { q.admin = q.link; q.link = ''; } }));
   const totalPorts = nicList.reduce((t, n) => t + n.ports.length, 0);

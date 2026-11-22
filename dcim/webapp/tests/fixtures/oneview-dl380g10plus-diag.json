@@ -1,0 +1,2544 @@
+{
+  "note": "Values for MAC, serial and IP are masked. Send this file back for analysis.",
+  "generatedAt": "2026-11-22T10:52:57.599Z",
+  "apiVersion": 7600,
+  "serverRecordPortMap": {
+    "deviceSlots": [
+      {
+        "deviceName": "BCM 5719 1Gb 4p BASE-T OCP Adptr",
+        "deviceNumber": 1,
+        "location": "Ocp",
+        "physicalPorts": [
+          {
+            "interconnectPort": 0,
+            "interconnectUri": null,
+            "mac": "8C:**:**:**:**:B4",
+            "nodeGuid": null,
+            "permanentNodeGuid": null,
+            "physicalInterconnectPort": 0,
+            "physicalInterconnectUri": null,
+            "portNumber": 1,
+            "type": "Ethernet",
+            "virtualPorts": [],
+            "wwn": null
+          },
+          {
+            "interconnectPort": 0,
+            "interconnectUri": null,
+            "mac": "8C:**:**:**:**:B5",
+            "nodeGuid": null,
+            "permanentNodeGuid": null,
+            "physicalInterconnectPort": 0,
+            "physicalInterconnectUri": null,
+            "portNumber": 2,
+            "type": "Ethernet",
+            "virtualPorts": [],
+            "wwn": null
+          },
+          {
+            "interconnectPort": 0,
+            "interconnectUri": null,
+            "mac": "8C:**:**:**:**:B6",
+            "nodeGuid": null,
+            "permanentNodeGuid": null,
+            "physicalInterconnectPort": 0,
+            "physicalInterconnectUri": null,
+            "portNumber": 3,
+            "type": "Ethernet",
+            "virtualPorts": [],
+            "wwn": null
+          },
+          {
+            "interconnectPort": 0,
+            "interconnectUri": null,
+            "mac": "8C:**:**:**:**:B7",
+            "nodeGuid": null,
+            "permanentNodeGuid": null,
+            "physicalInterconnectPort": 0,
+            "physicalInterconnectUri": null,
+            "portNumber": 4,
+            "type": "Ethernet",
+            "virtualPorts": [],
+            "wwn": null
+          }
+        ],
+        "slotNumber": 10
+      },
+      {
+        "deviceName": "HPE StoreFabric SN1610E 32Gb 2-port Fibre Channel Host Bus Adapt",
+        "deviceNumber": 2,
+        "location": "Pci",
+        "physicalPorts": [
+          {
+            "interconnectPort": 0,
+            "interconnectUri": null,
+            "mac": null,
+            "nodeGuid": null,
+            "permanentNodeGuid": null,
+            "physicalInterconnectPort": 0,
+            "physicalInterconnectUri": null,
+            "portNumber": 1,
+            "type": "FibreChannel",
+            "virtualPorts": [],
+            "wwn": "10:00:5C:BA:2C:FD:40:15"
+          },
+          {
+            "interconnectPort": 0,
+            "interconnectUri": null,
+            "mac": null,
+            "nodeGuid": null,
+            "permanentNodeGuid": null,
+            "physicalInterconnectPort": 0,
+            "physicalInterconnectUri": null,
+            "portNumber": 2,
+            "type": "FibreChannel",
+            "virtualPorts": [],
+            "wwn": "10:00:5C:BA:2C:FD:40:16"
+          }
+        ],
+        "slotNumber": 6
+      },
+      {
+        "deviceName": "P42046-001 / Mellanox MCX631102AS-ADAT Ethernet 10/25Gb 2-port SFP28 Adapter",
+        "deviceNumber": 3,
+        "location": "Pci",
+        "physicalPorts": [
+          {
+            "interconnectPort": 0,
+            "interconnectUri": null,
+            "mac": "C4:**:**:**:**:7C",
+            "nodeGuid": null,
+            "permanentNodeGuid": null,
+            "physicalInterconnectPort": 0,
+            "physicalInterconnectUri": null,
+            "portNumber": 0,
+            "type": "Ethernet",
+            "virtualPorts": [
+              {
+                "currentAllocatedVirtualFunctionCount": 127,
+                "mac": "c4:**:**:**:**:7c",
+                "portFunction": "a",
+                "portNumber": 1,
+                "wwnn": null,
+                "wwpn": null
+              }
+            ],
+            "wwn": null
+          },
+          {
+            "interconnectPort": 0,
+            "interconnectUri": null,
+            "mac": "C4:**:**:**:**:7D",
+            "nodeGuid": null,
+            "permanentNodeGuid": null,
+            "physicalInterconnectPort": 0,
+            "physicalInterconnectUri": null,
+            "portNumber": 1,
+            "type": "Ethernet",
+            "virtualPorts": [
+              {
+                "currentAllocatedVirtualFunctionCount": 127,
+                "mac": "c4:**:**:**:**:7d",
+                "portFunction": "a",
+                "portNumber": 1,
+                "wwnn": null,
+                "wwpn": null
+              }
+            ],
+            "wwn": null
+          }
+        ],
+        "slotNumber": 3
+      },
+      {
+        "deviceName": "P42046-001 / Mellanox MCX631102AS-ADAT Ethernet 10/25Gb 2-port SFP28 Adapter",
+        "deviceNumber": 4,
+        "location": "Pci",
+        "physicalPorts": [
+          {
+            "interconnectPort": 0,
+            "interconnectUri": null,
+            "mac": "C4:**:**:**:**:7C",
+            "nodeGuid": null,
+            "permanentNodeGuid": null,
+            "physicalInterconnectPort": 0,
+            "physicalInterconnectUri": null,
+            "portNumber": 0,
+            "type": "Ethernet",
+            "virtualPorts": [
+              {
+                "currentAllocatedVirtualFunctionCount": 127,
+                "mac": "c4:**:**:**:**:7c",
+                "portFunction": "a",
+                "portNumber": 1,
+                "wwnn": null,
+                "wwpn": null
+              }
+            ],
+            "wwn": null
+          },
+          {
+            "interconnectPort": 0,
+            "interconnectUri": null,
+            "mac": "C4:**:**:**:**:7D",
+            "nodeGuid": null,
+            "permanentNodeGuid": null,
+            "physicalInterconnectPort": 0,
+            "physicalInterconnectUri": null,
+            "portNumber": 1,
+            "type": "Ethernet",
+            "virtualPorts": [
+              {
+                "currentAllocatedVirtualFunctionCount": 127,
+                "mac": "c4:**:**:**:**:7d",
+                "portFunction": "a",
+                "portNumber": 1,
+                "wwnn": null,
+                "wwpn": null
+              }
+            ],
+            "wwn": null
+          }
+        ],
+        "slotNumber": 1
+      },
+      {
+        "deviceName": "P42046-001 / Mellanox MCX631102AS-ADAT Ethernet 10/25Gb 2-port SFP28 Adapter",
+        "deviceNumber": 5,
+        "location": "Pci",
+        "physicalPorts": [
+          {
+            "interconnectPort": 0,
+            "interconnectUri": null,
+            "mac": "C4:**:**:**:**:F0",
+            "nodeGuid": null,
+            "permanentNodeGuid": null,
+            "physicalInterconnectPort": 0,
+            "physicalInterconnectUri": null,
+            "portNumber": 0,
+            "type": "Ethernet",
+            "virtualPorts": [
+              {
+                "currentAllocatedVirtualFunctionCount": 127,
+                "mac": "c4:**:**:**:**:f0",
+                "portFunction": "a",
+                "portNumber": 1,
+                "wwnn": null,
+                "wwpn": null
+              }
+            ],
+            "wwn": null
+          },
+          {
+            "interconnectPort": 0,
+            "interconnectUri": null,
+            "mac": "C4:**:**:**:**:F1",
+            "nodeGuid": null,
+            "permanentNodeGuid": null,
+            "physicalInterconnectPort": 0,
+            "physicalInterconnectUri": null,
+            "portNumber": 1,
+            "type": "Ethernet",
+            "virtualPorts": [
+              {
+                "currentAllocatedVirtualFunctionCount": 127,
+                "mac": "c4:**:**:**:**:f1",
+                "portFunction": "a",
+                "portNumber": 1,
+                "wwnn": null,
+                "wwpn": null
+              }
+            ],
+            "wwn": null
+          }
+        ],
+        "slotNumber": 7
+      },
+      {
+        "deviceName": "P42046-001 / Mellanox MCX631102AS-ADAT Ethernet 10/25Gb 2-port SFP28 Adapter",
+        "deviceNumber": 6,
+        "location": "Pci",
+        "physicalPorts": [
+          {
+            "interconnectPort": 0,
+            "interconnectUri": null,
+            "mac": "C4:**:**:**:**:D4",
+            "nodeGuid": null,
+            "permanentNodeGuid": null,
+            "physicalInterconnectPort": 0,
+            "physicalInterconnectUri": null,
+            "portNumber": 0,
+            "type": "Ethernet",
+            "virtualPorts": [
+              {
+                "currentAllocatedVirtualFunctionCount": 127,
+                "mac": "c4:**:**:**:**:d4",
+                "portFunction": "a",
+                "portNumber": 1,
+                "wwnn": null,
+                "wwpn": null
+              }
+            ],
+            "wwn": null
+          },
+          {
+            "interconnectPort": 0,
+            "interconnectUri": null,
+            "mac": "C4:**:**:**:**:D5",
+            "nodeGuid": null,
+            "permanentNodeGuid": null,
+            "physicalInterconnectPort": 0,
+            "physicalInterconnectUri": null,
+            "portNumber": 1,
+            "type": "Ethernet",
+            "virtualPorts": [
+              {
+                "currentAllocatedVirtualFunctionCount": 127,
+                "mac": "c4:**:**:**:**:d5",
+                "portFunction": "a",
+                "portNumber": 1,
+                "wwnn": null,
+                "wwpn": null
+              }
+            ],
+            "wwn": null
+          }
+        ],
+        "slotNumber": 4
+      }
+    ]
+  },
+  "networkAdapters": {
+    "status": 200,
+    "body": {
+      "uri": "/rest/server-hardware/31353050-3237-4753-4835-30314C344C4A/networkAdapters",
+      "collectionState": "Collected",
+      "modified": "2026-11-20T18:56:48.869Z",
+      "data": [
+        {
+          "@odata.context": "/redfish/v1/$metadata#NetworkAdapter.NetworkAdapter",
+          "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/",
+          "@odata.type": "#NetworkAdapter.v1_5_0.NetworkAdapter",
+          "Id": "DE085000",
+          "@Redfish.Settings": {
+            "SettingsObject": {
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/Settings/"
+            }
+          },
+          "Actions": {
+            "#NetworkAdapter.ResetSettingsToDefault": {
+              "target": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/Actions/NetworkAdapter.ResetSettingsToDefault/",
+              "title": "Reset network adapter configuration to factory default values."
+            }
+          },
+          "Controllers": [
+            {
+              "ControllerCapabilities": {
+                "DataCenterBridging": {
+                  "Capable": false
+                },
+                "NPIV": {
+                  "MaxDeviceLogins": 256,
+                  "MaxPortLogins": 128
+                },
+                "NetworkDeviceFunctionCount": 2,
+                "NetworkPortCount": 2
+              },
+              "FirmwarePackageVersion": "14.4.473.14 ",
+              "Links": {
+                "NetworkDeviceFunctions": [
+                  {
+                    "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkDeviceFunctions/1/"
+                  },
+                  {
+                    "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkDeviceFunctions/2/"
+                  }
+                ],
+                "Ports": [
+                  {
+                    "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkPorts/1/"
+                  },
+                  {
+                    "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkPorts/2/"
+                  }
+                ]
+              },
+              "Location": {
+                "PartLocation": {
+                  "LocationOrdinalValue": 6,
+                  "LocationType": "Slot",
+                  "ServiceLabel": "PCI-E Slot 6"
+                }
+              }
+            }
+          ],
+          "Description": "Device capabilities and characteristics with active configuration status",
+          "Manufacturer": "Hewlett Packard Enterprise",
+          "Model": "HPE StoreFabric SN1610E 32Gb 2-port Fibre Channel Host Bus Adapt",
+          "Name": "HPE SN1610E 32Gb 2p FC HBA",
+          "NetworkDeviceFunctions": [
+            {
+              "@odata.context": "/redfish/v1/$metadata#NetworkDeviceFunction.NetworkDeviceFunction",
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkDeviceFunctions/1/",
+              "@odata.type": "#NetworkDeviceFunction.v1_5_0.NetworkDeviceFunction",
+              "Id": "1",
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkDeviceFunctions/1/Settings/"
+                }
+              },
+              "AssignablePhysicalNetworkPorts": [
+                {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/Ports/1/"
+                }
+              ],
+              "AssignablePhysicalPorts": [
+                {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkPorts/1/"
+                }
+              ],
+              "BootMode": "Disabled",
+              "Description": "PCIe function status and active configuration data",
+              "FibreChannel": {
+                "BootTargets": [
+                  {
+                    "BootPriority": 0,
+                    "LUNID": "00:00:00:00:00:00:00:00",
+                    "WWPN": "00:00:00:00:00:00:00:00"
+                  },
+                  {
+                    "BootPriority": 1,
+                    "LUNID": "00:00:00:00:00:00:00:00",
+                    "WWPN": "00:00:00:00:00:00:00:00"
+                  },
+                  {
+                    "BootPriority": 2,
+                    "LUNID": "00:00:00:00:00:00:00:00",
+                    "WWPN": "00:00:00:00:00:00:00:00"
+                  },
+                  {
+                    "BootPriority": 3,
+                    "LUNID": "00:00:00:00:00:00:00:00",
+                    "WWPN": "00:00:00:00:00:00:00:00"
+                  },
+                  {
+                    "BootPriority": 4,
+                    "LUNID": "00:00:00:00:00:00:00:00",
+                    "WWPN": "00:00:00:00:00:00:00:00"
+                  },
+                  {
+                    "BootPriority": 5,
+                    "LUNID": "00:00:00:00:00:00:00:00",
+                    "WWPN": "00:00:00:00:00:00:00:00"
+                  },
+                  {
+                    "BootPriority": 6,
+                    "LUNID": "00:00:00:00:00:00:00:00",
+                    "WWPN": "00:00:00:00:00:00:00:00"
+                  },
+                  {
+                    "BootPriority": 7,
+                    "LUNID": "00:00:00:00:00:00:00:00",
+                    "WWPN": "00:00:00:00:00:00:00:00"
+                  }
+                ],
+                "PermanentWWNN": "20:00:5C:BA:2C:FD:40:15",
+                "PermanentWWPN": "10:00:5C:BA:2C:FD:40:15",
+                "WWNN": "20:00:5C:BA:2C:FD:40:15",
+                "WWPN": "10:00:5C:BA:2C:FD:40:15"
+              },
+              "Links": {
+                "PhysicalPortAssignment": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkPorts/1/"
+                },
+                "PhysicalNetworkPortAssignment": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/Ports/1/"
+                }
+              },
+              "Name": "Network adapter PCIe function",
+              "NetDevFuncCapabilities": [
+                "FibreChannel"
+              ],
+              "NetDevFuncType": "FibreChannel",
+              "Oem": {
+                "Hpe": {
+                  "@odata.context": "/redfish/v1/$metadata#HpeNetworkDeviceFunction.HpeNetworkDeviceFunction",
+                  "@odata.type": "#HpeNetworkDeviceFunction.v1_2_1.HpeNetworkDeviceFunction",
+                  "BootTargetSource": "None",
+                  "NetDevFuncCapabilities": [
+                    "FibreChannel"
+                  ],
+                  "NetDevFuncType": "FibreChannel",
+                  "SupportedFCBootTargetCount": 8
+                }
+              },
+              "PhysicalNetworkPortAssignment": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/Ports/1/"
+              },
+              "PhysicalPortAssignment": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkPorts/1/"
+              },
+              "Settings": {
+                "href": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkDeviceFunctions/1/Settings/"
+              }
+            },
+            {
+              "@odata.context": "/redfish/v1/$metadata#NetworkDeviceFunction.NetworkDeviceFunction",
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkDeviceFunctions/2/",
+              "@odata.type": "#NetworkDeviceFunction.v1_5_0.NetworkDeviceFunction",
+              "Id": "2",
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkDeviceFunctions/2/Settings/"
+                }
+              },
+              "AssignablePhysicalNetworkPorts": [
+                {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/Ports/2/"
+                }
+              ],
+              "AssignablePhysicalPorts": [
+                {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkPorts/2/"
+                }
+              ],
+              "BootMode": "Disabled",
+              "Description": "PCIe function status and active configuration data",
+              "FibreChannel": {
+                "BootTargets": [
+                  {
+                    "BootPriority": 0,
+                    "LUNID": "00:00:00:00:00:00:00:00",
+                    "WWPN": "00:00:00:00:00:00:00:00"
+                  },
+                  {
+                    "BootPriority": 1,
+                    "LUNID": "00:00:00:00:00:00:00:00",
+                    "WWPN": "00:00:00:00:00:00:00:00"
+                  },
+                  {
+                    "BootPriority": 2,
+                    "LUNID": "00:00:00:00:00:00:00:00",
+                    "WWPN": "00:00:00:00:00:00:00:00"
+                  },
+                  {
+                    "BootPriority": 3,
+                    "LUNID": "00:00:00:00:00:00:00:00",
+                    "WWPN": "00:00:00:00:00:00:00:00"
+                  },
+                  {
+                    "BootPriority": 4,
+                    "LUNID": "00:00:00:00:00:00:00:00",
+                    "WWPN": "00:00:00:00:00:00:00:00"
+                  },
+                  {
+                    "BootPriority": 5,
+                    "LUNID": "00:00:00:00:00:00:00:00",
+                    "WWPN": "00:00:00:00:00:00:00:00"
+                  },
+                  {
+                    "BootPriority": 6,
+                    "LUNID": "00:00:00:00:00:00:00:00",
+                    "WWPN": "00:00:00:00:00:00:00:00"
+                  },
+                  {
+                    "BootPriority": 7,
+                    "LUNID": "00:00:00:00:00:00:00:00",
+                    "WWPN": "00:00:00:00:00:00:00:00"
+                  }
+                ],
+                "PermanentWWNN": "20:00:5C:BA:2C:FD:40:16",
+                "PermanentWWPN": "10:00:5C:BA:2C:FD:40:16",
+                "WWNN": "20:00:5C:BA:2C:FD:40:16",
+                "WWPN": "10:00:5C:BA:2C:FD:40:16"
+              },
+              "Links": {
+                "PhysicalPortAssignment": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkPorts/2/"
+                },
+                "PhysicalNetworkPortAssignment": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/Ports/2/"
+                }
+              },
+              "Name": "Network adapter PCIe function",
+              "NetDevFuncCapabilities": [
+                "FibreChannel"
+              ],
+              "NetDevFuncType": "FibreChannel",
+              "Oem": {
+                "Hpe": {
+                  "@odata.context": "/redfish/v1/$metadata#HpeNetworkDeviceFunction.HpeNetworkDeviceFunction",
+                  "@odata.type": "#HpeNetworkDeviceFunction.v1_2_1.HpeNetworkDeviceFunction",
+                  "BootTargetSource": "None",
+                  "NetDevFuncCapabilities": [
+                    "FibreChannel"
+                  ],
+                  "NetDevFuncType": "FibreChannel",
+                  "SupportedFCBootTargetCount": 8
+                }
+              },
+              "PhysicalNetworkPortAssignment": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/Ports/2/"
+              },
+              "PhysicalPortAssignment": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkPorts/2/"
+              },
+              "Settings": {
+                "href": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkDeviceFunctions/2/Settings/"
+              }
+            }
+          ],
+          "Oem": {
+            "Hpe": {
+              "@odata.context": "/redfish/v1/$metadata#HpeNetworkAdapter.HpeNetworkAdapter",
+              "@odata.type": "#HpeNetworkAdapter.v1_3_0.HpeNetworkAdapter",
+              "Actions": {
+                "#HpeNetworkAdapter.FlushConfigurationToNVM": {
+                  "target": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/Actions/Oem/Hpe/HpeNetworkAdapter.FlushConfigurationToNVM/",
+                  "title": "Force a save of current network adapter configuration to non-volatile storage."
+                },
+                "#NetworkAdapter.FlushConfigurationToNVM": {
+                  "target": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/Actions/Oem/Hpe/NetworkAdapter.FlushConfigurationToNVM/",
+                  "title": "NOTE: Deprecated, will be removed in a future release. Replaced by HpeNetworkAdapter.FlushConfigurationToNVM. Force a save of current network adapter configurat..."
+                }
+              },
+              "CLPVersion": "",
+              "Controllers": [
+                {
+                  "ConfigurationStatus": {
+                    "Detail": [
+                      {
+                        "Group": 8,
+                        "SubGroup": 1,
+                        "Summary": 0
+                      },
+                      {
+                        "Group": 8,
+                        "SubGroup": 2,
+                        "Summary": 0
+                      },
+                      {
+                        "Group": 15,
+                        "SubGroup": 0,
+                        "Summary": 0
+                      },
+                      {
+                        "Group": 15,
+                        "SubGroup": 1,
+                        "Summary": 0
+                      },
+                      {
+                        "Group": 34,
+                        "SubGroup": 1,
+                        "Summary": 0
+                      },
+                      {
+                        "Group": 34,
+                        "SubGroup": 2,
+                        "Summary": 0
+                      },
+                      {
+                        "Group": 40,
+                        "SubGroup": 1,
+                        "Summary": 0
+                      },
+                      {
+                        "Group": 40,
+                        "SubGroup": 2,
+                        "Summary": 0
+                      },
+                      {
+                        "Group": 112,
+                        "SubGroup": 0,
+                        "Summary": 0
+                      }
+                    ],
+                    "Summary": 617424329
+                  },
+                  "DeviceLimitationsBitmap": 1,
+                  "FunctionTypeLimits": [],
+                  "FunctionTypes": [
+                    "FibreChannel"
+                  ],
+                  "MostRecentConfigurationChangeSource": "None",
+                  "RDMASupport": [
+                    "None"
+                  ],
+                  "UnderlyingDataSource": "DCi"
+                }
+              ],
+              "FactoryDefaultsActuationBehavior": "Immediate",
+              "PCAVersion": "R2J63-63001",
+              "RedfishConfiguration": "Disabled"
+            }
+          },
+          "PartNumber": "R2J63A",
+          "Ports": [
+            {
+              "@odata.context": "/redfish/v1/$metadata#NetworkPort.NetworkPort",
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkPorts/1/",
+              "@odata.type": "#NetworkPort.v1_2_5.NetworkPort",
+              "Id": "1",
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkPorts/1/Settings/"
+                }
+              },
+              "Description": "Port status and active configuration data",
+              "LinkStatus": "LinkUp",
+              "Name": "Network adapter port",
+              "Oem": {
+                "Hpe": {
+                  "@odata.context": "/redfish/v1/$metadata#HpeNetworkPort.HpeNetworkPort",
+                  "@odata.type": "#HpeNetworkPort.v1_3_2.HpeNetworkPort",
+                  "Actions": {
+                    "#HpeNetworkPort.DiagnosticsReset": {
+                      "target": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkPorts/1/Actions/Oem/Hpe/HpeNetworkPort.DiagnosticsReset/",
+                      "title": "Reset diagnostic capabilities on this port to an inactive state."
+                    },
+                    "#NetworkPort.DiagnosticsReset": {
+                      "target": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkPorts/1/Actions/Oem/Hpe/NetworkPort.DiagnosticsReset/",
+                      "title": "NOTE: Deprecated, will be removed in a future release. Replaced by HpeNetworkPort.DiagnosticsReset. Reset diagnostic capabilities on this port to an inactive st..."
+                    }
+                  },
+                  "AutoNegotiationCapable": true,
+                  "ConfiguredNetworkLinks": [
+                    {
+                      "ConfiguredLinkSpeedGbps": 32
+                    }
+                  ],
+                  "PortDiagnosticEnableLocalLoopback": false,
+                  "PortDiagnosticEnableRemoteLoopback": false,
+                  "PortDiagnosticLocalLoopbackCapable": false,
+                  "PortDiagnosticRemoteLoopbackCapable": false,
+                  "PortDiagnosticsEnabled": false,
+                  "VirtualFunctionAllocations": []
+                }
+              },
+              "PortMaximumMTU": 2148,
+              "Settings": {
+                "href": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkPorts/1/Settings/"
+              },
+              "SignalDetected": true,
+              "PortProtocol": "FibreChannel",
+              "Ethernet": {
+                "AssociatedMACAddresses": [
+                  "20:00:5C:BA:2C:FD:40:15"
+                ],
+                "FlowControlConfiguration": null,
+                "FlowControlStatus": null,
+                "SupportedEthernetCapabilities": []
+              },
+              "CurrentSpeedGbps": 32,
+              "PortId": "1",
+              "LinkConfiguration": [
+                {
+                  "AutoSpeedNegotiationCapable": null,
+                  "CapableLinkSpeedGbps": [
+                    32,
+                    16,
+                    8
+                  ]
+                }
+              ],
+              "LinkNetworkTechnology": "FibreChannel",
+              "FunctionMaxBandwidth": [],
+              "FunctionMinBandwidth": []
+            },
+            {
+              "@odata.context": "/redfish/v1/$metadata#NetworkPort.NetworkPort",
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkPorts/2/",
+              "@odata.type": "#NetworkPort.v1_2_5.NetworkPort",
+              "Id": "2",
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkPorts/2/Settings/"
+                }
+              },
+              "Description": "Port status and active configuration data",
+              "LinkStatus": "LinkUp",
+              "Name": "Network adapter port",
+              "Oem": {
+                "Hpe": {
+                  "@odata.context": "/redfish/v1/$metadata#HpeNetworkPort.HpeNetworkPort",
+                  "@odata.type": "#HpeNetworkPort.v1_3_2.HpeNetworkPort",
+                  "Actions": {
+                    "#HpeNetworkPort.DiagnosticsReset": {
+                      "target": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkPorts/2/Actions/Oem/Hpe/HpeNetworkPort.DiagnosticsReset/",
+                      "title": "Reset diagnostic capabilities on this port to an inactive state."
+                    },
+                    "#NetworkPort.DiagnosticsReset": {
+                      "target": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkPorts/2/Actions/Oem/Hpe/NetworkPort.DiagnosticsReset/",
+                      "title": "NOTE: Deprecated, will be removed in a future release. Replaced by HpeNetworkPort.DiagnosticsReset. Reset diagnostic capabilities on this port to an inactive st..."
+                    }
+                  },
+                  "AutoNegotiationCapable": true,
+                  "ConfiguredNetworkLinks": [
+                    {
+                      "ConfiguredLinkSpeedGbps": 32
+                    }
+                  ],
+                  "PortDiagnosticEnableLocalLoopback": false,
+                  "PortDiagnosticEnableRemoteLoopback": false,
+                  "PortDiagnosticLocalLoopbackCapable": false,
+                  "PortDiagnosticRemoteLoopbackCapable": false,
+                  "PortDiagnosticsEnabled": false,
+                  "VirtualFunctionAllocations": []
+                }
+              },
+              "PortMaximumMTU": 2148,
+              "Settings": {
+                "href": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkPorts/2/Settings/"
+              },
+              "SignalDetected": true,
+              "PortProtocol": "FibreChannel",
+              "Ethernet": {
+                "AssociatedMACAddresses": [
+                  "20:00:5C:BA:2C:FD:40:16"
+                ],
+                "FlowControlConfiguration": null,
+                "FlowControlStatus": null,
+                "SupportedEthernetCapabilities": []
+              },
+              "CurrentSpeedGbps": 32,
+              "PortId": "2",
+              "LinkConfiguration": [
+                {
+                  "AutoSpeedNegotiationCapable": null,
+                  "CapableLinkSpeedGbps": [
+                    32,
+                    16,
+                    8
+                  ]
+                }
+              ],
+              "LinkNetworkTechnology": "FibreChannel",
+              "FunctionMaxBandwidth": [],
+              "FunctionMinBandwidth": []
+            }
+          ],
+          "SKU": "***",
+          "SerialNumber": "***",
+          "Settings": {
+            "href": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/Settings/"
+          }
+        },
+        {
+          "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE080000",
+          "@odata.type": "#NetworkAdapter.v1_9_0.NetworkAdapter",
+          "@odata.etag": "W/\"29E31A82\"",
+          "@Redfish.Settings": {
+            "SettingsObject": {
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE080000/Settings"
+            }
+          },
+          "Actions": {
+            "#NetworkAdapter.ResetSettingsToDefault": {
+              "target": "/redfish/v1/Chassis/1/NetworkAdapters/DE080000/Actions/NetworkAdapter.ResetSettingsToDefault",
+              "title": "Reset network adapter configuration to factory default values."
+            }
+          },
+          "Controllers": [
+            {
+              "ControllerCapabilities": {
+                "DataCenterBridging": {
+                  "Capable": true
+                },
+                "NetworkDeviceFunctionCount": 2,
+                "NetworkPortCount": 2,
+                "VirtualizationOffload": {
+                  "SRIOV": {
+                    "SRIOVVEPACapable": false
+                  },
+                  "VirtualFunction": {
+                    "DeviceMaxCount": 254,
+                    "MinAssignmentGroupSize": 0,
+                    "NetworkPortMaxCount": 127
+                  }
+                },
+                "NPAR": {
+                  "NparCapable": false,
+                  "NparEnabled": false
+                }
+              },
+              "FirmwarePackageVersion": "26.43.1014",
+              "Location": {
+                "PartLocation": {
+                  "LocationOrdinalValue": "1",
+                  "LocationType": "Slot",
+                  "ServiceLabel": "PCI-E Slot 1"
+                }
+              }
+            }
+          ],
+          "Id": "DE080000",
+          "Manufacturer": "MLNX",
+          "Model": "P42046-001 / Mellanox MCX631102AS-ADAT Ethernet 10/25Gb 2-port SFP28 Adapter",
+          "Name": "NetworkAdapter",
+          "NetworkDeviceFunctions": [
+            {
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE080000/NetworkDeviceFunctions/0",
+              "@odata.type": "#NetworkDeviceFunction.v1_8_0.NetworkDeviceFunction",
+              "@odata.etag": "W/\"C9D39723\"",
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE080000/NetworkDeviceFunctions/0/Settings"
+                }
+              },
+              "BootMode": "PXE",
+              "DeviceEnabled": true,
+              "Ethernet": {
+                "MACAddress": "c4:**:**:**:**:7c",
+                "MTUSize": 9022,
+                "PermanentMACAddress": "c4:**:**:**:**:7c",
+                "MTUSizeMaximum": 10000
+              },
+              "Id": "0",
+              "Links": {
+                "PhysicalNetworkPortAssignment": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE080000/Ports/0"
+                }
+              },
+              "MaxVirtualFunctions": 127,
+              "Name": "NetworkDeviceFunction",
+              "NetDevFuncCapabilities": [
+                "Ethernet"
+              ],
+              "NetDevFuncType": "Ethernet",
+              "Status": {
+                "Health": "OK",
+                "HealthRollup": "OK",
+                "State": "Enabled"
+              },
+              "VirtualFunctionsEnabled": true,
+              "AssignablePhysicalNetworkPorts": [
+                {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE080000/Ports/0"
+                }
+              ],
+              "Metrics": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE080000/NetworkDeviceFunctions/0/Metrics"
+              },
+              "SAVIEnabled": false
+            },
+            {
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE080000/NetworkDeviceFunctions/1",
+              "@odata.type": "#NetworkDeviceFunction.v1_8_0.NetworkDeviceFunction",
+              "@odata.etag": "W/\"16C59C64\"",
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE080000/NetworkDeviceFunctions/1/Settings"
+                }
+              },
+              "BootMode": "PXE",
+              "DeviceEnabled": true,
+              "Ethernet": {
+                "MACAddress": "c4:**:**:**:**:7d",
+                "MTUSize": 9022,
+                "PermanentMACAddress": "c4:**:**:**:**:7d",
+                "MTUSizeMaximum": 10000
+              },
+              "Id": "1",
+              "Links": {
+                "PhysicalNetworkPortAssignment": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE080000/Ports/1"
+                }
+              },
+              "MaxVirtualFunctions": 127,
+              "Name": "NetworkDeviceFunction",
+              "NetDevFuncCapabilities": [
+                "Ethernet"
+              ],
+              "NetDevFuncType": "Ethernet",
+              "Status": {
+                "Health": "OK",
+                "HealthRollup": "OK",
+                "State": "Enabled"
+              },
+              "VirtualFunctionsEnabled": true,
+              "AssignablePhysicalNetworkPorts": [
+                {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE080000/Ports/1"
+                }
+              ],
+              "Metrics": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE080000/NetworkDeviceFunctions/1/Metrics"
+              },
+              "SAVIEnabled": false
+            }
+          ],
+          "PartNumber": "P42046-001",
+          "SKU": "***",
+          "SerialNumber": "***",
+          "Status": {
+            "Health": "OK",
+            "HealthRollup": "OK",
+            "State": "Enabled"
+          },
+          "Ports": [
+            {
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE080000/Ports/0",
+              "@odata.type": "#Port.v1_6_0.Port",
+              "@odata.etag": "W/\"4D0C26E0\"",
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE080000/Ports/0/Settings"
+                }
+              },
+              "Actions": {
+                "#Port.Reset": {
+                  "target": "/redfish/v1/Chassis/1/NetworkAdapters/DE080000/Ports/0/Actions/Port.Reset",
+                  "title": "Resets this port"
+                }
+              },
+              "CurrentSpeedGbps": 25,
+              "Id": "0",
+              "MaxSpeedGbps": 25,
+              "Name": "Port",
+              "PortId": "1",
+              "Status": {
+                "Health": "OK",
+                "HealthRollup": "OK",
+                "State": "Enabled"
+              },
+              "LinkNetworkTechnology": "Ethernet",
+              "LinkState": "Enabled",
+              "LinkStatus": "LinkUp",
+              "Metrics": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE080000/Ports/0/Metrics"
+              },
+              "SignalDetected": true,
+              "Ethernet": {
+                "FlowControlConfiguration": "TX_RX",
+                "FlowControlStatus": "TX_RX",
+                "SupportedEthernetCapabilities": [],
+                "AssociatedMACAddresses": [
+                  "c4:**:**:**:**:7c"
+                ],
+                "LLDPEnabled": false,
+                "LLDPReceive": {
+                  "ChassisId": "",
+                  "ChassisIdSubtype": "NotTransmitted",
+                  "ManagementAddressIPv4": "***",
+                  "ManagementAddressIPv6": "***",
+                  "ManagementAddressMAC": "",
+                  "ManagementVlanId": 4095,
+                  "PortId": "",
+                  "PortIdSubtype": "NotTransmitted"
+                },
+                "LLDPTransmit": {
+                  "ChassisId": "C4:**:**:**:**:7C",
+                  "ChassisIdSubtype": "MacAddr",
+                  "ManagementAddressIPv4": "***",
+                  "ManagementAddressIPv6": "***",
+                  "ManagementAddressMAC": "",
+                  "ManagementVlanId": 4095,
+                  "PortId": "C4:**:**:**:**:7C",
+                  "PortIdSubtype": "MacAddr"
+                },
+                "WakeOnLANEnabled": false
+              },
+              "LinkConfiguration": [
+                {
+                  "AutoSpeedNegotiationCapable": true,
+                  "AutoSpeedNegotiationEnabled": true,
+                  "CapableLinkSpeedGbps": [
+                    1,
+                    10,
+                    25
+                  ]
+                }
+              ],
+              "MaxFrameSize": 9022,
+              "FunctionMaxBandwidth": [
+                {
+                  "AllocationPercent": 100
+                }
+              ],
+              "FunctionMinBandwidth": [
+                {
+                  "AllocationPercent": 0
+                }
+              ],
+              "SFP": {
+                "Status": {
+                  "Health": "OK",
+                  "HealthRollup": "OK",
+                  "State": "Enabled"
+                }
+              }
+            },
+            {
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE080000/Ports/1",
+              "@odata.type": "#Port.v1_6_0.Port",
+              "@odata.etag": "W/\"D7C37611\"",
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE080000/Ports/1/Settings"
+                }
+              },
+              "Actions": {
+                "#Port.Reset": {
+                  "target": "/redfish/v1/Chassis/1/NetworkAdapters/DE080000/Ports/1/Actions/Port.Reset",
+                  "title": "Resets this port"
+                }
+              },
+              "CurrentSpeedGbps": 25,
+              "Id": "1",
+              "MaxSpeedGbps": 25,
+              "Name": "Port",
+              "PortId": "2",
+              "Status": {
+                "Health": "OK",
+                "HealthRollup": "OK",
+                "State": "Enabled"
+              },
+              "LinkNetworkTechnology": "Ethernet",
+              "LinkState": "Enabled",
+              "LinkStatus": "LinkUp",
+              "Metrics": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE080000/Ports/1/Metrics"
+              },
+              "SignalDetected": true,
+              "Ethernet": {
+                "FlowControlConfiguration": "TX_RX",
+                "FlowControlStatus": "TX_RX",
+                "SupportedEthernetCapabilities": [],
+                "AssociatedMACAddresses": [
+                  "c4:**:**:**:**:7d"
+                ],
+                "LLDPEnabled": false,
+                "LLDPReceive": {
+                  "ChassisId": "",
+                  "ChassisIdSubtype": "NotTransmitted",
+                  "ManagementAddressIPv4": "***",
+                  "ManagementAddressIPv6": "***",
+                  "ManagementAddressMAC": "",
+                  "ManagementVlanId": 4095,
+                  "PortId": "",
+                  "PortIdSubtype": "NotTransmitted"
+                },
+                "LLDPTransmit": {
+                  "ChassisId": "C4:**:**:**:**:7D",
+                  "ChassisIdSubtype": "MacAddr",
+                  "ManagementAddressIPv4": "***",
+                  "ManagementAddressIPv6": "***",
+                  "ManagementAddressMAC": "",
+                  "ManagementVlanId": 4095,
+                  "PortId": "C4:**:**:**:**:7D",
+                  "PortIdSubtype": "MacAddr"
+                },
+                "WakeOnLANEnabled": false
+              },
+              "LinkConfiguration": [
+                {
+                  "AutoSpeedNegotiationCapable": true,
+                  "AutoSpeedNegotiationEnabled": true,
+                  "CapableLinkSpeedGbps": [
+                    1,
+                    10,
+                    25
+                  ]
+                }
+              ],
+              "MaxFrameSize": 9022,
+              "FunctionMaxBandwidth": [
+                {
+                  "AllocationPercent": 100
+                }
+              ],
+              "FunctionMinBandwidth": [
+                {
+                  "AllocationPercent": 0
+                }
+              ],
+              "SFP": {
+                "Status": {
+                  "Health": "OK",
+                  "HealthRollup": "OK",
+                  "State": "Enabled"
+                }
+              }
+            }
+          ],
+          "Metrics": {
+            "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE080000/Metrics"
+          }
+        },
+        {
+          "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE082000",
+          "@odata.type": "#NetworkAdapter.v1_9_0.NetworkAdapter",
+          "@odata.etag": "W/\"7DC4F999\"",
+          "@Redfish.Settings": {
+            "SettingsObject": {
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE082000/Settings"
+            }
+          },
+          "Actions": {
+            "#NetworkAdapter.ResetSettingsToDefault": {
+              "target": "/redfish/v1/Chassis/1/NetworkAdapters/DE082000/Actions/NetworkAdapter.ResetSettingsToDefault",
+              "title": "Reset network adapter configuration to factory default values."
+            }
+          },
+          "Controllers": [
+            {
+              "ControllerCapabilities": {
+                "DataCenterBridging": {
+                  "Capable": true
+                },
+                "NetworkDeviceFunctionCount": 2,
+                "NetworkPortCount": 2,
+                "VirtualizationOffload": {
+                  "SRIOV": {
+                    "SRIOVVEPACapable": false
+                  },
+                  "VirtualFunction": {
+                    "DeviceMaxCount": 254,
+                    "MinAssignmentGroupSize": 0,
+                    "NetworkPortMaxCount": 127
+                  }
+                },
+                "NPAR": {
+                  "NparCapable": false,
+                  "NparEnabled": false
+                }
+              },
+              "FirmwarePackageVersion": "26.43.1014",
+              "Location": {
+                "PartLocation": {
+                  "LocationOrdinalValue": "3",
+                  "LocationType": "Slot",
+                  "ServiceLabel": "PCI-E Slot 3"
+                }
+              }
+            }
+          ],
+          "Id": "DE082000",
+          "Manufacturer": "MLNX",
+          "Model": "P42046-001 / Mellanox MCX631102AS-ADAT Ethernet 10/25Gb 2-port SFP28 Adapter",
+          "Name": "NetworkAdapter",
+          "NetworkDeviceFunctions": [
+            {
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE082000/NetworkDeviceFunctions/0",
+              "@odata.type": "#NetworkDeviceFunction.v1_8_0.NetworkDeviceFunction",
+              "@odata.etag": "W/\"CF64D5D8\"",
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE082000/NetworkDeviceFunctions/0/Settings"
+                }
+              },
+              "BootMode": "PXE",
+              "DeviceEnabled": true,
+              "Ethernet": {
+                "MACAddress": "c4:**:**:**:**:7c",
+                "MTUSize": 9022,
+                "PermanentMACAddress": "c4:**:**:**:**:1c",
+                "MTUSizeMaximum": 10000
+              },
+              "Id": "0",
+              "Links": {
+                "PhysicalNetworkPortAssignment": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE082000/Ports/0"
+                }
+              },
+              "MaxVirtualFunctions": 127,
+              "Name": "NetworkDeviceFunction",
+              "NetDevFuncCapabilities": [
+                "Ethernet"
+              ],
+              "NetDevFuncType": "Ethernet",
+              "Status": {
+                "Health": "OK",
+                "HealthRollup": "OK",
+                "State": "Enabled"
+              },
+              "VirtualFunctionsEnabled": true,
+              "AssignablePhysicalNetworkPorts": [
+                {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE082000/Ports/0"
+                }
+              ],
+              "Metrics": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE082000/NetworkDeviceFunctions/0/Metrics"
+              },
+              "SAVIEnabled": false
+            },
+            {
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE082000/NetworkDeviceFunctions/1",
+              "@odata.type": "#NetworkDeviceFunction.v1_8_0.NetworkDeviceFunction",
+              "@odata.etag": "W/\"1072DE9F\"",
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE082000/NetworkDeviceFunctions/1/Settings"
+                }
+              },
+              "BootMode": "PXE",
+              "DeviceEnabled": true,
+              "Ethernet": {
+                "MACAddress": "c4:**:**:**:**:7d",
+                "MTUSize": 9022,
+                "PermanentMACAddress": "c4:**:**:**:**:1d",
+                "MTUSizeMaximum": 10000
+              },
+              "Id": "1",
+              "Links": {
+                "PhysicalNetworkPortAssignment": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE082000/Ports/1"
+                }
+              },
+              "MaxVirtualFunctions": 127,
+              "Name": "NetworkDeviceFunction",
+              "NetDevFuncCapabilities": [
+                "Ethernet"
+              ],
+              "NetDevFuncType": "Ethernet",
+              "Status": {
+                "Health": "OK",
+                "HealthRollup": "OK",
+                "State": "Enabled"
+              },
+              "VirtualFunctionsEnabled": true,
+              "AssignablePhysicalNetworkPorts": [
+                {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE082000/Ports/1"
+                }
+              ],
+              "Metrics": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE082000/NetworkDeviceFunctions/1/Metrics"
+              },
+              "SAVIEnabled": false
+            }
+          ],
+          "PartNumber": "P42046-001",
+          "SKU": "***",
+          "SerialNumber": "***",
+          "Status": {
+            "Health": "OK",
+            "HealthRollup": "OK",
+            "State": "Enabled"
+          },
+          "Ports": [
+            {
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE082000/Ports/0",
+              "@odata.type": "#Port.v1_6_0.Port",
+              "@odata.etag": "W/\"4D264CD9\"",
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE082000/Ports/0/Settings"
+                }
+              },
+              "Actions": {
+                "#Port.Reset": {
+                  "target": "/redfish/v1/Chassis/1/NetworkAdapters/DE082000/Ports/0/Actions/Port.Reset",
+                  "title": "Resets this port"
+                }
+              },
+              "CurrentSpeedGbps": 25,
+              "Id": "0",
+              "MaxSpeedGbps": 25,
+              "Name": "Port",
+              "PortId": "1",
+              "Status": {
+                "Health": "OK",
+                "HealthRollup": "OK",
+                "State": "Enabled"
+              },
+              "LinkNetworkTechnology": "Ethernet",
+              "LinkState": "Enabled",
+              "LinkStatus": "LinkUp",
+              "Metrics": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE082000/Ports/0/Metrics"
+              },
+              "SignalDetected": true,
+              "Ethernet": {
+                "FlowControlConfiguration": "TX_RX",
+                "FlowControlStatus": "TX_RX",
+                "SupportedEthernetCapabilities": [],
+                "AssociatedMACAddresses": [
+                  "c4:**:**:**:**:7c"
+                ],
+                "LLDPEnabled": false,
+                "LLDPReceive": {
+                  "ChassisId": "",
+                  "ChassisIdSubtype": "NotTransmitted",
+                  "ManagementAddressIPv4": "***",
+                  "ManagementAddressIPv6": "***",
+                  "ManagementAddressMAC": "",
+                  "ManagementVlanId": 4095,
+                  "PortId": "",
+                  "PortIdSubtype": "NotTransmitted"
+                },
+                "LLDPTransmit": {
+                  "ChassisId": "C4:**:**:**:**:1C",
+                  "ChassisIdSubtype": "MacAddr",
+                  "ManagementAddressIPv4": "***",
+                  "ManagementAddressIPv6": "***",
+                  "ManagementAddressMAC": "",
+                  "ManagementVlanId": 4095,
+                  "PortId": "C4:**:**:**:**:1C",
+                  "PortIdSubtype": "MacAddr"
+                },
+                "WakeOnLANEnabled": false
+              },
+              "LinkConfiguration": [
+                {
+                  "AutoSpeedNegotiationCapable": true,
+                  "AutoSpeedNegotiationEnabled": true,
+                  "CapableLinkSpeedGbps": [
+                    1,
+                    10,
+                    25
+                  ]
+                }
+              ],
+              "MaxFrameSize": 9022,
+              "FunctionMaxBandwidth": [
+                {
+                  "AllocationPercent": 100
+                }
+              ],
+              "FunctionMinBandwidth": [
+                {
+                  "AllocationPercent": 0
+                }
+              ],
+              "SFP": {
+                "Status": {
+                  "Health": "OK",
+                  "HealthRollup": "OK",
+                  "State": "Enabled"
+                }
+              }
+            },
+            {
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE082000/Ports/1",
+              "@odata.type": "#Port.v1_6_0.Port",
+              "@odata.etag": "W/\"D7E91C28\"",
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE082000/Ports/1/Settings"
+                }
+              },
+              "Actions": {
+                "#Port.Reset": {
+                  "target": "/redfish/v1/Chassis/1/NetworkAdapters/DE082000/Ports/1/Actions/Port.Reset",
+                  "title": "Resets this port"
+                }
+              },
+              "CurrentSpeedGbps": 25,
+              "Id": "1",
+              "MaxSpeedGbps": 25,
+              "Name": "Port",
+              "PortId": "2",
+              "Status": {
+                "Health": "OK",
+                "HealthRollup": "OK",
+                "State": "Enabled"
+              },
+              "LinkNetworkTechnology": "Ethernet",
+              "LinkState": "Enabled",
+              "LinkStatus": "LinkUp",
+              "Metrics": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE082000/Ports/1/Metrics"
+              },
+              "SignalDetected": true,
+              "Ethernet": {
+                "FlowControlConfiguration": "TX_RX",
+                "FlowControlStatus": "TX_RX",
+                "SupportedEthernetCapabilities": [],
+                "AssociatedMACAddresses": [
+                  "c4:**:**:**:**:7d"
+                ],
+                "LLDPEnabled": false,
+                "LLDPReceive": {
+                  "ChassisId": "",
+                  "ChassisIdSubtype": "NotTransmitted",
+                  "ManagementAddressIPv4": "***",
+                  "ManagementAddressIPv6": "***",
+                  "ManagementAddressMAC": "",
+                  "ManagementVlanId": 4095,
+                  "PortId": "",
+                  "PortIdSubtype": "NotTransmitted"
+                },
+                "LLDPTransmit": {
+                  "ChassisId": "C4:**:**:**:**:1D",
+                  "ChassisIdSubtype": "MacAddr",
+                  "ManagementAddressIPv4": "***",
+                  "ManagementAddressIPv6": "***",
+                  "ManagementAddressMAC": "",
+                  "ManagementVlanId": 4095,
+                  "PortId": "C4:**:**:**:**:1D",
+                  "PortIdSubtype": "MacAddr"
+                },
+                "WakeOnLANEnabled": false
+              },
+              "LinkConfiguration": [
+                {
+                  "AutoSpeedNegotiationCapable": true,
+                  "AutoSpeedNegotiationEnabled": true,
+                  "CapableLinkSpeedGbps": [
+                    1,
+                    10,
+                    25
+                  ]
+                }
+              ],
+              "MaxFrameSize": 9022,
+              "FunctionMaxBandwidth": [
+                {
+                  "AllocationPercent": 100
+                }
+              ],
+              "FunctionMinBandwidth": [
+                {
+                  "AllocationPercent": 0
+                }
+              ],
+              "SFP": {
+                "Status": {
+                  "Health": "OK",
+                  "HealthRollup": "OK",
+                  "State": "Enabled"
+                }
+              }
+            }
+          ],
+          "Metrics": {
+            "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE082000/Metrics"
+          }
+        },
+        {
+          "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE083000",
+          "@odata.type": "#NetworkAdapter.v1_9_0.NetworkAdapter",
+          "@odata.etag": "W/\"98B3F669\"",
+          "@Redfish.Settings": {
+            "SettingsObject": {
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE083000/Settings"
+            }
+          },
+          "Actions": {
+            "#NetworkAdapter.ResetSettingsToDefault": {
+              "target": "/redfish/v1/Chassis/1/NetworkAdapters/DE083000/Actions/NetworkAdapter.ResetSettingsToDefault",
+              "title": "Reset network adapter configuration to factory default values."
+            }
+          },
+          "Controllers": [
+            {
+              "ControllerCapabilities": {
+                "DataCenterBridging": {
+                  "Capable": true
+                },
+                "NetworkDeviceFunctionCount": 2,
+                "NetworkPortCount": 2,
+                "VirtualizationOffload": {
+                  "SRIOV": {
+                    "SRIOVVEPACapable": false
+                  },
+                  "VirtualFunction": {
+                    "DeviceMaxCount": 254,
+                    "MinAssignmentGroupSize": 0,
+                    "NetworkPortMaxCount": 127
+                  }
+                },
+                "NPAR": {
+                  "NparCapable": false,
+                  "NparEnabled": false
+                }
+              },
+              "FirmwarePackageVersion": "26.43.1014",
+              "Location": {
+                "PartLocation": {
+                  "LocationOrdinalValue": "4",
+                  "LocationType": "Slot",
+                  "ServiceLabel": "PCI-E Slot 4"
+                }
+              }
+            }
+          ],
+          "Id": "DE083000",
+          "Manufacturer": "MLNX",
+          "Model": "P42046-001 / Mellanox MCX631102AS-ADAT Ethernet 10/25Gb 2-port SFP28 Adapter",
+          "Name": "NetworkAdapter",
+          "NetworkDeviceFunctions": [
+            {
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE083000/NetworkDeviceFunctions/0",
+              "@odata.type": "#NetworkDeviceFunction.v1_8_0.NetworkDeviceFunction",
+              "@odata.etag": "W/\"2837E97C\"",
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE083000/NetworkDeviceFunctions/0/Settings"
+                }
+              },
+              "BootMode": "PXE",
+              "DeviceEnabled": true,
+              "Ethernet": {
+                "MACAddress": "c4:**:**:**:**:d4",
+                "MTUSize": 1522,
+                "PermanentMACAddress": "c4:**:**:**:**:d4",
+                "MTUSizeMaximum": 10000
+              },
+              "Id": "0",
+              "Links": {
+                "PhysicalNetworkPortAssignment": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE083000/Ports/0"
+                }
+              },
+              "MaxVirtualFunctions": 127,
+              "Name": "NetworkDeviceFunction",
+              "NetDevFuncCapabilities": [
+                "Ethernet"
+              ],
+              "NetDevFuncType": "Ethernet",
+              "Status": {
+                "Health": "OK",
+                "HealthRollup": "OK",
+                "State": "Enabled"
+              },
+              "VirtualFunctionsEnabled": true,
+              "AssignablePhysicalNetworkPorts": [
+                {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE083000/Ports/0"
+                }
+              ],
+              "Metrics": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE083000/NetworkDeviceFunctions/0/Metrics"
+              },
+              "SAVIEnabled": false
+            },
+            {
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE083000/NetworkDeviceFunctions/1",
+              "@odata.type": "#NetworkDeviceFunction.v1_8_0.NetworkDeviceFunction",
+              "@odata.etag": "W/\"3D1D23FD\"",
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE083000/NetworkDeviceFunctions/1/Settings"
+                }
+              },
+              "BootMode": "PXE",
+              "DeviceEnabled": true,
+              "Ethernet": {
+                "MACAddress": "c4:**:**:**:**:d5",
+                "MTUSize": 1522,
+                "PermanentMACAddress": "c4:**:**:**:**:d5",
+                "MTUSizeMaximum": 10000
+              },
+              "Id": "1",
+              "Links": {
+                "PhysicalNetworkPortAssignment": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE083000/Ports/1"
+                }
+              },
+              "MaxVirtualFunctions": 127,
+              "Name": "NetworkDeviceFunction",
+              "NetDevFuncCapabilities": [
+                "Ethernet"
+              ],
+              "NetDevFuncType": "Ethernet",
+              "Status": {
+                "Health": "OK",
+                "HealthRollup": "OK",
+                "State": "Enabled"
+              },
+              "VirtualFunctionsEnabled": true,
+              "AssignablePhysicalNetworkPorts": [
+                {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE083000/Ports/1"
+                }
+              ],
+              "Metrics": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE083000/NetworkDeviceFunctions/1/Metrics"
+              },
+              "SAVIEnabled": false
+            }
+          ],
+          "PartNumber": "P42046-001",
+          "SKU": "***",
+          "SerialNumber": "***",
+          "Status": {
+            "Health": "OK",
+            "HealthRollup": "OK",
+            "State": "Enabled"
+          },
+          "Ports": [
+            {
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE083000/Ports/0",
+              "@odata.type": "#Port.v1_6_0.Port",
+              "@odata.etag": "W/\"41D6B3CA\"",
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE083000/Ports/0/Settings"
+                }
+              },
+              "Actions": {
+                "#Port.Reset": {
+                  "target": "/redfish/v1/Chassis/1/NetworkAdapters/DE083000/Ports/0/Actions/Port.Reset",
+                  "title": "Resets this port"
+                }
+              },
+              "CurrentSpeedGbps": 0,
+              "Id": "0",
+              "MaxSpeedGbps": 25,
+              "Name": "Port",
+              "PortId": "1",
+              "Status": {
+                "Health": "OK",
+                "HealthRollup": "OK",
+                "State": "Enabled"
+              },
+              "LinkNetworkTechnology": "Ethernet",
+              "LinkState": "Disabled",
+              "LinkStatus": "LinkDown",
+              "Metrics": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE083000/Ports/0/Metrics"
+              },
+              "SignalDetected": false,
+              "Ethernet": {
+                "FlowControlConfiguration": "TX_RX",
+                "FlowControlStatus": "TX_RX",
+                "SupportedEthernetCapabilities": [],
+                "AssociatedMACAddresses": [
+                  "c4:**:**:**:**:d4"
+                ],
+                "LLDPEnabled": false,
+                "LLDPReceive": {
+                  "ChassisId": "",
+                  "ChassisIdSubtype": "NotTransmitted",
+                  "ManagementAddressIPv4": "***",
+                  "ManagementAddressIPv6": "***",
+                  "ManagementAddressMAC": "",
+                  "ManagementVlanId": 4095,
+                  "PortId": "",
+                  "PortIdSubtype": "NotTransmitted"
+                },
+                "LLDPTransmit": {
+                  "ChassisId": "C4:**:**:**:**:D4",
+                  "ChassisIdSubtype": "MacAddr",
+                  "ManagementAddressIPv4": "***",
+                  "ManagementAddressIPv6": "***",
+                  "ManagementAddressMAC": "",
+                  "ManagementVlanId": 4095,
+                  "PortId": "C4:**:**:**:**:D4",
+                  "PortIdSubtype": "MacAddr"
+                },
+                "WakeOnLANEnabled": false
+              },
+              "LinkConfiguration": [
+                {
+                  "AutoSpeedNegotiationCapable": true,
+                  "AutoSpeedNegotiationEnabled": true,
+                  "CapableLinkSpeedGbps": [
+                    1,
+                    10,
+                    25
+                  ]
+                }
+              ],
+              "MaxFrameSize": 1522,
+              "FunctionMaxBandwidth": [
+                {
+                  "AllocationPercent": 100
+                }
+              ],
+              "FunctionMinBandwidth": [
+                {
+                  "AllocationPercent": 0
+                }
+              ],
+              "SFP": {
+                "Status": {
+                  "Health": "OK",
+                  "HealthRollup": "OK",
+                  "State": "Enabled"
+                }
+              }
+            },
+            {
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE083000/Ports/1",
+              "@odata.type": "#Port.v1_6_0.Port",
+              "@odata.etag": "W/\"E6A87FF3\"",
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE083000/Ports/1/Settings"
+                }
+              },
+              "Actions": {
+                "#Port.Reset": {
+                  "target": "/redfish/v1/Chassis/1/NetworkAdapters/DE083000/Ports/1/Actions/Port.Reset",
+                  "title": "Resets this port"
+                }
+              },
+              "CurrentSpeedGbps": 0,
+              "Id": "1",
+              "MaxSpeedGbps": 25,
+              "Name": "Port",
+              "PortId": "2",
+              "Status": {
+                "Health": "OK",
+                "HealthRollup": "OK",
+                "State": "Enabled"
+              },
+              "LinkNetworkTechnology": "Ethernet",
+              "LinkState": "Disabled",
+              "LinkStatus": "LinkDown",
+              "Metrics": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE083000/Ports/1/Metrics"
+              },
+              "SignalDetected": false,
+              "Ethernet": {
+                "FlowControlConfiguration": "TX_RX",
+                "FlowControlStatus": "TX_RX",
+                "SupportedEthernetCapabilities": [],
+                "AssociatedMACAddresses": [
+                  "c4:**:**:**:**:d5"
+                ],
+                "LLDPEnabled": false,
+                "LLDPReceive": {
+                  "ChassisId": "",
+                  "ChassisIdSubtype": "NotTransmitted",
+                  "ManagementAddressIPv4": "***",
+                  "ManagementAddressIPv6": "***",
+                  "ManagementAddressMAC": "",
+                  "ManagementVlanId": 4095,
+                  "PortId": "",
+                  "PortIdSubtype": "NotTransmitted"
+                },
+                "LLDPTransmit": {
+                  "ChassisId": "C4:**:**:**:**:D5",
+                  "ChassisIdSubtype": "MacAddr",
+                  "ManagementAddressIPv4": "***",
+                  "ManagementAddressIPv6": "***",
+                  "ManagementAddressMAC": "",
+                  "ManagementVlanId": 4095,
+                  "PortId": "C4:**:**:**:**:D5",
+                  "PortIdSubtype": "MacAddr"
+                },
+                "WakeOnLANEnabled": false
+              },
+              "LinkConfiguration": [
+                {
+                  "AutoSpeedNegotiationCapable": true,
+                  "AutoSpeedNegotiationEnabled": true,
+                  "CapableLinkSpeedGbps": [
+                    1,
+                    10,
+                    25
+                  ]
+                }
+              ],
+              "MaxFrameSize": 1522,
+              "FunctionMaxBandwidth": [
+                {
+                  "AllocationPercent": 100
+                }
+              ],
+              "FunctionMinBandwidth": [
+                {
+                  "AllocationPercent": 0
+                }
+              ],
+              "SFP": {
+                "Status": {
+                  "Health": "OK",
+                  "HealthRollup": "OK",
+                  "State": "Enabled"
+                }
+              }
+            }
+          ],
+          "Metrics": {
+            "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE083000/Metrics"
+          }
+        },
+        {
+          "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE086000",
+          "@odata.type": "#NetworkAdapter.v1_9_0.NetworkAdapter",
+          "@odata.etag": "W/\"BA544D61\"",
+          "@Redfish.Settings": {
+            "SettingsObject": {
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE086000/Settings"
+            }
+          },
+          "Actions": {
+            "#NetworkAdapter.ResetSettingsToDefault": {
+              "target": "/redfish/v1/Chassis/1/NetworkAdapters/DE086000/Actions/NetworkAdapter.ResetSettingsToDefault",
+              "title": "Reset network adapter configuration to factory default values."
+            }
+          },
+          "Controllers": [
+            {
+              "ControllerCapabilities": {
+                "DataCenterBridging": {
+                  "Capable": true
+                },
+                "NetworkDeviceFunctionCount": 2,
+                "NetworkPortCount": 2,
+                "VirtualizationOffload": {
+                  "SRIOV": {
+                    "SRIOVVEPACapable": false
+                  },
+                  "VirtualFunction": {
+                    "DeviceMaxCount": 254,
+                    "MinAssignmentGroupSize": 0,
+                    "NetworkPortMaxCount": 127
+                  }
+                },
+                "NPAR": {
+                  "NparCapable": false,
+                  "NparEnabled": false
+                }
+              },
+              "FirmwarePackageVersion": "26.43.1014",
+              "Location": {
+                "PartLocation": {
+                  "LocationOrdinalValue": "7",
+                  "LocationType": "Slot",
+                  "ServiceLabel": "PCI-E Slot 7"
+                }
+              }
+            }
+          ],
+          "Id": "DE086000",
+          "Manufacturer": "MLNX",
+          "Model": "P42046-001 / Mellanox MCX631102AS-ADAT Ethernet 10/25Gb 2-port SFP28 Adapter",
+          "Name": "NetworkAdapter",
+          "NetworkDeviceFunctions": [
+            {
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE086000/NetworkDeviceFunctions/0",
+              "@odata.type": "#NetworkDeviceFunction.v1_8_0.NetworkDeviceFunction",
+              "@odata.etag": "W/\"857FCD2B\"",
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE086000/NetworkDeviceFunctions/0/Settings"
+                }
+              },
+              "BootMode": "PXE",
+              "DeviceEnabled": true,
+              "Ethernet": {
+                "MACAddress": "c4:**:**:**:**:f0",
+                "MTUSize": 1522,
+                "PermanentMACAddress": "c4:**:**:**:**:f0",
+                "MTUSizeMaximum": 10000
+              },
+              "Id": "0",
+              "Links": {
+                "PhysicalNetworkPortAssignment": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE086000/Ports/0"
+                }
+              },
+              "MaxVirtualFunctions": 127,
+              "Name": "NetworkDeviceFunction",
+              "NetDevFuncCapabilities": [
+                "Ethernet"
+              ],
+              "NetDevFuncType": "Ethernet",
+              "Status": {
+                "Health": "OK",
+                "HealthRollup": "OK",
+                "State": "Enabled"
+              },
+              "VirtualFunctionsEnabled": true,
+              "AssignablePhysicalNetworkPorts": [
+                {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE086000/Ports/0"
+                }
+              ],
+              "Metrics": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE086000/NetworkDeviceFunctions/0/Metrics"
+              },
+              "SAVIEnabled": false
+            },
+            {
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE086000/NetworkDeviceFunctions/1",
+              "@odata.type": "#NetworkDeviceFunction.v1_8_0.NetworkDeviceFunction",
+              "@odata.etag": "W/\"905507AA\"",
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE086000/NetworkDeviceFunctions/1/Settings"
+                }
+              },
+              "BootMode": "PXE",
+              "DeviceEnabled": true,
+              "Ethernet": {
+                "MACAddress": "c4:**:**:**:**:f1",
+                "MTUSize": 1522,
+                "PermanentMACAddress": "c4:**:**:**:**:f1",
+                "MTUSizeMaximum": 10000
+              },
+              "Id": "1",
+              "Links": {
+                "PhysicalNetworkPortAssignment": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE086000/Ports/1"
+                }
+              },
+              "MaxVirtualFunctions": 127,
+              "Name": "NetworkDeviceFunction",
+              "NetDevFuncCapabilities": [
+                "Ethernet"
+              ],
+              "NetDevFuncType": "Ethernet",
+              "Status": {
+                "Health": "OK",
+                "HealthRollup": "OK",
+                "State": "Enabled"
+              },
+              "VirtualFunctionsEnabled": true,
+              "AssignablePhysicalNetworkPorts": [
+                {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE086000/Ports/1"
+                }
+              ],
+              "Metrics": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE086000/NetworkDeviceFunctions/1/Metrics"
+              },
+              "SAVIEnabled": false
+            }
+          ],
+          "PartNumber": "P42046-001",
+          "SKU": "***",
+          "SerialNumber": "***",
+          "Status": {
+            "Health": "OK",
+            "HealthRollup": "OK",
+            "State": "Enabled"
+          },
+          "Ports": [
+            {
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE086000/Ports/0",
+              "@odata.type": "#Port.v1_6_0.Port",
+              "@odata.etag": "W/\"83AE1D96\"",
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE086000/Ports/0/Settings"
+                }
+              },
+              "Actions": {
+                "#Port.Reset": {
+                  "target": "/redfish/v1/Chassis/1/NetworkAdapters/DE086000/Ports/0/Actions/Port.Reset",
+                  "title": "Resets this port"
+                }
+              },
+              "CurrentSpeedGbps": 25,
+              "Id": "0",
+              "MaxSpeedGbps": 25,
+              "Name": "Port",
+              "PortId": "1",
+              "Status": {
+                "Health": "OK",
+                "HealthRollup": "OK",
+                "State": "Enabled"
+              },
+              "LinkNetworkTechnology": "Ethernet",
+              "LinkState": "Enabled",
+              "LinkStatus": "LinkUp",
+              "Metrics": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE086000/Ports/0/Metrics"
+              },
+              "SignalDetected": true,
+              "Ethernet": {
+                "FlowControlConfiguration": "TX_RX",
+                "FlowControlStatus": "TX_RX",
+                "SupportedEthernetCapabilities": [],
+                "AssociatedMACAddresses": [
+                  "c4:**:**:**:**:f0"
+                ],
+                "LLDPEnabled": false,
+                "LLDPReceive": {
+                  "ChassisId": "",
+                  "ChassisIdSubtype": "NotTransmitted",
+                  "ManagementAddressIPv4": "***",
+                  "ManagementAddressIPv6": "***",
+                  "ManagementAddressMAC": "",
+                  "ManagementVlanId": 4095,
+                  "PortId": "",
+                  "PortIdSubtype": "NotTransmitted"
+                },
+                "LLDPTransmit": {
+                  "ChassisId": "C4:**:**:**:**:F0",
+                  "ChassisIdSubtype": "MacAddr",
+                  "ManagementAddressIPv4": "***",
+                  "ManagementAddressIPv6": "***",
+                  "ManagementAddressMAC": "",
+                  "ManagementVlanId": 4095,
+                  "PortId": "C4:**:**:**:**:F0",
+                  "PortIdSubtype": "MacAddr"
+                },
+                "WakeOnLANEnabled": false
+              },
+              "LinkConfiguration": [
+                {
+                  "AutoSpeedNegotiationCapable": true,
+                  "AutoSpeedNegotiationEnabled": true,
+                  "CapableLinkSpeedGbps": [
+                    1,
+                    10,
+                    25
+                  ]
+                }
+              ],
+              "MaxFrameSize": 1522,
+              "FunctionMaxBandwidth": [
+                {
+                  "AllocationPercent": 100
+                }
+              ],
+              "FunctionMinBandwidth": [
+                {
+                  "AllocationPercent": 0
+                }
+              ],
+              "SFP": {
+                "Status": {
+                  "Health": "OK",
+                  "HealthRollup": "OK",
+                  "State": "Enabled"
+                }
+              }
+            },
+            {
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE086000/Ports/1",
+              "@odata.type": "#Port.v1_6_0.Port",
+              "@odata.etag": "W/\"D32547AC\"",
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE086000/Ports/1/Settings"
+                }
+              },
+              "Actions": {
+                "#Port.Reset": {
+                  "target": "/redfish/v1/Chassis/1/NetworkAdapters/DE086000/Ports/1/Actions/Port.Reset",
+                  "title": "Resets this port"
+                }
+              },
+              "CurrentSpeedGbps": 0,
+              "Id": "1",
+              "MaxSpeedGbps": 25,
+              "Name": "Port",
+              "PortId": "2",
+              "Status": {
+                "Health": "OK",
+                "HealthRollup": "OK",
+                "State": "Enabled"
+              },
+              "LinkNetworkTechnology": "Ethernet",
+              "LinkState": "Disabled",
+              "LinkStatus": "LinkDown",
+              "Metrics": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE086000/Ports/1/Metrics"
+              },
+              "SignalDetected": false,
+              "Ethernet": {
+                "FlowControlConfiguration": "TX_RX",
+                "FlowControlStatus": "TX_RX",
+                "SupportedEthernetCapabilities": [],
+                "AssociatedMACAddresses": [
+                  "c4:**:**:**:**:f1"
+                ],
+                "LLDPEnabled": false,
+                "LLDPReceive": {
+                  "ChassisId": "",
+                  "ChassisIdSubtype": "NotTransmitted",
+                  "ManagementAddressIPv4": "***",
+                  "ManagementAddressIPv6": "***",
+                  "ManagementAddressMAC": "",
+                  "ManagementVlanId": 4095,
+                  "PortId": "",
+                  "PortIdSubtype": "NotTransmitted"
+                },
+                "LLDPTransmit": {
+                  "ChassisId": "C4:**:**:**:**:F1",
+                  "ChassisIdSubtype": "MacAddr",
+                  "ManagementAddressIPv4": "***",
+                  "ManagementAddressIPv6": "***",
+                  "ManagementAddressMAC": "",
+                  "ManagementVlanId": 4095,
+                  "PortId": "C4:**:**:**:**:F1",
+                  "PortIdSubtype": "MacAddr"
+                },
+                "WakeOnLANEnabled": false
+              },
+              "LinkConfiguration": [
+                {
+                  "AutoSpeedNegotiationCapable": true,
+                  "AutoSpeedNegotiationEnabled": true,
+                  "CapableLinkSpeedGbps": [
+                    1,
+                    10,
+                    25
+                  ]
+                }
+              ],
+              "MaxFrameSize": 1522,
+              "FunctionMaxBandwidth": [
+                {
+                  "AllocationPercent": 100
+                }
+              ],
+              "FunctionMinBandwidth": [
+                {
+                  "AllocationPercent": 0
+                }
+              ],
+              "SFP": {
+                "Status": {
+                  "Health": "OK",
+                  "HealthRollup": "OK",
+                  "State": "Enabled"
+                }
+              }
+            }
+          ],
+          "Metrics": {
+            "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE086000/Metrics"
+          }
+        },
+        {
+          "@odata.context": "/redfish/v1/$metadata#HpeBaseNetworkAdapter.HpeBaseNetworkAdapter",
+          "@odata.etag": null,
+          "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/6",
+          "@odata.type": "#HpeBaseNetworkAdapter.v2_0_0.HpeBaseNetworkAdapter",
+          "Id": "6",
+          "Description": "BCM 5719 1Gb 4p BASE-T OCP Adptr",
+          "Manufacturer": null,
+          "Model": "BCM 5719 1Gb 4p BASE-T OCP Adptr",
+          "Name": "BCM 5719 1Gb 4p BASE-T OCP Adptr",
+          "PartNumber": "BCM95719N1905HC",
+          "SerialNumber": "***",
+          "Ports": [
+            {
+              "@odata.context": "/redfish/v1/$metadata#Port.Port",
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/6/Ports/1",
+              "@odata.type": "#Port.v1_6_1.Port",
+              "Id": "1",
+              "PortId": "1",
+              "CurrentSpeedGbps": 0,
+              "LinkNetworkTechnology": "Ethernet",
+              "Description": "Port status and active configuration data",
+              "LinkStatus": "LinkDown",
+              "Name": "Network adapter port",
+              "Ethernet": {
+                "AssociatedMACAddresses": [
+                  "8c:**:**:**:**:b4"
+                ]
+              }
+            },
+            {
+              "@odata.context": "/redfish/v1/$metadata#Port.Port",
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/6/Ports/2",
+              "@odata.type": "#Port.v1_6_1.Port",
+              "Id": "2",
+              "PortId": "2",
+              "CurrentSpeedGbps": 0,
+              "LinkNetworkTechnology": "Ethernet",
+              "Description": "Port status and active configuration data",
+              "LinkStatus": "LinkDown",
+              "Name": "Network adapter port",
+              "Ethernet": {
+                "AssociatedMACAddresses": [
+                  "8c:**:**:**:**:b5"
+                ]
+              }
+            },
+            {
+              "@odata.context": "/redfish/v1/$metadata#Port.Port",
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/6/Ports/3",
+              "@odata.type": "#Port.v1_6_1.Port",
+              "Id": "3",
+              "PortId": "3",
+              "CurrentSpeedGbps": 0,
+              "LinkNetworkTechnology": "Ethernet",
+              "Description": "Port status and active configuration data",
+              "LinkStatus": "LinkDown",
+              "Name": "Network adapter port",
+              "Ethernet": {
+                "AssociatedMACAddresses": [
+                  "8c:**:**:**:**:b6"
+                ]
+              }
+            },
+            {
+              "@odata.context": "/redfish/v1/$metadata#Port.Port",
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/6/Ports/4",
+              "@odata.type": "#Port.v1_6_1.Port",
+              "Id": "4",
+              "PortId": "4",
+              "CurrentSpeedGbps": 0,
+              "LinkNetworkTechnology": "Ethernet",
+              "Description": "Port status and active configuration data",
+              "LinkStatus": "LinkDown",
+              "Name": "Network adapter port",
+              "Ethernet": {
+                "AssociatedMACAddresses": [
+                  "8c:**:**:**:**:b7"
+                ]
+              }
+            }
+          ],
+          "Location": {
+            "PartLocation": {
+              "LocationOrdinalValue": 10,
+              "LocationType": "Slot",
+              "ServiceLabel": "OCP 3.0 Slot 10"
+            }
+          },
+          "Controllers": [
+            {
+              "FirmwarePackageVersion": "20.32.41",
+              "Location": {
+                "PartLocation": {
+                  "LocationOrdinalValue": 10,
+                  "LocationType": "Slot",
+                  "ServiceLabel": "OCP 3.0 Slot 10"
+                }
+              },
+              "ControllerCapabilities": {
+                "NetworkPortCount": 4
+              },
+              "Links": {
+                "Ports": [
+                  {
+                    "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/6/Ports/1"
+                  },
+                  {
+                    "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/6/Ports/2"
+                  },
+                  {
+                    "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/6/Ports/3"
+                  },
+                  {
+                    "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/6/Ports/4"
+                  }
+                ]
+              }
+            }
+          ],
+          "Status": {
+            "Health": null,
+            "State": null
+          },
+          "Oem": {
+            "Hpe": {
+              "@odata.context": "/redfish/v1/$metadata#HpeNetworkAdapter.HpeNetworkAdapter",
+              "@odata.type": "#HpeBaseNetworkAdapter.v2_0_0.HpeBaseNetworkAdapter",
+              "PhysicalPorts": [
+                {
+                  "FullDuplex": false,
+                  "IPv4Addresses": [],
+                  "IPv6Addresses": [],
+                  "LinkStatus": null,
+                  "MacAddress": "8c:**:**:**:**:b4",
+                  "Name": "",
+                  "Oem": {
+                    "Hpe": {
+                      "@odata.context": "/redfish/v1/$metadata#HpeBaseNetworkAdapterExt.HpeBaseNetworkAdapterExt",
+                      "@odata.type": "#HpeBaseNetworkAdapterExt.v2_1_0.HpeBaseNetworkAdapterExt",
+                      "BadReceives": 0,
+                      "BadTransmits": 0,
+                      "GoodReceives": 0,
+                      "GoodTransmits": 0,
+                      "PortNumber": 1
+                    }
+                  },
+                  "SpeedMbps": 0
+                },
+                {
+                  "FullDuplex": false,
+                  "IPv4Addresses": [],
+                  "IPv6Addresses": [],
+                  "LinkStatus": null,
+                  "MacAddress": "8c:**:**:**:**:b5",
+                  "Name": "",
+                  "Oem": {
+                    "Hpe": {
+                      "@odata.context": "/redfish/v1/$metadata#HpeBaseNetworkAdapterExt.HpeBaseNetworkAdapterExt",
+                      "@odata.type": "#HpeBaseNetworkAdapterExt.v2_1_0.HpeBaseNetworkAdapterExt",
+                      "BadReceives": 0,
+                      "BadTransmits": 0,
+                      "GoodReceives": 0,
+                      "GoodTransmits": 0,
+                      "PortNumber": 2
+                    }
+                  },
+                  "SpeedMbps": 0
+                },
+                {
+                  "FullDuplex": false,
+                  "IPv4Addresses": [],
+                  "IPv6Addresses": [],
+                  "LinkStatus": null,
+                  "MacAddress": "8c:**:**:**:**:b6",
+                  "Name": "",
+                  "Oem": {
+                    "Hpe": {
+                      "@odata.context": "/redfish/v1/$metadata#HpeBaseNetworkAdapterExt.HpeBaseNetworkAdapterExt",
+                      "@odata.type": "#HpeBaseNetworkAdapterExt.v2_1_0.HpeBaseNetworkAdapterExt",
+                      "BadReceives": 0,
+                      "BadTransmits": 0,
+                      "GoodReceives": 0,
+                      "GoodTransmits": 0,
+                      "PortNumber": 3
+                    }
+                  },
+                  "SpeedMbps": 0
+                },
+                {
+                  "FullDuplex": false,
+                  "IPv4Addresses": [],
+                  "IPv6Addresses": [],
+                  "LinkStatus": null,
+                  "MacAddress": "8c:**:**:**:**:b7",
+                  "Name": "",
+                  "Oem": {
+                    "Hpe": {
+                      "@odata.context": "/redfish/v1/$metadata#HpeBaseNetworkAdapterExt.HpeBaseNetworkAdapterExt",
+                      "@odata.type": "#HpeBaseNetworkAdapterExt.v2_1_0.HpeBaseNetworkAdapterExt",
+                      "BadReceives": 0,
+                      "BadTransmits": 0,
+                      "GoodReceives": 0,
+                      "GoodTransmits": 0,
+                      "PortNumber": 4
+                    }
+                  },
+                  "SpeedMbps": 0
+                }
+              ],
+              "FcPorts": [],
+              "StructuredName": "OCP.Slot.10.1",
+              "UEFIDevicePath": "PciRoot(0x4)/Pci(0x4,0x0)/Pci(0x0,0x0)"
+            }
+          },
+          "NetworkDeviceFunctions": [
+            {
+              "@odata.context": "/redfish/v1/$metadata#NetworkDeviceFunction.NetworkDeviceFunction",
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/6/NetworkDeviceFunction/1",
+              "@odata.type": "#NetworkDeviceFunction.v1_5_0.NetworkDeviceFunction",
+              "Id": 1,
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/6/NetworkDeviceFunction/1/Settings/"
+                }
+              },
+              "Ethernet": {
+                "MACAddress": "8c:**:**:**:**:b4",
+                "PermanentMACAddress": "8c:**:**:**:**:b4"
+              },
+              "NetDevFuncCapabilities": [
+                "Ethernet"
+              ],
+              "PhysicalNetworkPortAssignment": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/6/Ports/1"
+              },
+              "NetDevFuncType": "Ethernet"
+            },
+            {
+              "@odata.context": "/redfish/v1/$metadata#NetworkDeviceFunction.NetworkDeviceFunction",
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/6/NetworkDeviceFunction/2",
+              "@odata.type": "#NetworkDeviceFunction.v1_5_0.NetworkDeviceFunction",
+              "Id": 2,
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/6/NetworkDeviceFunction/2/Settings/"
+                }
+              },
+              "Ethernet": {
+                "MACAddress": "8c:**:**:**:**:b5",
+                "PermanentMACAddress": "8c:**:**:**:**:b5"
+              },
+              "NetDevFuncCapabilities": [
+                "Ethernet"
+              ],
+              "PhysicalNetworkPortAssignment": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/6/Ports/2"
+              },
+              "NetDevFuncType": "Ethernet"
+            },
+            {
+              "@odata.context": "/redfish/v1/$metadata#NetworkDeviceFunction.NetworkDeviceFunction",
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/6/NetworkDeviceFunction/3",
+              "@odata.type": "#NetworkDeviceFunction.v1_5_0.NetworkDeviceFunction",
+              "Id": 3,
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/6/NetworkDeviceFunction/3/Settings/"
+                }
+              },
+              "Ethernet": {
+                "MACAddress": "8c:**:**:**:**:b6",
+                "PermanentMACAddress": "8c:**:**:**:**:b6"
+              },
+              "NetDevFuncCapabilities": [
+                "Ethernet"
+              ],
+              "PhysicalNetworkPortAssignment": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/6/Ports/3"
+              },
+              "NetDevFuncType": "Ethernet"
+            },
+            {
+              "@odata.context": "/redfish/v1/$metadata#NetworkDeviceFunction.NetworkDeviceFunction",
+              "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/6/NetworkDeviceFunction/4",
+              "@odata.type": "#NetworkDeviceFunction.v1_5_0.NetworkDeviceFunction",
+              "Id": 4,
+              "@Redfish.Settings": {
+                "SettingsObject": {
+                  "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/6/NetworkDeviceFunction/4/Settings/"
+                }
+              },
+              "Ethernet": {
+                "MACAddress": "8c:**:**:**:**:b7",
+                "PermanentMACAddress": "8c:**:**:**:**:b7"
+              },
+              "NetDevFuncCapabilities": [
+                "Ethernet"
+              ],
+              "PhysicalNetworkPortAssignment": {
+                "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/6/Ports/4"
+              },
+              "NetDevFuncType": "Ethernet"
+            }
+          ]
+        }
+      ],
+      "etag": "35106C6F",
+      "count": 6,
+      "name": "NetworkAdapters"
+    }
+  },
+  "followed": [
+    {
+      "ref": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkDeviceFunctions/1/",
+      "tried": "<server>/networkAdapters/DE085000/NetworkDeviceFunctions/1/",
+      "status": 404,
+      "body": null
+    },
+    {
+      "ref": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkDeviceFunctions/2/",
+      "tried": "<server>/networkAdapters/DE085000/NetworkDeviceFunctions/2/",
+      "status": 404,
+      "body": null
+    },
+    {
+      "ref": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkPorts/1/",
+      "tried": "<server>/networkAdapters/DE085000/NetworkPorts/1/",
+      "status": 404,
+      "body": null
+    },
+    {
+      "ref": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkPorts/2/",
+      "tried": "<server>/networkAdapters/DE085000/NetworkPorts/2/",
+      "status": 404,
+      "body": null
+    },
+    {
+      "ref": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/NetworkDeviceFunctions/1/Settings/",
+      "tried": "<server>/networkAdapters/DE085000/NetworkDeviceFunctions/1/Settings/",
+      "status": 404,
+      "body": null
+    },
+    {
+      "ref": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/Ports/1/",
+      "tried": "<server>/networkAdapters/DE085000/Ports/1/",
+      "status": 404,
+      "body": null
+    }
+  ]
+}

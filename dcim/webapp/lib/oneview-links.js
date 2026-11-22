@@ -16,6 +16,18 @@ function normLink(v) {
   if (/^(link ?up|up|connected|linked)$/i.test(s)) return 'Up';
   return s;
 }
+// Link key of one object. OneView/Redfish ports carry both LinkState ("Enabled" = admin state) and LinkStatus ("LinkUp"):
+// LinkStatus wins; any other key only counts when its value really says up/down.
+function pickLink(obj) {
+  let best = '';
+  for (const [k, v] of Object.entries(obj)) {
+    if (!LINK_KEY.test(k) || !(typeof v === 'string' || typeof v === 'boolean')) continue;
+    const n = normLink(v);
+    if (/^link[_ ]?status$/i.test(k) && /^(up|down)$/i.test(n)) return n;
+    if (!best && /^(up|down)$/i.test(n)) best = n;
+  }
+  return best;
+}
 function mbpsOf(v, key) {
   if (v == null || v === '' || typeof v === 'object') return 0;
   const inMbps = /mbps/i.test(key || '');
@@ -47,10 +59,9 @@ function collectOneviewLinks(obj, out, depth) {
   depth = depth || 0;
   if (!obj || typeof obj !== 'object' || depth > 10) return out;
   if (Array.isArray(obj)) { obj.forEach((x) => collectOneviewLinks(x, out, depth + 1)); return out; }
-  let link = '';
+  let link = pickLink(obj);
   let mbps = 0;
   for (const [k, v] of Object.entries(obj)) {
-    if (!link && LINK_KEY.test(k) && (typeof v === 'string' || typeof v === 'boolean')) link = normLink(v);
     if (!mbps && SPEED_KEY.test(k) && v != null && typeof v !== 'object') mbps = mbpsOf(v, k);
   }
   if (link) {
@@ -99,10 +110,9 @@ function shapeOf(obj, maxItems) {
 function linkOnly(obj, depth) {
   depth = depth || 0;
   if (!obj || typeof obj !== 'object' || Array.isArray(obj) || depth > 3) return null;
-  let link = '';
+  let link = pickLink(obj);
   let mbps = 0;
   for (const [k, v] of Object.entries(obj)) {
-    if (!link && LINK_KEY.test(k) && (typeof v === 'string' || typeof v === 'boolean')) link = normLink(v);
     if (!mbps && SPEED_KEY.test(k) && v != null && typeof v !== 'object') mbps = mbpsOf(v, k);
   }
   if (link) return { link, mbps };
@@ -127,15 +137,17 @@ function nicsFromAdapters(doc) {
       if (mac && pid) macByPort[pid] = mac;
     });
     const portsRaw = [];
-    [ctl.Links && ctl.Links.Ports, ad.Ports, ad.PhysicalPorts, ctl.Ports].forEach((x) => { if (Array.isArray(x)) x.forEach((p) => { if (p && typeof p === 'object') portsRaw.push(p); }); });
+    // Embedded port objects (ad.Ports) carry the link data; Controllers[].Links.Ports are only @odata.id stubs.
+    const src = [ad.Ports, ad.PhysicalPorts, ctl.Ports].find((x) => Array.isArray(x) && x.length) || (ctl.Links && ctl.Links.Ports) || [];
+    if (Array.isArray(src)) src.forEach((p) => { if (p && typeof p === 'object') portsRaw.push(p); });
     const ports = portsRaw.map((p, pi) => {
       const lk = [linkOnly(p, 0)].filter(Boolean);
       const pid = String(p.PortId != null ? p.PortId : (p.Id != null ? p.Id : (p['@odata.id'] ? lastSeg(p['@odata.id']) : pi + 1)));
       const macs = macsUnder(p, 0, []);
-      return { id: pid, mac: macs[0] || macByPort[pid] || '', speed: lk[0] && lk[0].mbps ? `${Math.round(lk[0].mbps / 10) / 100} Gbps` : '', link: lk[0] ? lk[0].link : '', type: String(p.ActiveLinkTechnology || p.LinkTechnology || p.PortType || 'Ethernet') };
+      return { id: String(p.Id != null ? p.Id : pid), portId: pid, mac: macs[0] || macByPort[pid] || '', speed: lk[0] && lk[0].mbps ? `${Math.round(lk[0].mbps / 10) / 100} Gbps` : '', link: lk[0] ? lk[0].link : '', type: String(p.ActiveLinkTechnology || p.LinkTechnology || p.PortType || 'Ethernet') };
     });
     const loc = ctl.Location && ctl.Location.PartLocation ? ctl.Location.PartLocation : {};
-    nics.push({ name: String(ad.Model || ad.Name || `Adapter ${i + 1}`).trim(), id: String(loc.ServiceLabel || (loc.LocationOrdinalValue != null ? `Slot ${loc.LocationOrdinalValue}` : ad.Id || '')).trim(), partNumber: String(ad.PartNumber || ''), firmware: String(ctl.FirmwarePackageVersion || ''), ports });
+    nics.push({ slot: loc.LocationOrdinalValue != null ? String(loc.LocationOrdinalValue) : '', name: String(ad.Model || ad.Name || `Adapter ${i + 1}`).trim(), id: String(loc.ServiceLabel || (loc.LocationOrdinalValue != null ? `Slot ${loc.LocationOrdinalValue}` : ad.Id || '')).trim(), partNumber: String(ad.PartNumber || ''), firmware: String(ctl.FirmwarePackageVersion || ''), ports });
   });
   return nics;
 }
@@ -150,16 +162,24 @@ function mergeAdapterLinks(nicList, altNics) {
   nicList.forEach((n) => {
     if (!n.ports.length || n.ports.every((p) => isUpDown(p.link))) return;
     const nt = modelTokens(`${n.name} ${n.partNumber}`);
-    const slotDigits = String(n.id || '').replace(/\D/g, '');
-    const cands = altNics.map((a, i) => ({ a, i })).filter(({ a, i }) => !used.has(i) && a.ports.some((p) => isUpDown(p.link)) && [...modelTokens(`${a.name} ${a.partNumber}`)].some((t) => nt.has(t)));
-    if (!cands.length) return;
-    const pick = cands.find(({ a }) => slotDigits && String(a.id || '').replace(/\D/g, '') === slotDigits) || cands[0];
+    const slot = n.slot != null && n.slot !== '' ? String(n.slot) : '';
+    const hasLink = (a, i) => !used.has(i) && a.ports.some((p) => isUpDown(p.link));
+    const sameModel = (a) => [...modelTokens(`${a.name} ${a.partNumber}`)].some((t) => nt.has(t));
+    const all = altNics.map((a, i) => ({ a, i })).filter(({ a, i }) => hasLink(a, i));
+    // 1) same PCI slot (the port map and OneView both give the slot number); 2) same model, not yet used
+    let pick = slot ? all.find(({ a }) => String(a.slot || '') === slot && (sameModel(a) || !nt.size)) : null;
+    if (!pick && slot) pick = all.find(({ a }) => String(a.slot || '') === slot && a.ports.length === n.ports.length);
+    if (!pick) pick = all.find(({ a }) => sameModel(a) && !(slot && a.slot && String(a.slot) !== slot)) || all.find(({ a }) => sameModel(a));
+    if (!pick) return;
     used.add(pick.i);
     const ap = pick.a.ports;
+    const usedPorts = new Set();
     n.ports.forEach((p, idx) => {
       if (isUpDown(p.link)) return;
-      const hit = ap.find((x) => x.mac && p.mac && macKey(x.mac) === macKey(p.mac)) || ap[idx];
-      if (hit && isUpDown(hit.link)) { p.link = hit.link; if (hit.speed && !/rated/i.test(hit.speed)) p.speed = hit.speed; filled++; }
+      let hit = ap.findIndex((x, xi) => !usedPorts.has(xi) && String(x.id) === String(p.id) && isUpDown(x.link));
+      if (hit < 0) hit = ap.findIndex((x, xi) => !usedPorts.has(xi) && x.mac && p.mac && macKey(x.mac) === macKey(p.mac) && isUpDown(x.link));
+      if (hit < 0 && isUpDown((ap[idx] || {}).link) && !usedPorts.has(idx)) hit = idx;
+      if (hit >= 0) { usedPorts.add(hit); p.link = ap[hit].link; if (ap[hit].speed && !/rated/i.test(ap[hit].speed)) p.speed = ap[hit].speed; filled++; }
     });
   });
   return filled;
