@@ -15274,6 +15274,10 @@ function MonthlyReportModal({ onClose }) {
 function OverallSummaryModal({ assets, rackComponents, issues, activities, movements, racks, zones, allowedSites, pduSummary, onClose }) {
     const today = new Date();
     const [monthlyOpen, setMonthlyOpen] = useState(false);
+    // Assets by Zone pivot: rows are hardware TYPES (Server, Switch, Storage ...) or vendors (Dell, HP ...) - switchable, plus filter and sort.
+    const [mixBy, setMixBy] = useState("type");
+    const [mixSort, setMixSort] = useState("total");
+    const [mixFilter, setMixFilter] = useState("");
     // Rack Elevation = Device U + Component U — merge components into the same
     // shape so zone/rack U-usage below counts both, same as DC Capacity.
     // Asset counts are DEVICES only (same as the Dashboard's Installed Devices); rack components are merged in
@@ -15924,8 +15928,9 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                                 site,
                                 "."))),
                     (() => {
+                        const mixLabel = (a) => mixBy === "type" ? ((a.hardwareType && String(a.hardwareType).trim()) || "Unknown") : dashMakeLabel(a.manufacturer);
                         const hwTypesSeen = {};
-                        sd.siteDevices.forEach(a => { const mk = dashMakeLabel(a.manufacturer); hwTypesSeen[mk.toLowerCase()] = mk; });
+                        sd.siteDevices.forEach(a => { const mk = mixLabel(a); hwTypesSeen[mk.toLowerCase()] = hwTypesSeen[mk.toLowerCase()] || mk; });
                         const hwTypes = Object.values(hwTypesSeen).sort();
                         const zoneNames = sd.siteZones.length ? sd.siteZones : ["AZ-1", "AZ-2"];
                         if (hwTypes.length === 0)
@@ -15934,7 +15939,7 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                             const row = { hw };
                             let total = 0;
                             zoneNames.forEach(zn => {
-                                const cnt = sd.siteDevices.filter(a => dashMakeLabel(a.manufacturer).toLowerCase() === hw.toLowerCase() && (a.zone || "AZ-1") === zn).length;
+                                const cnt = sd.siteDevices.filter(a => mixLabel(a).toLowerCase() === hw.toLowerCase() && (a.zone || "AZ-1") === zn).length;
                                 row[zn] = cnt;
                                 total += cnt;
                             });
@@ -15945,12 +15950,22 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                         zoneNames.forEach(zn => {
                             grandTotal[zn] = sd.siteDevices.filter(a => (a.zone || "AZ-1") === zn).length;
                         });
-                        const allRows = [...pivotRows, grandTotal];
+                        const q = mixFilter.trim().toLowerCase();
+                        const shownRows = pivotRows.filter(r => !q || r.hw.toLowerCase().includes(q))
+                            .sort((x, y) => mixSort === "name" ? x.hw.localeCompare(y.hw) : (y.total - x.total) || x.hw.localeCompare(y.hw));
+                        const allRows = [...shownRows, grandTotal];
                         const colW = Math.max(110, 220 / (zoneNames.length + 1));
                         return (React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 16, border: "1px solid #334155", marginTop: 14 } },
-                            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, marginBottom: 12, color: "#fff" } }, "Assets by Zone & Hardware Mix"),
+                            React.createElement("div", { "data-zone-mix": "1", style: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, marginBottom: 12 } },
+                                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, color: "#fff", marginRight: "auto" } }, mixBy === "type" ? "Assets by Zone & Hardware Type" : "Assets by Zone & Vendor"),
+                                React.createElement("div", { style: { display: "inline-flex", borderRadius: 8, overflow: "hidden", border: "1px solid #334155" } },
+                                    [["type", "Hardware Type"], ["vendor", "Vendor"]].map(([k, l]) => React.createElement("button", { key: k, type: "button", "data-zone-mix-by": k, onClick: () => setMixBy(k), style: { padding: "5px 12px", fontSize: 11, fontWeight: 700, border: "none", cursor: "pointer", background: mixBy === k ? "#4F46E5" : "#0F172A", color: mixBy === k ? "#fff" : "#94A3B8" } }, l))),
+                                React.createElement("input", { value: mixFilter, onChange: (e) => setMixFilter(e.target.value), placeholder: mixBy === "type" ? "Filter hardware type" : "Filter vendor", "aria-label": "Filter rows", style: { padding: "5px 10px", fontSize: 11, borderRadius: 8, border: "1px solid #334155", background: "#0F172A", color: "#E2E8F0", width: 150 } }),
+                                React.createElement("select", { value: mixSort, onChange: (e) => setMixSort(e.target.value), "aria-label": "Sort rows", style: { padding: "5px 8px", fontSize: 11, borderRadius: 8, border: "1px solid #334155", background: "#0F172A", color: "#E2E8F0" } },
+                                    React.createElement("option", { value: "total" }, "Sort: Total (high to low)"),
+                                    React.createElement("option", { value: "name" }, "Sort: Name (A to Z)"))),
                             React.createElement("div", { style: { display: "grid", gridTemplateColumns: `1.4fr ${zoneNames.map(() => colW + "px").join(" ")} 80px`, gap: 0, borderRadius: 8, overflow: "hidden", border: "1px solid #334155" } },
-                                React.createElement("div", { style: { padding: "8px 10px", background: "#0F172A", fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.5, borderBottom: "1px solid #334155", borderRight: "1px solid #334155" } }, "Hardware Mix"),
+                                React.createElement("div", { style: { padding: "8px 10px", background: "#0F172A", fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.5, borderBottom: "1px solid #334155", borderRight: "1px solid #334155" } }, mixBy === "type" ? "Hardware Type" : "Vendor"),
                                 zoneNames.map(zn => (React.createElement("div", { key: zn, style: { padding: "8px 10px", background: "#0F172A", fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.5, textAlign: "center", borderBottom: "1px solid #334155", borderRight: "1px solid #334155" } }, zn))),
                                 React.createElement("div", { style: { padding: "8px 10px", background: "#0F172A", fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.5, textAlign: "center", borderBottom: "1px solid #334155" } }, "Total"),
                                 allRows.map((r, ri) => {
