@@ -9809,6 +9809,8 @@ async function pullOneviewHardware(site, zone, serial) {
     }));
   }
   if (adapterDoc) { try { linked += oneviewLinks.mergeAdapterLinks(nicList, oneviewLinks.nicsFromAdapters(adapterDoc)); } catch (e) { /* best effort */ } }
+  // Enabled/Disabled is the port's admin setting, not link state: never show it in the Link column.
+  nicList.forEach((n) => n.ports.forEach((q) => { if (/^(enabled|disabled)$/i.test(String(q.link || ''))) { q.admin = q.link; q.link = ''; } }));
   const totalPorts = nicList.reduce((t, n) => t + n.ports.length, 0);
   // 2) Anything still missing: ask the server's own iLO (needs the DCIM server to reach it).
   const ilo = linked >= totalPorts && totalPorts > 0 ? { ports: [], note: '' } : await iloPortLinks(session, hdrs, s.uri);

@@ -4610,7 +4610,7 @@ function AssetDetailPanel({ asset, canEdit }) {
                                     React.createElement("td", { style: { padding: "7px 12px", color: "#334155" } }, q.id || "—"),
                                     React.createElement("td", { style: { padding: "7px 12px", fontFamily: "'JetBrains Mono'", color: "#334155", whiteSpace: "nowrap" } }, q.mac || "—"),
                                     React.createElement("td", { style: { padding: "7px 12px", color: "#334155", whiteSpace: "nowrap" } }, v.speed || "—"),
-                                    React.createElement("td", { style: { padding: "7px 12px", color: /^(up|link ?up|connected)$/i.test(v.link) ? "#059669" : /down/i.test(v.link) ? "#DC2626" : "#334155" } }, v.link || (d.nicNote ? "Unavailable" : "—")),
+                                    React.createElement("td", { style: { padding: "7px 12px", color: /^(up|link ?up|connected)$/i.test(v.link) ? "#059669" : /down/i.test(v.link) ? "#DC2626" : "#334155" } }, v.link || (d.nicNote ? "Unavailable" : "Not reported")),
                                     React.createElement("td", { style: { padding: "7px 12px", color: "#334155" } }, v.type || "—")); });
                             }))))));
         }
