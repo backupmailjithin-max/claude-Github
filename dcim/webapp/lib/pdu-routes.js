@@ -45,18 +45,18 @@ function ipToInt(ip) {
   return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
 }
 function intToIp(n) { return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.'); }
-function parseDiscoveryRanges() {
+function parseDiscoveryRanges(log) {
   const raw = String(process.env.PDU_DISCOVERY_RANGES || '').trim();
   if (!raw) return [];
   const out = [];
   raw.split(';').map((s) => s.trim()).filter(Boolean).forEach((entry) => {
     const parts = entry.split(':');
-    if (parts.length !== 3) { log.warn(`[pdu-discovery] ignoring malformed PDU_DISCOVERY_RANGES entry (expected startIP-endIP:Site:Zone): "${entry}"`); return; }
+    if (parts.length !== 3) { (log || console).warn(`[pdu-discovery] ignoring malformed PDU_DISCOVERY_RANGES entry (expected startIP-endIP:Site:Zone): "${entry}"`); return; }
     const [ipRange, site, zone] = parts.map((s) => s.trim());
     const [startIp, endIp] = ipRange.split('-').map((s) => s.trim());
     const startInt = ipToInt(startIp), endInt = ipToInt(endIp || startIp);
-    if (startInt === null || endInt === null || !site) { log.warn(`[pdu-discovery] ignoring malformed PDU_DISCOVERY_RANGES entry: "${entry}"`); return; }
-    if (endInt < startInt) { log.warn(`[pdu-discovery] ignoring PDU_DISCOVERY_RANGES entry with end before start: "${entry}"`); return; }
+    if (startInt === null || endInt === null || !site) { (log || console).warn(`[pdu-discovery] ignoring malformed PDU_DISCOVERY_RANGES entry: "${entry}"`); return; }
+    if (endInt < startInt) { (log || console).warn(`[pdu-discovery] ignoring PDU_DISCOVERY_RANGES entry with end before start: "${entry}"`); return; }
     out.push({ startIp, endIp: endIp || startIp, startInt, endInt, site, zone: zone || 'AZ-1' });
   });
   return out;
@@ -450,7 +450,7 @@ module.exports = function registerPduRoutes(app, deps) {
   app.post('/api/pdus/discover', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
     try {
       const allowed = await getAllowedSitesForUser(req.user);
-      const ranges = parseDiscoveryRanges().filter((r) => allowed.includes(r.site));
+      const ranges = parseDiscoveryRanges(log).filter((r) => allowed.includes(r.site));
       if (!ranges.length) return res.status(400).json({ error: 'No PDU_DISCOVERY_RANGES configured in .env for your site(s). Ask an admin to set it (see .env.example).' });
       const community = process.env.PDU_DISCOVERY_COMMUNITY || 'public';
       const hosts = []; // { ip, site, zone }

@@ -660,7 +660,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
     cpuSummary: a.redfish_cpu, memSummary: a.redfish_mem, diskSummary: a.redfish_disk, nicSummary: a.redfish_nic, hwCollectedAt: a.redfish_hw_at,
     redfishConfigured: !!a.redfish_username, redfishVersion: a.redfish_version, bmcFirmware: a.bmc_firmware, biosVersion: a.bios_version,
     healthStatus: a.health_status, powerState: a.power_state, alertCount: a.redfish_alert_count,
-    powerWatts: a.redfish_power_watts, hardwareType: a.hardware_type, monitorIgnored: !!a.redfish_monitor_ignored,
+    powerWatts: a.redfish_power_watts,
     lastSyncAt: a.last_redfish_sync_at, lastError: a.last_redfish_error,
     monitorIgnored: !!a.redfish_monitor_ignored,
   });
