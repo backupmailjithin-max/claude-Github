@@ -29,3 +29,17 @@ test('follows-links helpers and layout report never expose values', () => {
 test('MAC without separators is accepted', () => {
   assert.strictEqual(collectOneviewLinks({ macAddress: 'C470BD99AC08', linkStatus: 'LinkUp' }, []).length, 1);
 });
+test('Redfish-style port: MAC nested under Ethernet, speed in Gbps', () => {
+  const doc = { data: [{ Id: 'DE080000', Model: 'Mellanox MCX631102AS', Controllers: [{ FirmwarePackageVersion: '26.43', Location: { PartLocation: { LocationOrdinalValue: 1 } }, Links: { Ports: [
+    { Id: '1', LinkStatus: 'LinkUp', CurrentSpeedGbps: 25, Ethernet: { AssociatedMACAddresses: ['C4:70:BD:99:AC:08'] } },
+    { Id: '2', LinkStatus: 'LinkDown', Ethernet: { AssociatedMACAddresses: ['C4:70:BD:99:AC:09'] } } ] } }] }] };
+  const r = collectOneviewLinks(doc, []);
+  assert.strictEqual(r.length, 2);
+  assert.strictEqual(r[0].link, 'Up'); assert.strictEqual(r[0].mbps, 25000);
+  const { nicsFromAdapters } = require('../lib/oneview-links');
+  const nics = nicsFromAdapters(doc);
+  assert.strictEqual(nics.length, 1);
+  assert.strictEqual(nics[0].ports.length, 2);
+  assert.strictEqual(nics[0].ports[1].link, 'Down');
+  assert.strictEqual(nics[0].firmware, '26.43');
+});

@@ -9768,6 +9768,7 @@ async function pullOneviewHardware(site, zone, serial) {
   }));
   // 1) Link status that OneView itself holds (its "Network Adapters" view): the server record and its adapter sub-resources.
   const probe = [];
+  let adapterDoc = null;
   const ovLinks = oneviewLinks.collectOneviewLinks(s, []);
   probe.push(`server record: ${ovLinks.length ? ovLinks.length + ' port(s) with link data' : 'no link fields'}`);
   await Promise.all(oneviewLinks.oneviewAdapterPaths(s.uri).map(async (p) => {
@@ -9776,6 +9777,7 @@ async function pullOneviewHardware(site, zone, serial) {
       if (!rr.ok) { probe.push(`${p.split('/').pop()}: HTTP ${rr.status}`); return; }
       const jj = await rr.json().catch(() => null);
       let got = oneviewLinks.collectOneviewLinks(jj, []);
+      if (/networkAdapters$/.test(p)) adapterDoc = jj;
       let followed = 0;
       if (!got.length) {
         // The answer may only list links to each adapter / port: follow them (bounded).
@@ -9793,6 +9795,11 @@ async function pullOneviewHardware(site, zone, serial) {
       probe.push(`${p.split('/').pop()}: ${got.length ? got.length + ' port(s) with link data' : 'answered, no link fields' + (followed ? ` (followed ${followed} links)` : '') + ' - layout: ' + oneviewLinks.shapeOf(jj)}`);
     } catch (e) { probe.push(`${p.split('/').pop()}: ${String(e && e.message || e).slice(0, 40)}`); }
   }));
+  // No port map on the server record (some Gen10 rack servers): build the adapter / port table from OneView's own adapter list instead of showing nothing.
+  if (!nicList.some((n) => n.ports.length) && adapterDoc) {
+    const alt = oneviewLinks.nicsFromAdapters(adapterDoc);
+    if (alt.length) { nicList.splice(0, nicList.length, ...alt); const pc = alt.reduce((t, n) => t + n.ports.length, 0); if (!summary.some((x) => x.label === 'Network')) summary.push({ label: 'Network', value: `${alt.length} adapter${alt.length === 1 ? '' : 's'}${pc ? `, ${pc} port${pc === 1 ? '' : 's'}` : ''}` }); }
+  }
   let linked = 0;
   if (ovLinks.length) {
     nicList.forEach((nic) => nic.ports.forEach((q) => {
