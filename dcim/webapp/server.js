@@ -1513,7 +1513,7 @@ async function initDB() {
     for (const ddl of ["ALTER TABLE firmware_jobs ADD COLUMN source VARCHAR(20) NOT NULL DEFAULT 'dcim'", 'ALTER TABLE firmware_jobs ADD COLUMN job_name VARCHAR(255) NULL']) {
       try { await conn.query(ddl); } catch (e) { /* column already exists */ }
     }
-    try { await conn.query('DELETE FROM firmware_jobs WHERE started_at < ?', [Date.now() - 31 * 24 * 3600 * 1000]); } catch (e) { /* housekeeping only */ }
+    try { await conn.query('DELETE FROM firmware_jobs WHERE started_at < ?', [Date.now() - 181 * 24 * 3600 * 1000]); } catch (e) { /* housekeeping only */ }
 
     // Consolidate hardware types that differ only by case (e.g. "DellServer",
     // "Dellserver", "DELLServer" from data entered before normalization was
@@ -4119,7 +4119,7 @@ async function applyOneviewFirmware(site, zone, deviceUris, bundleUri, forceInst
 // ---- Persistent per-server firmware job records (table firmware_jobs) ----
 const FW_JOB_LIST_RUNNING_MS = 12 * 3600 * 1000; // a job still "Running" after this long is no longer listed
 const FW_JOB_LIST_DONE_MS = 2 * 3600 * 1000;     // finished jobs stay listed this long
-const FW_JOB_HISTORY_DAYS = 30;                  // job log kept (and viewable on the Firmware Jobs tab) for this many days
+const FW_JOB_HISTORY_DAYS = 180;                 // job log kept (and viewable on the Firmware Jobs tab) for this many days (6 months)
 const FW_JOB_HISTORY_MS = FW_JOB_HISTORY_DAYS * 24 * 3600 * 1000;
 let fwJobsLastPrune = 0;
 function fwJobAggregate(rows) {

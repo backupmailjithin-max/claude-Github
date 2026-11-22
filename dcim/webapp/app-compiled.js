@@ -2779,9 +2779,9 @@ function ListFilterHeaderCell({ column, filter, onOpen, sortKey, sortDir, onSort
         React.createElement("button", { onClick: () => onOpen(column), title: `Filter ${column.label}`, className: "neu-icon-btn", style: { width: 22, height: 22, borderRadius: 6, padding: 0, display: "inline-flex", flexShrink: 0, background: active ? "#EEF2FF" : "#F8FAFC", border: active ? "1px solid #C7D2FE" : "1px solid #E2E8F0" } },
             React.createElement(Filter, { s: 11, c: active ? "#4F46E5" : "#64748B" })));
 }
-function ListFilterHeader({ column, filter, onOpen, style = {}, sortKey, sortDir, onSort }) {
+function ListFilterHeader({ column, filter, onOpen, style = {}, sortKey, sortDir, onSort, keepSticky }) {
     const active = listColumnFilterActive(filter);
-    return React.createElement("th", { key: column.key, style: { ...style, position: "relative" } },
+    return React.createElement("th", { key: column.key, style: { ...style, position: keepSticky ? "sticky" : "relative" } },
         React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 5 } },
             React.createElement(ListSortLabel, { column, sortKey, sortDir, onSort }),
             React.createElement("button", { onClick: () => onOpen(column), title: `Filter ${column.label}`, className: "neu-icon-btn", style: { width: 25, height: 25, borderRadius: 7, padding: 0, display: "inline-flex", flexShrink: 0, background: active ? "#EEF2FF" : "#F8FAFC", border: active ? "1px solid #C7D2FE" : "1px solid #E2E8F0" } },
@@ -8929,11 +8929,11 @@ function FirmwareJobsTab({ canEdit }) {
     const [fSite, setFSite] = useState("all");
     const [fVendor, setFVendor] = useState("all");
     const [fState, setFState] = useState("all");
-    const [fDays, setFDays] = useState(30); // how far back the list goes (the server keeps 30 days)
+    const [fDays, setFDays] = useState(180); // how far back the list goes (the server keeps 6 months)
     const [open, setOpen] = useState({});
     useEffect(() => {
         let alive = true;
-        const load = (refresh) => api.getActiveFirmwareJobs(720, refresh).then((r) => { if (alive) { setJobs((r && r.jobs) || []); setErr(""); } }).catch((e) => { if (alive) setErr(e.message || "Could not load firmware jobs"); });
+        const load = (refresh) => api.getActiveFirmwareJobs(4320, refresh).then((r) => { if (alive) { setJobs((r && r.jobs) || []); setErr(""); } }).catch((e) => { if (alive) setErr(e.message || "Could not load firmware jobs"); });
         load(true);
         const t = setInterval(() => load(false), 8000);
         return () => { alive = false; clearInterval(t); };
@@ -8943,7 +8943,7 @@ function FirmwareJobsTab({ canEdit }) {
         try {
             const r = await api.scanFirmwareJobs();
             setScan(r);
-            const j = await api.getActiveFirmwareJobs(720, false);
+            const j = await api.getActiveFirmwareJobs(4320, false);
             setJobs((j && j.jobs) || []);
         } catch (e) { setScanErr(e.message || "Scan failed"); }
         setScanBusy(false);
@@ -8960,13 +8960,13 @@ function FirmwareJobsTab({ canEdit }) {
         React.createElement("div", { style: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 12 } },
             React.createElement("div", null,
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15.5, fontWeight: 700, color: "#0F172A" } }, "Firmware Update Jobs"),
-                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#475569", marginTop: 3, maxWidth: 640, lineHeight: 1.5 } }, "Every firmware update running or finished in the last 30 days at the locations you can access — started from DCIM or directly in Dell OME / HPE OneView (the appliances are checked about every 30 seconds). A server with a running update is locked in DCIM.")),
+                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#475569", marginTop: 3, maxWidth: 640, lineHeight: 1.5 } }, "Every firmware update running or finished in the last 6 months at the locations you can access — started from DCIM or directly in Dell OME / HPE OneView (the appliances are checked about every 30 seconds). A server with a running update is locked in DCIM.")),
             React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } }, chip("Running", count("Running"), "#2563EB"), chip("Completed", count("Completed"), "#059669"), chip("Failed", count("Failed"), "#DC2626"))),
         React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 } },
             React.createElement("select", { value: fSite, onChange: (e) => setFSite(e.target.value), style: sel, "aria-label": "Filter by location" }, React.createElement("option", { value: "all" }, "All locations"), sites.map((s) => React.createElement("option", { key: s, value: s }, s))),
             React.createElement("select", { value: fVendor, onChange: (e) => setFVendor(e.target.value), style: sel, "aria-label": "Filter by vendor" }, React.createElement("option", { value: "all" }, "Dell OME + HPE OneView"), React.createElement("option", { value: "ome" }, "Dell OME"), React.createElement("option", { value: "oneview" }, "HPE OneView")),
             React.createElement("select", { value: fState, onChange: (e) => setFState(e.target.value), style: sel, "aria-label": "Filter by status" }, React.createElement("option", { value: "all" }, "Any status"), React.createElement("option", { value: "Running" }, "Running"), React.createElement("option", { value: "Completed" }, "Completed"), React.createElement("option", { value: "Failed" }, "Failed")),
-            React.createElement("select", { value: fDays, onChange: (e) => setFDays(Number(e.target.value)), style: sel, "aria-label": "Filter by period" }, React.createElement("option", { value: 1 }, "Last 24 hours"), React.createElement("option", { value: 7 }, "Last 7 days"), React.createElement("option", { value: 30 }, "Last 30 days"))),
+            React.createElement("select", { value: fDays, onChange: (e) => setFDays(Number(e.target.value)), style: sel, "aria-label": "Filter by period" }, React.createElement("option", { value: 1 }, "Last 24 hours"), React.createElement("option", { value: 7 }, "Last 7 days"), React.createElement("option", { value: 30 }, "Last 30 days"), React.createElement("option", { value: 90 }, "Last 3 months"), React.createElement("option", { value: 180 }, "Last 6 months"))),
         canEdit && React.createElement("div", { style: { marginBottom: 12 } },
             React.createElement("button", { className: "neu-btn-secondary", disabled: scanBusy, onClick: runScan, style: { fontSize: 11.5, padding: "5px 12px" }, title: "Ask every configured Dell OME / HPE OneView appliance right now which firmware updates are running" }, scanBusy ? "Scanning appliances\u2026" : "Scan appliances now"),
             scanErr && React.createElement("span", { style: { marginLeft: 10, color: "#B91C1C", fontFamily: "Inter", fontSize: 12 } }, scanErr),
@@ -9232,11 +9232,11 @@ function MonitorVendorPanel({ vendorLabel, icon, result, canEdit, selectedIds, o
                         React.createElement("thead", null,
                             React.createElement("tr", null,
                                 canEdit && React.createElement("th", { style: thSm }),
-                                MONITOR_LIST_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, sortKey: listSort.key, sortDir: listSort.dir, onSort: listSort.onSort, style: thSm })),
+                                MONITOR_LIST_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, sortKey: listSort.key, sortDir: listSort.dir, onSort: listSort.onSort, style: thSm, keepSticky: true })),
                                 " ")),
                         React.createElement("tbody", null, filterRows.map((d, i) => {
                             const k = keyOf(d);
-                            return React.createElement("tr", { key: k || i, style: { borderTop: i ? "0.5px solid rgba(163,177,198,0.2)" : "none", borderLeft: k && selectedIds.has(k) ? "3px solid #2563EB" : "3px solid transparent", background: k && selectedIds.has(k) ? "#EFF6FF" : "transparent" } },
+                            return React.createElement("tr", { key: k || i, "data-mon-dev": k || undefined, style: { borderTop: i ? "0.5px solid rgba(163,177,198,0.2)" : "none", borderLeft: k && selectedIds.has(k) ? "3px solid #2563EB" : "3px solid transparent", background: k && selectedIds.has(k) ? "#EFF6FF" : "transparent" } },
                                 canEdit && React.createElement("td", { style: tdSm }, k && (lockOf(d) ? React.createElement("span", { title: "Firmware update in progress - locked", style: { fontSize: 12 } }, "\uD83D\uDD12") : React.createElement("input", { type: "checkbox", checked: selectedIds.has(k), onChange: (e) => onToggle(k, e.target.checked), "aria-label": `Select ${d.name}`, style: { width: 14, height: 14, accentColor: "#2563EB" } }))),
                                 React.createElement("td", { style: { ...tdSm, fontWeight: 600, color: "#0F172A" }, title: lockOf(d) ? `${d.name} - firmware update in progress (started by ${lockOf(d).by || "another user"})` : d.name },
                                     d.name,
@@ -9922,6 +9922,18 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
         if (!key) return; // older cached search result with no id/uri - nothing to select
         if (result.vendor === "Dell OME") setSelOme(new Set([key]));
         else if (result.vendor === "HPE OneView") setSelOv(new Set([key]));
+        // Bring the found server into view (the zone table can be long) and flash it so it is obvious.
+        let tries = 0;
+        const reveal = () => {
+            const row = Array.prototype.find.call(document.querySelectorAll("tr[data-mon-dev]"), (el) => el.getAttribute("data-mon-dev") === key);
+            if (row) {
+                try { row.scrollIntoView({ behavior: "smooth", block: "center" }); } catch (e) { row.scrollIntoView(); }
+                row.style.transition = "box-shadow .3s ease";
+                row.style.boxShadow = "inset 0 0 0 2px #2563EB";
+                setTimeout(() => { row.style.boxShadow = ""; }, 2600);
+            } else if (++tries < 25) setTimeout(reveal, 200);
+        };
+        setTimeout(reveal, 150);
     };
     const loadZoneSeqRef = useRef(0);
     const loadZone = async (site, zone, forceRefresh = false) => {
@@ -10081,7 +10093,7 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
     };
     const tabBtnStyle = (active) => ({ padding: "8px 16px", borderRadius: 8, border: "none", background: active ? "#FFFFFF" : "transparent", color: active ? "#0F172A" : "#64748B", fontFamily: "Inter", fontSize: 12.5, fontWeight: 700, cursor: "pointer", boxShadow: active ? "0 1px 2px rgba(15,23,42,0.12)" : "none" });
     return React.createElement("div", { style: { display: "flex", gap: 20, alignItems: "flex-start" } },
-        React.createElement("div", { className: "neu-card anim-in d1", style: { width: 280, flexShrink: 0, padding: 14, position: "sticky", top: 20 } },
+        React.createElement("div", { className: "neu-card anim-in d1", style: { width: 280, flexShrink: 0, padding: 14, position: "sticky", top: 20, maxHeight: "calc(100vh - 40px)", overflowY: "auto", alignSelf: "flex-start" } },
             React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, padding: "0 4px" } },
                 React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, color: "#0F172A" } }, "Locations"),
                 canManageLocations && React.createElement("button", { onClick: onAddLocation, className: "neu-icon-btn", title: "Add new location", style: { width: 26, height: 26, borderRadius: 8 } },
