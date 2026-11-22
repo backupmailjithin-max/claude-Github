@@ -4196,6 +4196,7 @@ const FW_SCAN_INTERVAL_MS = Math.max(10000, Number(process.env.MONITOR_FW_SCAN_M
 let fwNoiseCleaned = false;
 let fwJobsTickBusy = false;
 let fwJobsLastTick = 0;
+const fwDetect = require('./lib/fw-detect');
 function fwSubmissionInFlight(vendor, site, zone) { const p = `${vendor}|${site}|${zone}|`; return Object.keys(deviceFirmwareJobs).some((k) => k.startsWith(p) && !deviceFirmwareJobs[k].jobRef); }
 async function scanOneviewExternalFirmware(site, zone) {
   const diag = { site, zone, vendor: 'oneview' };
@@ -4234,7 +4235,7 @@ async function scanOneviewExternalFirmware(site, zone) {
   // "update" in their name or status text but are not firmware updates - they are ignored unless the text also names firmware.
   const FW_STRONG = /firmware|baseline|smart update|service pack|\bSPP\b/i;
   const FW_NOISE = /data collection|collect|received and processed|refresh|inventory|telemetry|utilization|health|alert/i;
-  const isFw = (t) => RUNNING.includes(t.taskState) && /^\/rest\/server-hardware\/[A-Za-z0-9_-]+$/.test(resUri(t)) && /firmware|baseline|smart update|service pack|\bSPP\b|\bupdat/i.test(textOf(t)) && !/power|refresh|collect|identify|\bled\b|reset|remote console/i.test(String(t.name || '')) && !(FW_NOISE.test(textOf(t)) && !FW_STRONG.test(textOf(t)));
+  const isFw = (t) => fwDetect.oneviewIsFirmwareTask(t);
   diag.running = tasks.filter((t) => t && RUNNING.includes(t.taskState)).length;
   diag.runningSample = tasks.filter((t) => t && RUNNING.includes(t.taskState)).slice(0, 10).map((t) => ({ name: t.name, taskState: t.taskState, taskStatus: t.taskStatus, taskType: t.taskType, owner: t.owner && (t.owner.name || t.owner), resource: t.associatedResource && { uri: t.associatedResource.resourceUri, name: t.associatedResource.resourceName, category: t.associatedResource.resourceCategory }, matched: isFw(t) }));
   let added = 0;
@@ -4282,7 +4283,7 @@ async function scanOmeExternalFirmware(site, zone) {
   diag.returned = jobs.length;
   const statusOf = (j) => String((j.LastRunStatus && j.LastRunStatus.Name) || (j.JobStatus && j.JobStatus.Name) || '');
   const isRunning = (j) => /^(running|starting|queued)$/i.test(statusOf(j));
-  const isFw = (j) => isRunning(j) && ((j.JobType && j.JobType.Name === 'Update_Task') || /firmware|baseline|catalog update|update/i.test(`${j.JobName || ''} ${j.JobDescription || ''}`) && !/inventory|warranty|refresh|report|discovery|health|status|power/i.test(`${(j.JobType && j.JobType.Name) || ''} ${j.JobName || ''}`));
+  const isFw = (j) => fwDetect.omeIsFirmwareJob(j);
   diag.running = jobs.filter(isRunning).length;
   diag.runningSample = jobs.filter(isRunning).slice(0, 10).map((j) => ({ Id: j.Id, JobName: j.JobName, type: j.JobType && j.JobType.Name, status: statusOf(j), createdBy: j.CreatedBy, targets: Array.isArray(j.Targets) ? j.Targets.map((t) => `${t.Id}${t.TargetType ? ':' + t.TargetType.Name : ''}`).slice(0, 6) : null, matched: isFw(j) }));
   const cached = deviceSnapshotCache[snapshotKey('OME', site, zone)];
@@ -4319,12 +4320,26 @@ async function fwJobsScanDiag(allowedSites) {
   }
   return out;
 }
+let fwPhantomCleaned = false;
+// One-time clean-up: rows an older version recorded from appliance housekeeping jobs (catalog checks, no-target system jobs,
+// OneView tasks that only said "update"). Only appliance-detected rows are touched; jobs started from DCIM are never removed.
+async function cleanPhantomFirmwareJobs() {
+  if (fwPhantomCleaned) return;
+  fwPhantomCleaned = true;
+  try {
+    const [r1] = await pool.query("DELETE FROM firmware_jobs WHERE source='appliance' AND vendor='ome' AND (device_id LIKE 'job-%' OR CONCAT_WS(' ', job_name, device_name) REGEXP 'inventory|warranty|refresh|report|discovery|catalog|check for|compliance|telemetry|purge|backup')");
+    const [r2] = await pool.query("DELETE FROM firmware_jobs WHERE source='appliance' AND vendor='oneview' AND CONCAT_WS(' ', job_name, baseline_label, step) NOT REGEXP 'firmware|baseline|smart update|service pack|SPP'");
+    const n = (r1.affectedRows || 0) + (r2.affectedRows || 0);
+    if (n) log.info(`[firmware-jobs] removed ${n} appliance housekeeping row(s) that were wrongly listed as firmware updates`);
+  } catch (e) { log.warn(`[firmware-jobs] clean-up skipped: ${e.message}`); }
+}
 async function fwJobsTick(force) {
   if (fwJobsTickBusy) return;
   if (!force && Date.now() - fwJobsLastTick < 8000) return;
   fwJobsTickBusy = true;
   try {
     if (Date.now() - fwJobsLastPrune > 24 * 3600 * 1000) { fwJobsLastPrune = Date.now(); try { await pool.query('DELETE FROM firmware_jobs WHERE started_at < ?', [Date.now() - (FW_JOB_HISTORY_DAYS + 1) * 24 * 3600 * 1000]); } catch (e) { /* housekeeping only */ } }
+    await cleanPhantomFirmwareJobs();
     const [zoneRows] = await pool.query('SELECT DISTINCT site, zone_name AS zone FROM zones');
     for (const z of zoneRows) {
       if (getMonitorConfig('ONEVIEW', z.site, z.zone)) { try { await scanOneviewExternalFirmware(z.site, z.zone); } catch (e) { log.warn(`[firmware-jobs] OneView scan ${z.site}/${z.zone}: ${String(e.message).slice(0, 120)}`); } }
