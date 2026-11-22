@@ -4197,6 +4197,7 @@ let fwNoiseCleaned = false;
 let fwJobsTickBusy = false;
 let fwJobsLastTick = 0;
 const fwDetect = require('./lib/fw-detect');
+const oneviewLinks = require('./lib/oneview-links');
 function fwSubmissionInFlight(vendor, site, zone) { const p = `${vendor}|${site}|${zone}|`; return Object.keys(deviceFirmwareJobs).some((k) => k.startsWith(p) && !deviceFirmwareJobs[k].jobRef); }
 async function scanOneviewExternalFirmware(site, zone) {
   const diag = { site, zone, vendor: 'oneview' };
@@ -9722,7 +9723,7 @@ async function iloPortLinks(session, hdrs, serverUri) {
     }
     if (!out.ports.length) out.note = 'Link status unavailable: the iLO answered but listed no port link data (older iLO firmware?)';
   } catch (e) {
-    out.note = `Link status unavailable: the iLO ${iloAddrTried || ''} could not be reached from the DCIM server (${String(e && e.message || e).slice(0, 80)}). HPE OneView does not report port link state, only the iLO does - allow HTTPS (443) from the DCIM server to the iLO.`.replace('iLO  ', 'iLO ');
+    out.note = `Link status unavailable: the iLO ${iloAddrTried || ''} could not be reached from the DCIM server (${String(e && e.message || e).slice(0, 80)}). OneView did not return link state for this server (see the probe below); the iLO is the fallback source, so allow HTTPS (443) from the DCIM server to the iLO.`.replace('iLO  ', 'iLO ');
   }
   return out;
 }
@@ -9765,9 +9766,31 @@ async function pullOneviewHardware(site, zone, serial) {
       type: String(p.type || '').trim(),
     })),
   }));
-  // Link status + live speed from the iLO, matched to the OneView ports by MAC address.
-  const ilo = await iloPortLinks(session, hdrs, s.uri);
+  // 1) Link status that OneView itself holds (its "Network Adapters" view): the server record and its adapter sub-resources.
+  const probe = [];
+  const ovLinks = oneviewLinks.collectOneviewLinks(s, []);
+  probe.push(`server record: ${ovLinks.length ? ovLinks.length + ' port(s) with link data' : 'no link fields'}`);
+  await Promise.all(oneviewLinks.oneviewAdapterPaths(s.uri).map(async (p) => {
+    try {
+      const rr = await monitorFetch(`${session.host}${p}`, { headers: hdrs, signal: AbortSignal.timeout(8000) });
+      if (!rr.ok) { probe.push(`${p.split('/').pop()}: HTTP ${rr.status}`); return; }
+      const jj = await rr.json().catch(() => null);
+      const got = oneviewLinks.collectOneviewLinks(jj, []);
+      ovLinks.push(...got);
+      probe.push(`${p.split('/').pop()}: ${got.length ? got.length + ' port(s) with link data' : 'answered, no link fields'}`);
+    } catch (e) { probe.push(`${p.split('/').pop()}: ${String(e && e.message || e).slice(0, 40)}`); }
+  }));
   let linked = 0;
+  if (ovLinks.length) {
+    nicList.forEach((nic) => nic.ports.forEach((q) => {
+      const keys = String(q.mac || '').split(',').map(oneviewLinks.macKey).filter(Boolean);
+      const hit = ovLinks.find((x) => x.keys.some((k) => keys.includes(k)));
+      if (hit) { q.link = hit.link; if (hit.mbps) q.speed = `${Math.round(hit.mbps / 10) / 100} Gbps`; linked++; }
+    }));
+  }
+  const totalPorts = nicList.reduce((t, n) => t + n.ports.length, 0);
+  // 2) Anything still missing: ask the server's own iLO (needs the DCIM server to reach it).
+  const ilo = linked >= totalPorts && totalPorts > 0 ? { ports: [], note: '' } : await iloPortLinks(session, hdrs, s.uri);
   if (ilo.ports.length) {
     nicList.forEach((nic) => nic.ports.forEach((q) => {
       const keys = String(q.mac || '').split(',').map(iloMacKey).filter(Boolean);
@@ -9776,7 +9799,8 @@ async function pullOneviewHardware(site, zone, serial) {
     }));
     if (!linked) ilo.note = 'Link status unavailable: the iLO ports could not be matched to the OneView ports by MAC address';
   }
-  return { vendor: 'HPE OneView', summary, nics: nicList, nicNote: linked ? '' : ilo.note };
+  const noteOut = linked ? '' : `${ilo.note} (OneView probe - ${probe.join('; ')})`;
+  return { vendor: 'HPE OneView', summary, nics: nicList, nicNote: noteOut };
 }
 
 async function readHardwareCache(serial) {
