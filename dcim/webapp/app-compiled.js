@@ -407,6 +407,7 @@ const api = {
     deleteAssetConnectivity: (id) => apiFetch('/assets/' + encodeURIComponent(id) + '/connectivity', { method: 'DELETE' }),
     importConnectivity: (payload) => apiFetch('/connectivity/import', { method: 'POST', body: JSON.stringify(payload), timeoutMs: 120000 }),
     getAssetHardware: (id) => apiFetch('/assets/' + encodeURIComponent(id) + '/hardware'),
+    getAssetHardwareDiag: (id) => apiFetch('/assets/' + encodeURIComponent(id) + '/hardware/diag'),
     syncAssetHardware: (id) => apiFetch('/assets/' + encodeURIComponent(id) + '/hardware/sync', { method: 'POST', timeoutMs: 90000 }),
     exportConnectivity: (scope) => apiFetch('/connectivity/export?scope=' + (scope === 'missing' ? 'missing' : 'data'), { timeoutMs: 120000 }),
     connectivityInventoryExtras: () => apiFetch('/connectivity/inventory-extras', { timeoutMs: 120000 }),
@@ -4510,6 +4511,17 @@ function AssetDetailPanel({ asset, canEdit }) {
         api.getAssetConnectivity(asset.id).then((r) => { if (alive) setConn(r.connectivity || null); }).catch((e) => { if (alive) { setConn(null); setConnErr(e.message || String(e)); } });
         return () => { alive = false; };
     }, [asset.id]);
+    const downloadHwDiag = async () => {
+        setHwBusy(true); setHwErr("");
+        try {
+            const r = await api.getAssetHardwareDiag(asset.id);
+            const blob = new Blob([JSON.stringify(r, null, 2)], { type: "application/json" });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement("a"); a.href = url; a.download = "hardware-diagnostic-" + String(asset.serialNumber || asset.id) + ".json";
+            document.body.appendChild(a); a.click(); a.remove(); window.URL.revokeObjectURL(url);
+        } catch (e) { setHwErr(e.message || String(e)); }
+        setHwBusy(false);
+    };
     const syncHw = async () => {
         setHwBusy(true); setHwErr("");
         try { const r = await api.syncAssetHardware(asset.id); setHw((prev) => ({ ...(prev || {}), hardware: r.hardware })); }
@@ -4575,7 +4587,8 @@ function AssetDetailPanel({ asset, canEdit }) {
                 React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontFamily: "Inter", fontSize: 12, color: "#64748B" } },
                     React.createElement("span", null, "Source: ", React.createElement("b", { style: { color: "#1E293B" } }, (d && d.vendor) || hw.vendor || "—")),
                     React.createElement("span", null, "Last pulled: ", React.createElement("b", { style: { color: "#1E293B" } }, d && d.fetchedAt ? fmtDateTime(d.fetchedAt) : "not pulled yet")),
-                    hw.supported && hw.configured && hw.canSync && React.createElement("button", { onClick: syncHw, disabled: hwBusy, className: "neu-btn-primary", style: { fontSize: 12, padding: "6px 14px" } }, hwBusy ? "Pulling…" : "Sync now")),
+                    hw.supported && hw.configured && hw.canSync && React.createElement("button", { onClick: syncHw, disabled: hwBusy, className: "neu-btn-primary", style: { fontSize: 12, padding: "6px 14px" } }, hwBusy ? "Pulling…" : "Sync now"),
+                    hw.supported && hw.configured && hw.canSync && /oneview/i.test(String(hw.vendor || "")) && React.createElement("button", { onClick: downloadHwDiag, disabled: hwBusy, title: "Download a masked copy of what OneView returns for the network adapters of this server", className: "neu-btn", style: { fontSize: 11, padding: "6px 12px" } }, "Download diagnostic")),
                 hw.supported === false && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 13, color: "#64748B" } }, "Hardware details are available for Dell (OME) and HPE (OneView) servers. This asset’s manufacturer is not supported yet."),
                 hw.supported && !hw.configured && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 13, color: "#B45309" } }, `${hw.vendor} is not configured for ${asset.site} / ${asset.zone || "AZ-1"} (add its host and login to the server settings).`),
                 hw.supported && hw.configured && !hw.canSync && !d && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 13, color: "#64748B" } }, "Not pulled yet. An Admin or Operator can pull it."),

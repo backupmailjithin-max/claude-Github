@@ -43,3 +43,11 @@ test('Redfish-style port: MAC nested under Ethernet, speed in Gbps', () => {
   assert.strictEqual(nics[0].ports[1].link, 'Down');
   assert.strictEqual(nics[0].firmware, '26.43');
 });
+test('Up/Down is filled by adapter model + position when MACs do not match', () => {
+  const { mergeAdapterLinks, nicsFromAdapters } = require('../lib/oneview-links');
+  const alt = nicsFromAdapters({ data: [{ Id: 'A', Model: 'Mellanox MCX631102AS-ADAT 2-port', Controllers: [{ Links: { Ports: [{ Id: '1', LinkStatus: 'LinkUp', CurrentSpeedGbps: 25 }, { Id: '2', LinkStatus: 'LinkDown' }] } }] }] });
+  const nics = [{ name: 'P42046-001 / Mellanox MCX631102AS-ADAT Ethernet 10/25Gb 2-port SFP28 Adapter', id: 'PCI-E Slot 1', ports: [{ id: '0', mac: 'B8:E9:24:15:A7:CA', link: 'Enabled', speed: '25 Gbps' }, { id: '1', mac: 'B8:E9:24:15:A7:CB', link: 'Enabled', speed: '25 Gbps' }] }];
+  assert.strictEqual(mergeAdapterLinks(nics, alt), 2);
+  assert.strictEqual(nics[0].ports[0].link, 'Up');
+  assert.strictEqual(nics[0].ports[1].link, 'Down');
+});

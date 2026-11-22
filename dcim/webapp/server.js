@@ -9808,6 +9808,7 @@ async function pullOneviewHardware(site, zone, serial) {
       if (hit) { q.link = hit.link; if (hit.mbps) q.speed = `${Math.round(hit.mbps / 10) / 100} Gbps`; linked++; }
     }));
   }
+  if (adapterDoc) { try { linked += oneviewLinks.mergeAdapterLinks(nicList, oneviewLinks.nicsFromAdapters(adapterDoc)); } catch (e) { /* best effort */ } }
   const totalPorts = nicList.reduce((t, n) => t + n.ports.length, 0);
   // 2) Anything still missing: ask the server's own iLO (needs the DCIM server to reach it).
   const ilo = linked >= totalPorts && totalPorts > 0 ? { ports: [], note: '' } : await iloPortLinks(session, hdrs, s.uri);
@@ -9857,6 +9858,53 @@ app.post('/api/assets/:id/hardware/sync', authenticateToken, requireRole(['Admin
     await pool.query('INSERT INTO asset_hw_details (serial_number, vendor, site, zone, data, fetched_by) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE vendor = VALUES(vendor), site = VALUES(site), zone = VALUES(zone), data = VALUES(data), fetched_by = VALUES(fetched_by), fetched_at = CURRENT_TIMESTAMP',
       [serial, result.vendor, a.site, zone, JSON.stringify({ summary: result.summary, nics: result.nics || [], nicNote: result.nicNote || '' }), req.user.username || null]);
     res.json({ hardware: await readHardwareCache(serial) });
+  } catch (e) { sendErr(res, e); }
+});
+
+// Admin / Operator diagnostic for HPE OneView link status: the raw adapter answer with MAC addresses, serials and IPs masked,
+// so an unexpected layout can be supported without sending sensitive data. Read-only.
+function hwDiagMask(o, depth) {
+  if (depth > 12) return '[deep]';
+  if (Array.isArray(o)) return o.slice(0, 30).map((x) => hwDiagMask(x, depth + 1));
+  if (o && typeof o === 'object') {
+    const r = {};
+    for (const [k, val] of Object.entries(o)) {
+      if (/serial|ipaddress|hostname|ipv4|ipv6|uuid|sku|assettag/i.test(k) && typeof val === 'string') r[k] = '***';
+      else r[k] = hwDiagMask(val, depth + 1);
+    }
+    return r;
+  }
+  if (typeof o === 'string') return HW_MAC_RE.test(o.trim()) ? o.trim().slice(0, 2) + ':**:**:**:**:' + o.trim().slice(-2) : (o.length > 160 ? o.slice(0, 160) + '...' : o);
+  return o;
+}
+app.get('/api/assets/:id/hardware/diag', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+  try {
+    const a = await loadAssetForConnectivity(req, req.params.id);
+    const prov = hwProviderFor(a.manufacturer);
+    if (!prov || prov.key !== 'ONEVIEW') return res.status(400).json({ error: 'This diagnostic is for HPE servers managed by OneView' });
+    const zone = a.zone || 'AZ-1';
+    const session = await getOneviewSession(a.site, zone);
+    if (!session) return res.status(400).json({ error: `HPE OneView is not configured for ${a.site} / ${zone}` });
+    const hdrs = { Auth: session.sessionId, 'X-API-Version': String(session.apiVersion) };
+    const serial = String(a.serial_number || '').trim();
+    const out = { note: 'Values for MAC, serial and IP are masked. Send this file back for analysis.', generatedAt: new Date().toISOString(), apiVersion: session.apiVersion };
+    const r1 = await monitorFetch(`${session.host}/rest/server-hardware?filter=${encodeURIComponent(`"serialNumber='${serial}'"`)}&count=2`, { headers: hdrs });
+    const sh = r1.ok ? ((await r1.json().catch(() => null)) || {}).members : null;
+    const s = sh && sh[0];
+    if (!s) return res.status(404).json({ error: 'Server not found on OneView by serial number' });
+    out.serverRecordPortMap = hwDiagMask(s.portMap || null, 0);
+    const get = async (path) => { try { const rr = await monitorFetch(`${session.host}${path}`, { headers: hdrs, signal: AbortSignal.timeout(10000) }); return { status: rr.status, body: rr.ok ? hwDiagMask(await rr.json().catch(() => null), 0) : null }; } catch (e) { return { status: 0, error: String(e.message || e).slice(0, 80) }; } };
+    out.networkAdapters = await get(`${s.uri}/networkAdapters`);
+    // Linked sub-resources (Ports / NetworkDeviceFunctions) referenced by the answer: try them through the same OneView path.
+    const refs = [];
+    (function walk(o, d) { if (!o || typeof o !== 'object' || d > 8) return; if (Array.isArray(o)) { o.forEach((x) => walk(x, d + 1)); return; } Object.entries(o).forEach(([k, val]) => { if (k === '@odata.id' && typeof val === 'string' && /\/(Ports|NetworkPorts|NetworkDeviceFunctions)\//.test(val)) refs.push(val); else if (val && typeof val === 'object') walk(val, d + 1); }); })(out.networkAdapters.body, 0);
+    out.followed = [];
+    for (const ref of [...new Set(refs)].slice(0, 6)) {
+      const tail = ref.split(/\/NetworkAdapters\//i)[1] || '';
+      const t = `${s.uri}/networkAdapters/${tail}`;
+      out.followed.push({ ref, tried: t.replace(s.uri, '<server>'), ...(await get(t)) });
+    }
+    res.json(out);
   } catch (e) { sendErr(res, e); }
 });
 

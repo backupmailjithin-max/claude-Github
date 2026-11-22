@@ -84,7 +84,7 @@ function shapeOf(obj, maxItems) {
   (function walk(o, path, d) {
     if (seen.size >= (maxItems || 90) || !o || typeof o !== 'object' || d > 5) return;
     if (Array.isArray(o)) { if (o.length) walk(o[0], path + '[]', d + 1); return; }
-    const keys = Object.keys(o).slice(0, 14);
+    const keys = Object.keys(o).slice(0, 30);
     seen.add((path || '$') + '{' + keys.join(',') + '}');
     keys.forEach((k) => { if (o[k] && typeof o[k] === 'object') walk(o[k], (path ? path + '.' : '') + k, d + 1); });
   })(obj, '', 0);
@@ -95,18 +95,44 @@ function shapeOf(obj, maxItems) {
 
 // Adapter list built from OneView's networkAdapters answer (Redfish-style: data[] adapters with Controllers[] and Ports),
 // used when the server record has no port map so the Network table is never silently empty.
+// Link state / speed of a single port object even when it carries no MAC of its own.
+function linkOnly(obj, depth) {
+  depth = depth || 0;
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj) || depth > 3) return null;
+  let link = '';
+  let mbps = 0;
+  for (const [k, v] of Object.entries(obj)) {
+    if (!link && LINK_KEY.test(k) && (typeof v === 'string' || typeof v === 'boolean')) link = normLink(v);
+    if (!mbps && SPEED_KEY.test(k) && v != null && typeof v !== 'object') mbps = mbpsOf(v, k);
+  }
+  if (link) return { link, mbps };
+  for (const v of Object.values(obj)) { const r = linkOnly(v, depth + 1); if (r) return r; }
+  return null;
+}
+function lastSeg(u) { return String(u || '').split('/').filter(Boolean).pop() || ''; }
 function nicsFromAdapters(doc) {
   const list = Array.isArray(doc) ? doc : (doc && (Array.isArray(doc.data) ? doc.data : Array.isArray(doc.members) ? doc.members : Array.isArray(doc.adapters) ? doc.adapters : [])) || [];
   const nics = [];
   list.forEach((ad, i) => {
     if (!ad || typeof ad !== 'object') return;
     const ctl = Array.isArray(ad.Controllers) && ad.Controllers[0] ? ad.Controllers[0] : {};
+    // MAC per physical port, taken from the adapter's network device functions (Redfish keeps MACs there for add-in cards).
+    const macByPort = {};
+    (Array.isArray(ad.NetworkDeviceFunctions) ? ad.NetworkDeviceFunctions : []).forEach((fn) => {
+      if (!fn || typeof fn !== 'object') return;
+      const mac = (fn.Ethernet && (fn.Ethernet.MACAddress || fn.Ethernet.PermanentMACAddress)) || (fn.FibreChannel && (fn.FibreChannel.PermanentWWPN || fn.FibreChannel.WWPN)) || '';
+      const lk = fn.Links || {};
+      const ph = lk.PhysicalPortAssignment || lk.PhysicalNetworkPortAssignment;
+      const pid = ph && ph['@odata.id'] ? lastSeg(ph['@odata.id']) : '';
+      if (mac && pid) macByPort[pid] = mac;
+    });
     const portsRaw = [];
-    [ctl.Links && ctl.Links.Ports, ad.Ports, ad.PhysicalPorts, ctl.Ports].forEach((x) => { if (Array.isArray(x)) x.forEach((p) => { if (p && typeof p === 'object' && Object.keys(p).some((k) => !/^@odata\.id$/.test(k))) portsRaw.push(p); }); });
+    [ctl.Links && ctl.Links.Ports, ad.Ports, ad.PhysicalPorts, ctl.Ports].forEach((x) => { if (Array.isArray(x)) x.forEach((p) => { if (p && typeof p === 'object') portsRaw.push(p); }); });
     const ports = portsRaw.map((p, pi) => {
-      const lk = collectOneviewLinks(p, []);
+      const lk = [linkOnly(p, 0)].filter(Boolean);
+      const pid = String(p.PortId != null ? p.PortId : (p.Id != null ? p.Id : (p['@odata.id'] ? lastSeg(p['@odata.id']) : pi + 1)));
       const macs = macsUnder(p, 0, []);
-      return { id: String(p.PortId != null ? p.PortId : (p.Id != null ? p.Id : pi + 1)), mac: macs[0] || '', speed: lk[0] && lk[0].mbps ? `${Math.round(lk[0].mbps / 10) / 100} Gbps` : '', link: lk[0] ? lk[0].link : '', type: String(p.ActiveLinkTechnology || p.LinkTechnology || p.PortType || 'Ethernet') };
+      return { id: pid, mac: macs[0] || macByPort[pid] || '', speed: lk[0] && lk[0].mbps ? `${Math.round(lk[0].mbps / 10) / 100} Gbps` : '', link: lk[0] ? lk[0].link : '', type: String(p.ActiveLinkTechnology || p.LinkTechnology || p.PortType || 'Ethernet') };
     });
     const loc = ctl.Location && ctl.Location.PartLocation ? ctl.Location.PartLocation : {};
     nics.push({ name: String(ad.Model || ad.Name || `Adapter ${i + 1}`).trim(), id: String(loc.ServiceLabel || (loc.LocationOrdinalValue != null ? `Slot ${loc.LocationOrdinalValue}` : ad.Id || '')).trim(), partNumber: String(ad.PartNumber || ''), firmware: String(ctl.FirmwarePackageVersion || ''), ports });
@@ -114,4 +140,29 @@ function nicsFromAdapters(doc) {
   return nics;
 }
 
-module.exports = { nicsFromAdapters, childUris, shapeOf, collectOneviewLinks, oneviewAdapterPaths, normLink, macKey };
+const modelTokens = (t) => new Set((String(t || '').toUpperCase().match(/[A-Z0-9]{5,}/g) || []).filter((x) => /\d/.test(x)));
+const isUpDown = (v) => /^(up|down)$/i.test(String(v || ''));
+// Fill Up/Down for ports still missing it, by matching each port-map adapter to an unused adapter of the same model
+// (and slot when both say so) and then port by position. MAC matching has already been applied before this.
+function mergeAdapterLinks(nicList, altNics) {
+  const used = new Set();
+  let filled = 0;
+  nicList.forEach((n) => {
+    if (!n.ports.length || n.ports.every((p) => isUpDown(p.link))) return;
+    const nt = modelTokens(`${n.name} ${n.partNumber}`);
+    const slotDigits = String(n.id || '').replace(/\D/g, '');
+    const cands = altNics.map((a, i) => ({ a, i })).filter(({ a, i }) => !used.has(i) && a.ports.some((p) => isUpDown(p.link)) && [...modelTokens(`${a.name} ${a.partNumber}`)].some((t) => nt.has(t)));
+    if (!cands.length) return;
+    const pick = cands.find(({ a }) => slotDigits && String(a.id || '').replace(/\D/g, '') === slotDigits) || cands[0];
+    used.add(pick.i);
+    const ap = pick.a.ports;
+    n.ports.forEach((p, idx) => {
+      if (isUpDown(p.link)) return;
+      const hit = ap.find((x) => x.mac && p.mac && macKey(x.mac) === macKey(p.mac)) || ap[idx];
+      if (hit && isUpDown(hit.link)) { p.link = hit.link; if (hit.speed && !/rated/i.test(hit.speed)) p.speed = hit.speed; filled++; }
+    });
+  });
+  return filled;
+}
+
+module.exports = { mergeAdapterLinks, nicsFromAdapters, childUris, shapeOf, collectOneviewLinks, oneviewAdapterPaths, normLink, macKey };
