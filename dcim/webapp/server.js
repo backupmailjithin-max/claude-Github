@@ -6959,7 +6959,9 @@ app.get('/api/issues', authenticateToken, async (req, res) => {
       id: r.id, ticketNo: r.ticket_no, assetId: r.asset_id, assetType: r.asset_type, site: r.site, zone: r.zone,
       rackNo: r.rack_no, uPosition: r.u_position, locationDetail: r.location_detail, title: r.title,
       description: r.description, severity: r.severity, partRequired: !!r.part_required, partName: r.part_name,
-      reportedDate: toDateTimeStr(r.reported_date || r.created_at), // an issue saved without a reported date counts from the day it was recorded diagnosedDate: toDateTimeStr(r.diagnosed_date), receivedDate: toDateTimeStr(r.received_date),
+      // an issue saved without a reported date counts from the day it was recorded
+      reportedDate: toDateTimeStr(r.reported_date || r.created_at),
+      diagnosedDate: toDateTimeStr(r.diagnosed_date), receivedDate: toDateTimeStr(r.received_date),
       scheduledDate: toDateTimeStr(r.scheduled_date), completedDate: toDateTimeStr(r.completed_date),
       movedToStoreDate: toDateTimeStr(r.moved_to_store_date), returnedToOemDate: toDateTimeStr(r.returned_to_oem_date), notes: r.notes,
       cancelledDate: toDateTimeStr(r.cancelled_date), cancelReason: r.cancel_reason

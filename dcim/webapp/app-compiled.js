@@ -1935,21 +1935,29 @@ function parseSpreadsheetFile(file, columns) {
 function StatusBadge({ status }) {
     return React.createElement("span", { className: `neu-badge ${status.cls}`, style: { color: status.color } }, status.label);
 }
+// A stage counts as reached when it, or any LATER stage, has a date: an issue that went straight from reported to scheduled
+// (diagnosis / part-received never ticked) must not show gaps in the middle of its pipeline.
+function pipelineReached(issue, stages) {
+    const out = stages.map((s) => !!issue[s.key]);
+    for (let i = out.length - 2; i >= 0; i--) if (out[i + 1]) out[i] = true;
+    return out;
+}
 function Pipeline({ issue, compact }) {
     const stages = pipelineStages(issue);
     const st = getStatus(issue);
+    const reachedAt = pipelineReached(issue, stages);
     if (compact) {
-        return React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4 } }, stages.map((s) => (React.createElement("div", { key: s.key, title: s.label + (issue[s.key] ? ` — ${fmtDate(issue[s.key])}` : " — pending"), style: { width: 18, height: 5, borderRadius: 3, background: issue[s.key] ? st.color : "#CBD5E1", transition: "all 0.3s" } }))));
+        return React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4 } }, stages.map((s, i) => (React.createElement("div", { key: s.key, title: s.label + (issue[s.key] ? ` — ${fmtDate(issue[s.key])}` : reachedAt[i] ? " — done (date not recorded)" : " — pending"), style: { width: 18, height: 5, borderRadius: 3, background: reachedAt[i] ? st.color : "#CBD5E1", transition: "all 0.3s" } }))));
     }
     return React.createElement("div", { style: { display: "flex", width: "100%", padding: "8px 0 4px" } }, stages.map((s, i) => {
-        const reached = !!issue[s.key];
+        const reached = reachedAt[i];
         const isLast = i === stages.length - 1;
         return React.createElement("div", { key: s.key, style: { flex: isLast ? "0 0 auto" : 1, display: "flex", alignItems: "center" } },
             React.createElement("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", minWidth: 100 } },
                 React.createElement("div", { style: { width: 28, height: 28, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'JetBrains Mono'", fontSize: 11, fontWeight: 700, background: reached ? st.color : "#F1F5F9", color: reached ? "#fff" : "#64748B", boxShadow: reached ? `0 4px 12px ${st.color}40` : "inset 2px 2px 6px rgba(0,0,0,0.06), inset -2px -2px 6px rgba(255,255,255,0.9)", flexShrink: 0, transition: "all 0.3s" } }, reached ? React.createElement(CheckCircle2, { s: 13, c: "#fff" }) : i + 1),
                 React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: reached ? "#1E293B" : "#64748B", marginTop: 8, textAlign: "center", maxWidth: 96, fontWeight: reached ? 600 : 400 } }, s.label),
-                React.createElement("div", { style: { fontFamily: "'JetBrains Mono'", fontSize: 10, color: "#64748B", marginTop: 3 } }, reached ? fmtDateTime(issue[s.key]) : "—")),
-            !isLast && React.createElement("div", { style: { flex: 1, height: 3, marginBottom: 30, minWidth: 12, background: reached && issue[stages[i + 1].key] ? st.color : "#CBD5E1", borderRadius: 2, transition: "all 0.3s" } }));
+                React.createElement("div", { style: { fontFamily: "'JetBrains Mono'", fontSize: 10, color: "#64748B", marginTop: 3 } }, issue[s.key] ? fmtDateTime(issue[s.key]) : "—")),
+            !isLast && React.createElement("div", { style: { flex: 1, height: 3, marginBottom: 30, minWidth: 12, background: reached && reachedAt[i + 1] ? st.color : "#CBD5E1", borderRadius: 2, transition: "all 0.3s" } }));
     }));
 }
 function DateField({ label, value, onChange, disabled, mode = "date" }) {
