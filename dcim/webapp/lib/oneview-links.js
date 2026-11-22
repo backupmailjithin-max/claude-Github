@@ -119,6 +119,7 @@ function linkOnly(obj, depth) {
   for (const v of Object.values(obj)) { const r = linkOnly(v, depth + 1); if (r) return r; }
   return null;
 }
+const isUpDownLocal = (v) => /^(up|down)$/i.test(String(v || ''));
 function lastSeg(u) { return String(u || '').split('/').filter(Boolean).pop() || ''; }
 function nicsFromAdapters(doc) {
   const list = Array.isArray(doc) ? doc : (doc && (Array.isArray(doc.data) ? doc.data : Array.isArray(doc.members) ? doc.members : Array.isArray(doc.adapters) ? doc.adapters : [])) || [];
@@ -146,6 +147,23 @@ function nicsFromAdapters(doc) {
       const macs = macsUnder(p, 0, []);
       return { id: String(p.Id != null ? p.Id : pid), portId: pid, mac: macs[0] || macByPort[pid] || '', speed: lk[0] && lk[0].mbps ? `${Math.round(lk[0].mbps / 10) / 100} Gbps` : '', link: lk[0] ? lk[0].link : '', type: String(p.ActiveLinkTechnology || p.LinkTechnology || p.PortType || 'Ethernet') };
     });
+    // Fallback for adapters whose port objects carry no LinkStatus (older iLO layouts): the HPE OEM physical-port list
+    // (LinkStatus, or speed: 0 = no link, >0 = linked), matched by port number or MAC.
+    const oem = ad.Oem && (ad.Oem.Hpe || ad.Oem.Hp) ? (ad.Oem.Hpe || ad.Oem.Hp) : {};
+    const oemPorts = [].concat(Array.isArray(oem.PhysicalPorts) ? oem.PhysicalPorts : [], Array.isArray(oem.FcPorts) ? oem.FcPorts : []).filter((x) => x && typeof x === 'object');
+    if (oemPorts.length) {
+      ports.forEach((q, qi) => {
+        if (isUpDownLocal(q.link)) return;
+        const hit = oemPorts.find((x) => { const pn = x.Oem && (x.Oem.Hpe || x.Oem.Hp) ? (x.Oem.Hpe || x.Oem.Hp).PortNumber : x.PortNumber; return pn != null && String(pn) === String(q.id); })
+          || oemPorts.find((x) => q.mac && (x.MacAddress || x.WWPN) && macKey(x.MacAddress || x.WWPN) === macKey(q.mac)) || oemPorts[qi];
+        if (!hit) return;
+        const st = hit.LinkStatus != null ? normLink(hit.LinkStatus) : '';
+        const mb = Number(hit.SpeedMbps != null ? hit.SpeedMbps : hit.SpeedGbps != null ? hit.SpeedGbps * 1000 : NaN);
+        if (/^(up|down)$/i.test(st)) q.link = st;
+        else if (!isNaN(mb)) q.link = mb > 0 ? 'Up' : 'Down';
+        if (!isNaN(mb) && mb > 0 && !q.speed) q.speed = `${Math.round(mb / 10) / 100} Gbps`;
+      });
+    }
     const loc = ctl.Location && ctl.Location.PartLocation ? ctl.Location.PartLocation : {};
     nics.push({ slot: loc.LocationOrdinalValue != null ? String(loc.LocationOrdinalValue) : '', name: String(ad.Model || ad.Name || `Adapter ${i + 1}`).trim(), id: String(loc.ServiceLabel || (loc.LocationOrdinalValue != null ? `Slot ${loc.LocationOrdinalValue}` : ad.Id || '')).trim(), partNumber: String(ad.PartNumber || ''), firmware: String(ctl.FirmwarePackageVersion || ''), ports });
   });

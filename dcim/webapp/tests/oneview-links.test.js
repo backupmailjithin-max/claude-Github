@@ -65,3 +65,20 @@ test('real DL380 Gen10 Plus OneView answer: every port gets Up/Down by PCI slot,
   assert.deepStrictEqual(by['7'], ['Up 25 Gbps', 'Down']);
   assert.deepStrictEqual(by['4'], ['Down', 'Down']);
 });
+test('other adapter makes: Intel-style (LinkStatus only), older iLO layout (OEM physical ports, no LinkStatus), FC OEM ports', () => {
+  const { mergeAdapterLinks, nicsFromAdapters } = require('../lib/oneview-links');
+  const doc = { data: [
+    { Id: 'A', Model: 'Intel E810-XXVDA2 10/25Gb 2-port SFP28', Controllers: [{ Location: { PartLocation: { LocationOrdinalValue: 2 } } }], Ports: [{ Id: '1', LinkStatus: 'LinkUp', CurrentSpeedGbps: 10, LinkState: 'Enabled' }, { Id: '2', LinkStatus: 'LinkDown', LinkState: 'Disabled' }] },
+    { Id: 'B', Model: 'HPE Ethernet 1Gb 4-port 331i Adapter', Controllers: [{ Location: { PartLocation: { LocationOrdinalValue: 9 } }, Links: { Ports: [{ '@odata.id': '/x/1' }, { '@odata.id': '/x/2' }] } }],
+      Ports: [{ Id: '1', LinkStatus: null }, { Id: '2', LinkStatus: null }],
+      Oem: { Hpe: { PhysicalPorts: [{ LinkStatus: null, SpeedMbps: 1000, Oem: { Hpe: { PortNumber: 1 } } }, { LinkStatus: null, SpeedMbps: 0, Oem: { Hpe: { PortNumber: 2 } } }] } } },
+  ] };
+  const nics = [
+    { name: 'Intel E810-XXVDA2 10/25Gb 2-port SFP28', id: 'Pci', slot: '2', partNumber: '', ports: [{ id: '1', mac: '', link: 'Enabled', speed: '' }, { id: '2', mac: '', link: 'Disabled', speed: '' }] },
+    { name: 'HPE Ethernet 1Gb 4-port 331i Adapter', id: 'Lom', slot: '9', partNumber: '', ports: [{ id: '1', mac: '', link: '', speed: '' }, { id: '2', mac: '', link: '', speed: '' }] },
+  ];
+  nics[0].ports.forEach((p) => { p.link = ''; });
+  mergeAdapterLinks(nics, nicsFromAdapters(doc));
+  assert.deepStrictEqual(nics[0].ports.map((p) => p.link), ['Up', 'Down']);
+  assert.deepStrictEqual(nics[1].ports.map((p) => p.link), ['Up', 'Down']);
+});
