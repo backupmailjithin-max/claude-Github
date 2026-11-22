@@ -3493,11 +3493,9 @@ function MaterialMovements({ onUploadDocs, onApproveNamed, defaultApprover, move
                         " in last 30 days"));
             })()),
         React.createElement(MonthWiseCollage, { title: "Month-wise", listLabel: "the movements list", items: (movements || []).filter((m) => siteFilter === "all" || m.site === siteFilter), dateOf: (m) => m.movementDate, selected: moveMonth, onSelect: setMoveMonth, metrics: [
+                { label: "Total Movements", fn: (k, it) => it.filter((m) => (m.movementType === "Inward" || m.movementType === "Outward") && monthKeyOf(m.movementDate) === k).length },
                 { label: "Inward", fn: (k, it) => it.filter((m) => m.movementType === "Inward" && monthKeyOf(m.movementDate) === k).length },
-                { label: "Items received", fn: (k, it) => it.filter((m) => m.movementType === "Inward" && monthKeyOf(m.movementDate) === k).reduce((a, m) => a + (parseInt(m.quantity, 10) || 1), 0) },
-                { label: "Outward", fn: (k, it) => it.filter((m) => m.movementType === "Outward" && monthKeyOf(m.movementDate) === k).length },
-                { label: "Items sent out", fn: (k, it) => it.filter((m) => m.movementType === "Outward" && monthKeyOf(m.movementDate) === k).reduce((a, m) => a + (parseInt(m.quantity, 10) || 1), 0) },
-                { label: "Pending approval", fn: (k, it) => it.filter((m) => m.status === "Pending Approval" && monthKeyOf(m.movementDate) === k).length }
+                { label: "Outward", fn: (k, it) => it.filter((m) => m.movementType === "Outward" && monthKeyOf(m.movementDate) === k).length }
             ] }),
         React.createElement("div", { className: "neu-card anim-in d1", style: { display: "flex", gap: 10, alignItems: "center", marginBottom: 18, flexWrap: "wrap", padding: "14px 16px" } },
             React.createElement("div", { className: "neu-pressed", style: { display: "flex", alignItems: "center", gap: 10, borderRadius: 14, padding: "10px 14px", flex: "1 1 220px", minWidth: 200 } },
