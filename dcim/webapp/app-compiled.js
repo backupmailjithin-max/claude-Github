@@ -503,7 +503,7 @@ function MonthWiseCollage({ title, hint, items, dateOf, metrics, selected, onSel
     const fmtV = (v) => (v == null ? "—" : v);
     return React.createElement("div", { className: "neu-card anim-in d1 month-wise-card", "data-month-wise": "1", style: { padding: "14px 16px", marginBottom: 18 } },
         React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" } },
-            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#17345D" } }, title),
+            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#020617" } }, title),
             selected && React.createElement("span", { style: { fontFamily: "Inter", fontSize: 11, fontWeight: 700, color: "#3157EE", background: "#EEF2FF", padding: "3px 9px", borderRadius: 999 } }, "Showing " + monthLabelOf(selected)),
             React.createElement("button", { type: "button", "data-month-wise-toggle": "1", onClick: () => setOpen(!open), className: "neu-btn-primary", style: { marginLeft: "auto", fontSize: 11.5, padding: "7px 16px", borderRadius: 999 } }, open ? "Hide preview" : "Show preview")),
         open && React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12, marginTop: 12 } },
@@ -518,7 +518,7 @@ function MonthWiseCollage({ title, hint, items, dateOf, metrics, selected, onSel
             shown.length === 0 ? React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", padding: "8px 2px" } }, cards.length ? "No month matches the filter." : "No dated records yet.") :
                 React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 14 } },
                     shown.map((c) => React.createElement("button", { type: "button", key: c.key, "data-month-tile": c.key, onClick: () => onSelect(selected === c.key ? "" : c.key), "aria-pressed": selected === c.key, style: { textAlign: "left", border: "none", cursor: "pointer", borderRadius: 16, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 7, fontFamily: "Inter", background: selected === c.key ? "linear-gradient(145deg,#EEF2FF,#DFE7FF)" : "linear-gradient(145deg,#FFFFFF,#EAF0F9)", boxShadow: selected === c.key ? "0 0 0 2px #3157EE, 6px 6px 14px rgba(49,87,238,0.22)" : "6px 6px 14px rgba(163,177,198,0.4), -5px -5px 12px #FFFFFF" } },
-                        React.createElement("div", { style: { fontSize: 10, fontWeight: 800, letterSpacing: 1.2, color: "#8696AD", textTransform: "uppercase" } }, c.label),
+                        React.createElement("div", { style: { fontSize: 10, fontWeight: 800, letterSpacing: 1.2, color: "#020617", textTransform: "uppercase" } }, c.label),
                         React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 26, fontWeight: 800, color: "#17345D" } }, c.vals[0], " ", React.createElement("span", { style: { fontFamily: "Inter", fontSize: 10, fontWeight: 600, color: "#64748B" } }, metrics[0].label)),
                         React.createElement("div", { style: { height: 5, borderRadius: 3, background: "rgba(148,163,184,0.25)" } }, React.createElement("div", { style: { height: 5, borderRadius: 3, width: Math.round(c.vals[0] / maxV * 100) + "%", background: "#3157EE" } })),
                         metrics.slice(1).map((m, i) => React.createElement("div", { key: m.label, style: { display: "flex", justifyContent: "space-between", fontSize: 11, color: "#475569" } },
@@ -2053,7 +2053,7 @@ function IdleWarningModal({ secondsLeft, onStay, onLogout }) {
             React.createElement("div", { style: { width: 52, height: 52, borderRadius: "50%", background: urgent ? "#FEF2F2" : "#FFFBEB", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" } },
                 React.createElement(AlertTriangle, { s: 24, c: urgent ? "#DC2626" : "#D97706" })),
             React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 700, color: "#020617", marginBottom: 8 } }, "Still there?"),
-            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 13, color: "#64748B", marginBottom: 18, lineHeight: 1.5 } },
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 13, color: "#020617", marginBottom: 18, lineHeight: 1.5 } },
                 "You've been inactive for a while. For security, you'll be signed out in ",
                 React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontWeight: 800, color: urgent ? "#DC2626" : "#0F172A" } }, secondsLeft, "s"),
                 " unless you choose to stay logged in."),
@@ -2863,7 +2863,7 @@ function ExpandedDetailRow({ colSpan, title, items }) {
             React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, fontWeight: 700, color: "#6366F1", letterSpacing: 0.4, textTransform: "uppercase", marginBottom: 8 } }, title),
             React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: "10px 22px" } },
                 items.map((it) => React.createElement("div", { key: it.label, style: { minWidth: 0, gridColumn: it.wide ? "1 / -1" : undefined } },
-                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, fontWeight: 600, color: "#64748B", marginBottom: 2 } }, it.label),
+                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, fontWeight: 600, color: "#020617", marginBottom: 2 } }, it.label),
                     React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#1E293B", whiteSpace: "pre-wrap", wordBreak: "break-word", overflowWrap: "anywhere", lineHeight: 1.5 } }, it.value != null && it.value !== "" ? it.value : "\u2014"))))));
 }
 function DCActivity({ activities, allowedSites, canEdit, onEdit, onDelete, onExportExcel, onExportCSV, onImport, importError, importProgress, importErrorDetails, selectedIds, onSelectId, onSelectAll, onDeleteSelected, onClearSelection }) {
@@ -2892,7 +2892,7 @@ function DCActivity({ activities, allowedSites, canEdit, onEdit, onDelete, onExp
     const filtered = listSort.apply(filteredDefault, ACTIVITY_COLUMNS);
     const optionRowsForColumn = (key) => baseRows.filter((row) => ACTIVITY_COLUMNS.every((col) => col.key === key || listColumnFilterMatches(columnFilters[col.key], col, row)));
     const activeColumnFilterCount = countListColumnFilters(columnFilters);
-    const thBase = { textAlign: "left", padding: "12px 10px", borderBottom: "0.5px solid rgba(163,177,198,0.3)", fontFamily: "Inter", fontSize: 11, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap" };
+    const thBase = { textAlign: "left", padding: "12px 10px", borderBottom: "0.5px solid rgba(163,177,198,0.3)", fontFamily: "Inter", fontSize: 11, color: "#020617", textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap" };
     return React.createElement(React.Fragment, null,
         React.createElement("div", { className: "neu-card anim-in d1 movement-filter-bar", style: { display: "flex", gap: 10, alignItems: "center", marginBottom: 18, flexWrap: "wrap", padding: "14px 16px" } },
             React.createElement("div", { className: "neu-pressed", style: { display: "flex", alignItems: "center", gap: 10, borderRadius: 14, padding: "10px 14px", flex: "1 1 220px", minWidth: 200 } },
@@ -3063,7 +3063,7 @@ function OcrValidationModal({ result, fileName, assets, currentForm, formSite, o
         const rem = [g("courierTracking") ? "Courier / Tracking No: " + g("courierTracking") : "", g("remarks")].filter(Boolean).join("; "); if (rem) patch.remarks = rem;
         onApply(patch, { fileName, fileNames: result.files || [fileName], documentType: result.documentType && result.documentType.id, ...counts(), attach });
     };
-    const lbl = { fontFamily: "Inter", fontSize: 11, color: "#64748B", textTransform: "uppercase", letterSpacing: .4 };
+    const lbl = { fontFamily: "Inter", fontSize: 11, color: "#020617", textTransform: "uppercase", letterSpacing: .4 };
     const badge = (lv, score) => lv ? React.createElement("span", { className: "neu-badge", title: "Confidence score " + score + "%", style: { ...ocrLevelStyle(lv), fontSize: 10.5, whiteSpace: "nowrap" } }, lv) : React.createElement("span", { style: { fontSize: 10.5, color: "#94A3B8" } }, "not found");
     const chip = (list, setList, kind) => React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, list.map((s) => React.createElement("span", { key: s.id, title: s.source ? "From " + s.source : undefined, style: { display: "inline-flex", alignItems: "center", gap: 6, border: "1px solid #E2E8F0", borderRadius: 10, padding: "3px 6px 3px 8px", background: "#fff" } },
         React.createElement("input", { value: s.value, onChange: (e) => setList((l) => l.map((x) => x.id === s.id ? { ...x, value: e.target.value } : x)), "aria-label": kind + " value", style: { border: "none", outline: "none", fontFamily: "'JetBrains Mono'", fontSize: 12, width: Math.max(9, s.value.length + 1) + "ch", background: "transparent" } }),
@@ -3114,7 +3114,7 @@ function OcrValidationModal({ result, fileName, assets, currentForm, formSite, o
                 React.createElement("div", { "data-ocr-tags": "1" }, React.createElement("div", { style: { ...lbl, marginBottom: 6 } }, "Asset Tags (", tags.length, ")"), chip(tags, setTags, "tag"), addBox(newTag, setNewTag, tags, setTags, "tag", "Add an asset tag"))),
             extraShown.length > 0 && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#475569", marginBottom: 12 } }, "Other identifiers in the document that exist in inventory: ", extraShown.map((x) => React.createElement("button", { key: x.id, type: "button", onClick: () => { setSerials((l) => [...l, { id: "serial" + x.id, kind: "serial", value: x.value, original: "", level: x.level, score: x.score }]); setExtra((l) => l.filter((y) => y.id !== x.id)); }, className: "neu-btn-secondary", style: { fontSize: 11, padding: "3px 8px", marginRight: 6, fontFamily: "'JetBrains Mono'" }, title: "Add to Serial Numbers" }, "+ ", x.value))),
             React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13.5, fontWeight: 700, margin: "6px 0 6px" } }, "Matched assets in inventory"),
-            matches.length === 0 ? React.createElement("div", { "data-ocr-nomatch": "1", style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", marginBottom: 14 } }, "No serial number or asset tag from this document was found in the inventory you can see.") :
+            matches.length === 0 ? React.createElement("div", { "data-ocr-nomatch": "1", style: { fontFamily: "Inter", fontSize: 12, color: "#020617", marginBottom: 14 } }, "No serial number or asset tag from this document was found in the inventory you can see.") :
                 React.createElement("div", { "data-ocr-matches": "1", style: { marginBottom: 14 } },
                     React.createElement("div", { style: { padding: "9px 12px", borderRadius: 10, background: "#FFFBEB", border: "1px solid #FDE68A", color: "#92400E", fontFamily: "Inter", fontSize: 12, marginBottom: 8 } },
                         React.createElement("b", null, "Matched Asset Found"), " – ", Array.from(new Set(matches.map((m) => m.asset.site).filter(Boolean))).map((s) => "Current Site: " + s).join(" · "), " – ", React.createElement("b", null, "Review Required"),
@@ -3377,12 +3377,12 @@ function MovementReviewModal({ movement: m, defaultApprover, onClose, onApprove,
         setSaving(true);
         try { const ok = await onApprove(m.id, approver.trim()); if (ok !== false) onClose(); } finally { setSaving(false); }
     };
-    const k = { fontFamily: "Inter", fontSize: 9.5, fontWeight: 800, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.6 };
+    const k = { fontFamily: "Inter", fontSize: 9.5, fontWeight: 800, color: "#020617", textTransform: "uppercase", letterSpacing: 0.6 };
     const v = { fontFamily: "Inter", fontSize: 12.5, fontWeight: 600, color: "#1E293B", marginTop: 2, wordBreak: "break-word" };
     return ReactDOM.createPortal(React.createElement("div", { onClick: onClose, "data-mv-review": m.id, style: { position: "fixed", inset: 0, zIndex: 50, background: "rgba(14,18,28,0.35)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 } },
         React.createElement("div", { onClick: (e) => e.stopPropagation(), className: "neu-card anim-in d1", style: { width: 760, maxWidth: "96vw", maxHeight: "92vh", overflowY: "auto", padding: 24 } },
             React.createElement("div", { style: { fontFamily: "'JetBrains Mono'", fontSize: 10, fontWeight: 800, letterSpacing: 2.5, color: "#3157EE", textTransform: "uppercase" } }, "Review before approval"),
-            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#17345D", margin: "2px 0 14px" } }, `${m.movementType} · ${m.itemName || "movement"} · ${m.site}`),
+            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617", margin: "2px 0 14px" } }, `${m.movementType} · ${m.itemName || "movement"} · ${m.site}`),
             React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: "10px 18px" } },
                 items.filter((x) => x[1] != null && x[1] !== "").map((x) => React.createElement("div", { key: x[0] }, React.createElement("div", { style: k }, x[0]), React.createElement("div", { style: v }, String(x[1]))))),
             React.createElement("div", { style: { ...k, margin: "16px 0 6px" } }, "DC copy / invoice"),
@@ -3418,7 +3418,7 @@ function MovementCloseActionModal({ action, onClose, onConfirm }) {
     return ReactDOM.createPortal(React.createElement("div", { style: { position: "fixed", inset: 0, zIndex: 50, background: "rgba(14,18,28,0.35)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center" }, onClick: onClose },
         React.createElement("div", { onClick: (e) => e.stopPropagation(), className: "neu-card anim-in d1", style: { width: 420, maxWidth: "94vw", padding: 24 } },
             React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 16, fontWeight: 800, color: "#020617", marginBottom: 4 } }, `${label} — ${action.itemName || "movement"}`),
-            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 14 } }, "Remarks are optional and are added to this record's existing remarks - nothing already there is overwritten."),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#020617", marginBottom: 14 } }, "Remarks are optional and are added to this record's existing remarks - nothing already there is overwritten."),
             isReceive && React.createElement(Field, { label: "Receiver name", style: { marginBottom: 12 } },
                 React.createElement("input", { value: receiverName, onChange: (e) => setReceiverName(e.target.value), className: "neu-input", placeholder: "Who received the material", autoFocus: true })),
             React.createElement(Field, { label: "Remarks (optional)" },
@@ -3460,23 +3460,23 @@ function MaterialMovements({ onUploadDocs, onApproveNamed, defaultApprover, move
     const activeColumnFilterCount = countListColumnFilters(columnFilters);
     const inwardCount = (movements || []).filter((m) => m.movementType === "Inward").length;
     const outwardCount = (movements || []).filter((m) => m.movementType === "Outward").length;
-    const thBase = { textAlign: "left", padding: "12px 10px", borderBottom: "0.5px solid rgba(163,177,198,0.3)", fontFamily: "Inter", fontSize: 11, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap" };
+    const thBase = { textAlign: "left", padding: "12px 10px", borderBottom: "0.5px solid rgba(163,177,198,0.3)", fontFamily: "Inter", fontSize: 11, color: "#020617", textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap" };
     return React.createElement(React.Fragment, null,
         React.createElement("div", { className: "movement-summary-grid", style: { display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12, marginBottom: 16, alignItems: "stretch" } },
             React.createElement("div", { className: "neu-card anim-in d1 movement-summary-card movement-summary-green", style: { padding: "14px 15px", background: "linear-gradient(145deg, #FFFFFF 0%, #ECFDF5 100%)" } },
                 React.createElement("div", { className: "floating-icon compact-module-icon green", style: { width: 32, height: 32, borderRadius: 10, marginBottom: 12, background: "#E4F9F0", boxShadow: "inset 2px 2px 4px rgba(255,255,255,.7), 0 6px 13px rgba(5,150,105,.20)" } },
                     React.createElement(Download, { s: 16, c: "#10B981" })),
-                React.createElement("div", { style: { fontSize: 11.5, color: "#64748B", marginBottom: 4 } }, "Inward movements"),
+                React.createElement("div", { style: { fontSize: 11.5, color: "#020617", marginBottom: 4 } }, "Inward movements"),
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 26, fontWeight: 800, color: "#020617" } }, inwardCount)),
             React.createElement("div", { className: "neu-card anim-in d2 movement-summary-card movement-summary-red", style: { padding: "14px 15px", background: "linear-gradient(145deg, #FFFFFF 0%, #FEF2F2 100%)" } },
                 React.createElement("div", { className: "floating-icon compact-module-icon red", style: { width: 32, height: 32, borderRadius: 10, marginBottom: 12, background: "#FEE7E7", boxShadow: "inset 2px 2px 4px rgba(255,255,255,.7), 0 6px 13px rgba(220,38,38,.20)" } },
                     React.createElement(Upload, { s: 16, c: "#DC2626" })),
-                React.createElement("div", { style: { fontSize: 11.5, color: "#64748B", marginBottom: 4 } }, "Outward movements"),
+                React.createElement("div", { style: { fontSize: 11.5, color: "#020617", marginBottom: 4 } }, "Outward movements"),
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 26, fontWeight: 800, color: "#020617" } }, outwardCount)),
             React.createElement("div", { className: "neu-card anim-in d3 movement-summary-card movement-summary-indigo", style: { padding: "14px 15px", background: "linear-gradient(145deg, #FFFFFF 0%, #EEF2FF 100%)" } },
                 React.createElement("div", { className: "floating-icon compact-module-icon indigo", style: { width: 32, height: 32, borderRadius: 10, marginBottom: 12, background: "#EAEDFF", boxShadow: "inset 2px 2px 4px rgba(255,255,255,.7), 0 6px 13px rgba(99,102,241,.20)" } },
                     React.createElement(Package, { s: 16, c: "#6366F1" })),
-                React.createElement("div", { style: { fontSize: 11.5, color: "#64748B", marginBottom: 4 } }, "Total records"),
+                React.createElement("div", { style: { fontSize: 11.5, color: "#020617", marginBottom: 4 } }, "Total records"),
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 26, fontWeight: 800, color: "#020617" } }, (movements || []).length)),
             (() => {
                 const withDocs = (movements || []).filter((m) => movementDocs(m).length > 0).length;
@@ -3484,7 +3484,7 @@ function MaterialMovements({ onUploadDocs, onApproveNamed, defaultApprover, move
                 return React.createElement("div", { className: "neu-card anim-in d4 movement-summary-card movement-summary-cyan", style: { padding: "14px 15px", background: "linear-gradient(145deg, #FFFFFF 0%, #ECFEFF 100%)" } },
                     React.createElement("div", { className: "floating-icon compact-module-icon", style: { width: 32, height: 32, borderRadius: 10, marginBottom: 12, background: "#E0F7FA", boxShadow: "inset 2px 2px 4px rgba(255,255,255,.7), 0 6px 13px rgba(8,145,178,.18)" } },
                         React.createElement(FileText, { s: 16, c: "#0891B2" })),
-                    React.createElement("div", { style: { fontSize: 11.5, color: "#64748B", marginBottom: 4 } }, "Control coverage"),
+                    React.createElement("div", { style: { fontSize: 11.5, color: "#020617", marginBottom: 4 } }, "Control coverage"),
                     React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8 } },
                         React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontSize: 24, fontWeight: 800, color: "#020617" } }, withDocs),
                         React.createElement("span", { style: { fontFamily: "Inter", fontSize: 10, color: "#64748B" } }, `of ${(movements || []).length} with DC/Invoice copy attached`)),
@@ -4055,7 +4055,7 @@ function VisitorCheckActionModal({ action, onClose, onConfirm }) {
     return ReactDOM.createPortal(React.createElement("div", { style: { position: "fixed", inset: 0, zIndex: 50, background: "rgba(14,18,28,0.35)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center" }, onClick: onClose },
         React.createElement("div", { onClick: (e) => e.stopPropagation(), className: "neu-card anim-in d1", style: { width: 420, maxWidth: "94vw", padding: 24 } },
             React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 16, fontWeight: 800, color: "#020617", marginBottom: 4 } }, `${label} — ${action.visitorName || "visitor"}`),
-            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 14 } }, "Remarks are optional and are added to this request's existing remarks - nothing already there is overwritten."),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#020617", marginBottom: 14 } }, "Remarks are optional and are added to this request's existing remarks - nothing already there is overwritten."),
             React.createElement(Field, { label: "Remarks (optional)" },
                 React.createElement("textarea", { rows: 3, value: remarks, onChange: (e) => setRemarks(e.target.value), className: "neu-input", style: { resize: "vertical" }, placeholder: `Anything to note…`, autoFocus: true })),
             React.createElement("div", { style: { display: "flex", gap: 10, marginTop: 16 } },
@@ -4094,18 +4094,18 @@ function VisitorAccess({ requests, allowedSites, canEdit, isAdmin, canApprove, o
     const activeColumnFilterCount = countListColumnFilters(columnFilters);
     const pendingCount = (requests || []).filter((r) => r.status === "Pending Approval").length;
     const onsiteCount = (requests || []).filter((r) => r.status === "In Progress").length;
-    const thBase = { textAlign: "left", padding: "12px 10px", borderBottom: "0.5px solid rgba(163,177,198,0.3)", fontFamily: "Inter", fontSize: 11, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap" };
+    const thBase = { textAlign: "left", padding: "12px 10px", borderBottom: "0.5px solid rgba(163,177,198,0.3)", fontFamily: "Inter", fontSize: 11, color: "#020617", textTransform: "uppercase", letterSpacing: 0.5, whiteSpace: "nowrap" };
     const tdBase = { padding: "10px 10px", borderBottom: "0.5px solid rgba(163,177,198,0.25)", fontFamily: "Inter", fontSize: 12, color: "#1E293B", whiteSpace: "nowrap" };
     return React.createElement(React.Fragment, null,
         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12, marginBottom: 16 } },
             React.createElement("div", { className: "neu-card anim-in d1", style: { padding: "14px 15px", background: "linear-gradient(145deg, #FFFFFF 0%, #FFFBEB 100%)" } },
-                React.createElement("div", { style: { fontSize: 11.5, color: "#64748B", marginBottom: 4 } }, "Awaiting approval"),
+                React.createElement("div", { style: { fontSize: 11.5, color: "#020617", marginBottom: 4 } }, "Awaiting approval"),
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 26, fontWeight: 800, color: "#D97706" } }, pendingCount)),
             React.createElement("div", { className: "neu-card anim-in d2", style: { padding: "14px 15px", background: "linear-gradient(145deg, #FFFFFF 0%, #ECFEFF 100%)" } },
-                React.createElement("div", { style: { fontSize: 11.5, color: "#64748B", marginBottom: 4 } }, "Currently on-site"),
+                React.createElement("div", { style: { fontSize: 11.5, color: "#020617", marginBottom: 4 } }, "Currently on-site"),
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 26, fontWeight: 800, color: "#0891B2" } }, onsiteCount)),
             React.createElement("div", { className: "neu-card anim-in d3", style: { padding: "14px 15px", background: "linear-gradient(145deg, #FFFFFF 0%, #EEF2FF 100%)" } },
-                React.createElement("div", { style: { fontSize: 11.5, color: "#64748B", marginBottom: 4 } }, "Total requests"),
+                React.createElement("div", { style: { fontSize: 11.5, color: "#020617", marginBottom: 4 } }, "Total requests"),
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 26, fontWeight: 800, color: "#020617" } }, (requests || []).length))),
         React.createElement("div", { className: "neu-card anim-in d1", style: { display: "flex", gap: 10, alignItems: "center", marginBottom: 18, flexWrap: "wrap", padding: "14px 16px" } },
             React.createElement("div", { className: "neu-pressed", style: { display: "flex", alignItems: "center", gap: 10, borderRadius: 14, padding: "10px 14px", flex: "1 1 220px", minWidth: 200 } },
@@ -4344,7 +4344,7 @@ function ValueListFilterPopup({ column, currentFilter, optionRows, onApply, onCl
             React.createElement("div", { style: { padding: "16px 18px 12px", borderBottom: "1px solid #E2E8F0", background: "linear-gradient(180deg,#FFFFFF 0%,#F8FAFC 100%)" } },
                 React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 } },
                     React.createElement("div", null,
-                        React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#0F172A" } },
+                        React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#020617" } },
                             "Filter \u00B7 ",
                             column.label),
                         React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#64748B", marginTop: 3 } }, "Select one or more values. The list updates only after Apply.")),
@@ -4458,12 +4458,12 @@ function ConnectivityImportModal({ onClose, onDone }) {
     const c = report && report.counts;
     const statLabel = { no_serial: "No serial", not_in_inventory: "Not in inventory", duplicate_in_file: "Duplicate", warning: "Check" };
     const stat = (label, value, color) => React.createElement("div", { key: label, style: { flex: "1 1 120px", background: "rgba(148,163,184,.12)", borderRadius: 10, padding: "8px 12px" } },
-        React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#64748B", textTransform: "uppercase", letterSpacing: .4 } }, label),
+        React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#020617", textTransform: "uppercase", letterSpacing: .4 } }, label),
         React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 22, fontWeight: 800, color } }, value));
     return ReactDOM.createPortal(React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(14,18,28,0.5)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 90 }, onClick: busy ? undefined : onClose },
         React.createElement("div", { onClick: (e) => e.stopPropagation(), className: "neu-card anim-in d1", style: { width: 760, maxWidth: "94vw", maxHeight: "90vh", overflowY: "auto", padding: 26 } },
-            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#1E293B", marginBottom: 4 } }, "Import cable connectivity"),
-            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#64748B", marginBottom: 14, lineHeight: 1.5 } }, "Choose the cable-inventory sheet (.xlsx or .csv). Each row is matched to a server by its serial number. Nothing is saved until you press Import. Handover team, Username and password columns are ignored."),
+            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617", marginBottom: 4 } }, "Import cable connectivity"),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#020617", marginBottom: 14, lineHeight: 1.5 } }, "Choose the cable-inventory sheet (.xlsx or .csv). Each row is matched to a server by its serial number. Nothing is saved until you press Import. Handover team, Username and password columns are ignored."),
             React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 14 } },
                 React.createElement("button", { onClick: () => fileRef.current && fileRef.current.click(), disabled: busy, className: "neu-btn-secondary", style: { display: "flex", alignItems: "center", gap: 6 } }, React.createElement(Upload, { s: 14 }), " Choose sheet"),
                 React.createElement("span", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#475569" } }, fileName || "No file chosen"),
@@ -4479,7 +4479,7 @@ function ConnectivityImportModal({ onClose, onDone }) {
                 c.duplicateInFile ? stat("Duplicates", c.duplicateInFile, "#64748B") : null),
             report && report.issues && report.issues.length > 0 && React.createElement("div", { style: { maxHeight: 240, overflow: "auto", border: "1px solid rgba(148,163,184,.35)", borderRadius: 10, marginBottom: 14 } },
                 React.createElement("table", { style: { borderCollapse: "collapse", width: "100%", fontFamily: "Inter", fontSize: 12 } },
-                    React.createElement("thead", null, React.createElement("tr", null, ["Row", "Serial", "Result", "Detail"].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "7px 10px", fontSize: 10.5, color: "#64748B", textTransform: "uppercase", position: "sticky", top: 0, background: "#F8FAFC" } }, h)))),
+                    React.createElement("thead", null, React.createElement("tr", null, ["Row", "Serial", "Result", "Detail"].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "7px 10px", fontSize: 10.5, color: "#020617", textTransform: "uppercase", position: "sticky", top: 0, background: "#F8FAFC" } }, h)))),
                     React.createElement("tbody", null, report.issues.slice(0, 300).map((i, n) => React.createElement("tr", { key: n, style: { borderTop: "0.5px solid rgba(148,163,184,.3)" } },
                         React.createElement("td", { style: { padding: "6px 10px", fontFamily: "'JetBrains Mono'" } }, i.row),
                         React.createElement("td", { style: { padding: "6px 10px", fontFamily: "'JetBrains Mono'" } }, i.serial || "—"),
@@ -4608,7 +4608,7 @@ function AssetDetailPanel({ asset, canEdit }) {
         // First time only: nothing cached yet -> pull once automatically. After that it is manual (Sync now).
         if (tab === "hw" && hw && !hw.hardware && hw.supported && hw.configured && hw.canSync && !hwTried) { setHwTried(true); syncHw(); }
     }, [tab, hw]);
-    const muted = { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", textTransform: "uppercase", letterSpacing: .4 };
+    const muted = { fontFamily: "Inter", fontSize: 11.5, color: "#020617", textTransform: "uppercase", letterSpacing: .4 };
     const val = { fontFamily: "Inter", fontSize: 14, color: "#1E293B", fontWeight: 600, wordBreak: "break-word" };
     const tabBtn = (k, label) => React.createElement("button", { key: k, onClick: () => setTab(k), className: tab === k ? "neu-btn-primary" : "neu-btn-secondary", style: { fontSize: 12.5, padding: "7px 14px" } }, label);
     const field = (label, v) => (v ? React.createElement("div", { key: label, style: { display: "flex", flexDirection: "column", gap: 2, minWidth: 0 } }, React.createElement("span", { style: muted }, label), React.createElement("span", { style: val }, v)) : null);
@@ -4637,7 +4637,7 @@ function AssetDetailPanel({ asset, canEdit }) {
             body = React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
                 React.createElement("div", { style: { overflowX: "auto", border: "1px solid rgba(148,163,184,.35)", borderRadius: 10 } },
                     React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontFamily: "Inter", fontSize: 13 } },
-                        React.createElement("thead", null, React.createElement("tr", { style: { background: "rgba(148,163,184,.15)", textAlign: "left" } }, cols.map(([h], i) => React.createElement("th", { key: h, style: { padding: "9px 12px", fontSize: 11, textTransform: "uppercase", letterSpacing: .4, color: "#475569", whiteSpace: "nowrap", borderLeft: i ? "1px solid rgba(148,163,184,.25)" : "none" } }, h)))),
+                        React.createElement("thead", null, React.createElement("tr", { style: { background: "rgba(148,163,184,.15)", textAlign: "left" } }, cols.map(([h], i) => React.createElement("th", { key: h, style: { padding: "9px 12px", fontSize: 11, textTransform: "uppercase", letterSpacing: .4, color: "#020617", whiteSpace: "nowrap", borderLeft: i ? "1px solid rgba(148,163,184,.25)" : "none" } }, h)))),
                         React.createElement("tbody", null, React.createElement("tr", { style: { borderTop: "1px solid rgba(148,163,184,.35)" } }, cols.map(([h, text], i) => React.createElement("td", { key: h, style: { ...cellTd, borderLeft: i ? cellTd.borderLeft : "none" } },
                             splitCableText(text).length === 0 ? React.createElement("span", { style: { color: "#94A3B8" } }, "—") : React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 3 } }, splitCableText(text).map((line, j) => React.createElement("span", { key: j, style: { fontFamily: h === "Remarks" ? "Inter" : "'JetBrains Mono'", fontSize: 12.5, color: "#1E293B", wordBreak: "break-word" } }, line))))))))),
                 React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontFamily: "Inter", fontSize: 11, color: "#64748B" } },
@@ -4672,7 +4672,7 @@ function AssetDetailPanel({ asset, canEdit }) {
                     d.nicNote && React.createElement("span", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#B45309" } }, d.nicNote),
                     React.createElement("div", { style: { overflowX: "auto", border: "1px solid rgba(148,163,184,.35)", borderRadius: 10 } },
                         React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontFamily: "Inter", fontSize: 12.5 } },
-                            React.createElement("thead", null, React.createElement("tr", { style: { background: "rgba(148,163,184,.15)", textAlign: "left" } }, ["Adapter", "Port", "MAC address", "Speed", "Link status", "Port type"].map((h) => React.createElement("th", { key: h, style: { padding: "8px 12px", fontSize: 11, textTransform: "uppercase", letterSpacing: .4, color: "#475569", whiteSpace: "nowrap" } }, h)))),
+                            React.createElement("thead", null, React.createElement("tr", { style: { background: "rgba(148,163,184,.15)", textAlign: "left" } }, ["Adapter", "Port", "MAC address", "Speed", "Link status", "Port type"].map((h) => React.createElement("th", { key: h, style: { padding: "8px 12px", fontSize: 11, textTransform: "uppercase", letterSpacing: .4, color: "#020617", whiteSpace: "nowrap" } }, h)))),
                             React.createElement("tbody", null, d.nics.flatMap((n, ni) => {
                                 const ports = (n.ports && n.ports.length) ? n.ports : [{}];
                                 return ports.map((q, pi) => { const v = nicPortView(n, q); return React.createElement("tr", { key: ni + "-" + pi, style: { borderTop: pi === 0 ? "1px solid rgba(148,163,184,.35)" : "1px solid rgba(148,163,184,.12)" } },
@@ -4698,7 +4698,7 @@ function AssetTable({ sortCtl, assets, allFilteredAssets, filterOptionAssets, st
     const [openFilter, setOpenFilter] = React.useState(null);
     const [expandedId, setExpandedId] = React.useState(null);
     const colWidths = { site: 90, zone: 80, rackType: 110, rackNo: 90, position: 90, hardwareType: 120, height: 70, manufacturer: 110, model: 130, serialNumber: 140, installationDate: 100, assetTag: 110, mgmtIp: 140, firmware: 130, deviceName: 150, remarks: 220 };
-    const thBase = { textAlign: "left", padding: "12px 10px", borderBottom: "0.5px solid rgba(163,177,198,.3)", fontFamily: "Inter", fontSize: 11, color: "#64748B", textTransform: "uppercase", letterSpacing: .5, whiteSpace: "nowrap", position: "sticky", top: 0, background: "#FFFFFF", zIndex: 2 };
+    const thBase = { textAlign: "left", padding: "12px 10px", borderBottom: "0.5px solid rgba(163,177,198,.3)", fontFamily: "Inter", fontSize: 11, color: "#020617", textTransform: "uppercase", letterSpacing: .5, whiteSpace: "nowrap", position: "sticky", top: 0, background: "#FFFFFF", zIndex: 2 };
     return React.createElement(React.Fragment, null,
         React.createElement("div", { className: "neu-card", style: { overflowX: "auto", padding: "6px 4px" } },
             React.createElement("table", { style: { borderCollapse: "collapse", width: "100%", tableLayout: "fixed" } },
@@ -4766,7 +4766,7 @@ function UConflictPopup({ conflict, position, onClose }) {
                     React.createElement("span", { style: { color: "#475569" } }, "Asset tag:"),
                     " ",
                     React.createElement("span", { style: { fontFamily: "'JetBrains Mono'" } }, a.assetTag))),
-            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", marginBottom: 16 } }, "Choose a free U position in this rack, or a different rack, then try again."),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#020617", marginBottom: 16 } }, "Choose a free U position in this rack, or a different rack, then try again."),
             React.createElement("button", { onClick: onClose, className: "neu-btn-primary", style: { width: "100%", padding: "12px 0", fontSize: 14 } }, "OK, change position")));
 }
 /* ===== NEW / EDIT ASSET MODAL ===== */
@@ -4975,7 +4975,7 @@ function SimilarityWarningModal({ warn, onSaveAnyway, onCancel, onOpenExisting }
         window.addEventListener("keydown", h);
         return () => window.removeEventListener("keydown", h);
     }, []);
-    const lbl = { fontFamily: "Inter", fontSize: 11, color: "#64748B", textTransform: "uppercase", letterSpacing: .4 };
+    const lbl = { fontFamily: "Inter", fontSize: 11, color: "#020617", textTransform: "uppercase", letterSpacing: .4 };
     const val = { fontFamily: "'JetBrains Mono'", fontSize: 13, color: "#1E293B", fontWeight: 600, wordBreak: "break-all" };
     const row = (k, v, strong) => React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "baseline" } }, React.createElement("span", { style: { ...lbl, minWidth: 110, flexShrink: 0 } }, k), React.createElement("span", { style: { ...val, color: strong || val.color } }, v || "-"));
     const ctx = (k, v) => v ? React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "baseline" } }, React.createElement("span", { style: { ...lbl, minWidth: 110, flexShrink: 0 } }, k), React.createElement("span", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#334155", wordBreak: "break-word" } }, v)) : null;
@@ -5332,7 +5332,7 @@ function RackComponentModal({ onClose, onCreate, onUpdate, initial, assets, rack
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 20, fontWeight: 700, color: "#020617" } }, isEdit ? "Edit rack component" : "Add rack component"),
                 React.createElement("button", { onClick: onClose, className: "neu-icon-btn", style: { width: 36, height: 36, borderRadius: 10 } },
                     React.createElement(X, { s: 16, c: "#64748B" }))),
-            isEdit && form.componentCode && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 16, display: "flex", alignItems: "center", gap: 6 } },
+            isEdit && form.componentCode && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#020617", marginBottom: 16, display: "flex", alignItems: "center", gap: 6 } },
                 "Component code:",
                 React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontWeight: 800, color: "#4F46E5", background: "#EEF2FF", padding: "2px 8px", borderRadius: 6 } }, form.componentCode)),
             !isEdit && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, color: "#475569", marginBottom: 16 } }, "A component code is auto-generated once you save (RackNo-Type-Seq, e.g. A04-PP-01)."),
@@ -5382,7 +5382,7 @@ function RackComponentTable({ colFilters, onColFilterChange, optionRowsForColumn
     const allIds = rows.map((c) => c.id);
     const allSelected = allIds.length > 0 && allIds.every((id) => selectedIds.has(id));
     const someSelected = allIds.some((id) => selectedIds.has(id)) && !allSelected;
-    const thBase = { textAlign: "left", padding: "12px 10px", borderBottom: "0.5px solid rgba(163,177,198,.3)", fontFamily: "Inter", fontSize: 11, color: "#64748B", textTransform: "uppercase", letterSpacing: .5, whiteSpace: "nowrap", position: "sticky", top: 0, background: "#FFFFFF", zIndex: 2 };
+    const thBase = { textAlign: "left", padding: "12px 10px", borderBottom: "0.5px solid rgba(163,177,198,.3)", fontFamily: "Inter", fontSize: 11, color: "#020617", textTransform: "uppercase", letterSpacing: .5, whiteSpace: "nowrap", position: "sticky", top: 0, background: "#FFFFFF", zIndex: 2 };
     return React.createElement(React.Fragment, null, React.createElement("div", { className: "neu-card", style: { overflowX: "auto", padding: "6px 4px" } },
         React.createElement("table", { style: { borderCollapse: "collapse", width: "100%", tableLayout: "fixed" } },
             React.createElement("thead", null,
@@ -5897,7 +5897,7 @@ function ElecNameModal({ onConfirm, onCancel }) {
         React.createElement("div", { onClick: e => e.stopPropagation(), style: { background: "#fff", borderRadius: 16, padding: "24px 28px",
                 boxShadow: "0 12px 36px rgba(0,0,0,0.22)", minWidth: 300, fontFamily: "Inter" } },
             React.createElement("div", { style: { fontWeight: 800, fontSize: 15, color: "#0F172A", marginBottom: 6 } }, "Name Electrical Component"),
-            React.createElement("div", { style: { fontSize: 11.5, color: "#64748B", marginBottom: 14 } }, "Give this component a label (e.g. MCP, PDU-A, UPS-1)"),
+            React.createElement("div", { style: { fontSize: 11.5, color: "#020617", marginBottom: 14 } }, "Give this component a label (e.g. MCP, PDU-A, UPS-1)"),
             React.createElement("input", { autoFocus: true, value: name, onChange: e => setName(e.target.value), onKeyDown: e => { if (e.key === "Enter")
                     onConfirm(name.trim() || "ELEC"); if (e.key === "Escape")
                     onCancel(); }, style: { width: "100%", boxSizing: "border-box", border: "1.5px solid #CBD5E1", borderRadius: 9,
@@ -8565,7 +8565,7 @@ function RedfishDetectModal({ asset, onClose, onSaved }) {
         React.createElement("div", { className: "pdu-modal-backdrop", style: { position: "fixed", inset: 0, background: "rgba(15,23,42,.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }, onClick: onClose },
             React.createElement("div", { className: "pdu-modal-pop neu-card", style: { width: 640, maxWidth: "94vw", maxHeight: "88vh", overflowY: "auto", padding: 28 }, onClick: (e) => e.stopPropagation() },
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617", marginBottom: 4 } }, asset ? `Server Hardware — ${asset.deviceName || asset.id}` : "Test & Detect Server Hardware"),
-                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 18 } }, "Works against any Redfish-capable BMC (Dell iDRAC, HPE iLO, Lenovo XCC, Cisco standalone IMC, NVIDIA DGX, etc.) — reads identity, health, power and thermal directly from the device's management port."),
+                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#020617", marginBottom: 18 } }, "Works against any Redfish-capable BMC (Dell iDRAC, HPE iLO, Lenovo XCC, Cisco standalone IMC, NVIDIA DGX, etc.) — reads identity, health, power and thermal directly from the device's management port."),
                 React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 12 } }, field("BMC / Management IP", ip, setIp), field("Port", port, (v) => setPort(Number(v) || 443), "number")),
                 React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 14 } }, field("Username", username, setUsername), field("Password", password, setPassword, "password")),
                 React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" } },
@@ -8592,7 +8592,7 @@ function RedfishDetectModal({ asset, onClose, onSaved }) {
                         React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, result.fans.map((f, i) => React.createElement("span", { key: i, style: { fontFamily: "Inter", fontSize: 11, padding: "3px 9px", borderRadius: 7, background: "#fff", border: "1px solid #E2E8F0" } }, `${f.name}: ${f.readingRpm != null ? f.readingRpm + " RPM" : "—"}`))))),
                 asset && asset.redfishConfigured && React.createElement("div", { style: { borderTop: "1px solid #E2E8F0", paddingTop: 16, marginTop: 4 } },
                     React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 } },
-                        React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 14, fontWeight: 700, color: "#0F172A" } }, "Firmware"),
+                        React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 14, fontWeight: 700, color: "#020617" } }, "Firmware"),
                         React.createElement("button", { type: "button", onClick: loadFirmware, disabled: fwBusy, className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "5px 11px" } }, fwBusy ? "Loading…" : "Load Firmware Inventory")),
                     fwInv && fwInv.supported === false && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B" } }, "This BMC does not expose a Redfish UpdateService - firmware is not readable/updatable here for this device."),
                     fwInv && fwInv.components && React.createElement("div", { style: { marginBottom: 12 } }, fwInv.components.map((c, i) => React.createElement("div", { key: i, style: { display: "flex", justifyContent: "space-between", fontFamily: "Inter", fontSize: 12, padding: "6px 0", borderBottom: "1px solid #F1F5F9" } }, React.createElement("span", null, c.name), React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", color: "#475569" } }, c.version || "—")))),
@@ -8682,13 +8682,13 @@ function RedfishDiscoverModal({ onClose, onApplied }) {
         React.createElement("div", { className: "pdu-modal-backdrop", style: { position: "fixed", inset: 0, background: "rgba(15,23,42,.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }, onClick: onClose },
             React.createElement("div", { className: "pdu-modal-pop neu-card", style: { width: 760, maxWidth: "94vw", maxHeight: "88vh", overflowY: "auto", padding: 28 }, onClick: (e) => e.stopPropagation() },
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617", marginBottom: 4 } }, "Discover Server Hardware (Redfish)"),
-                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 16 } }, "Tries every candidate BMC credential pair configured in REDFISH_CREDENTIALS (.env) in turn — e.g. Dell's root/calvin, root/calvin@123, root/Calvin@123 and HPE's hpadmin/hpinvent — against every asset that has a management IP but no Redfish credentials saved yet, and keeps whichever one answers for that device. Nothing is changed until you select devices and apply."),
+                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#020617", marginBottom: 16 } }, "Tries every candidate BMC credential pair configured in REDFISH_CREDENTIALS (.env) in turn — e.g. Dell's root/calvin, root/calvin@123, root/Calvin@123 and HPE's hpadmin/hpinvent — against every asset that has a management IP but no Redfish credentials saved yet, and keeps whichever one answers for that device. Nothing is changed until you select devices and apply."),
                 busy && !scan && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 13, color: "#64748B" } }, scanProgress && scanProgress.total ? `Scanning… ${scanProgress.scanned} / ${scanProgress.total}` : "Scanning…"),
                 err && React.createElement("div", { style: { padding: "9px 12px", borderRadius: 9, background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.25)", color: "#B91C1C", fontFamily: "Inter", fontSize: 12, marginBottom: 14 } }, err),
                 scan && React.createElement("div", null,
                     React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#475569", marginBottom: 10 } }, `Scanned ${scan.scanned} asset(s) against ${scan.credentialsTried || 1} candidate credential(s), ${scan.reachable} responded to Redfish.` + (scan.autoIgnored ? ` ${scan.autoIgnored} device(s) didn't match any saved credential and were auto-marked "Ignore from Monitor" so they won't be re-scanned every time — un-ignore them from the main list to retry.` : "")),
                     React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12 } },
-                        React.createElement("thead", null, React.createElement("tr", null, ["", "Asset", "Site", "Rack", "Mgmt IP", "Vendor / Model", "Matched Login", "Result"].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "6px 8px", borderBottom: "1px solid #E2E8F0", color: "#64748B", fontWeight: 700, fontSize: 10.5, textTransform: "uppercase" } }, h)))),
+                        React.createElement("thead", null, React.createElement("tr", null, ["", "Asset", "Site", "Rack", "Mgmt IP", "Vendor / Model", "Matched Login", "Result"].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "6px 8px", borderBottom: "1px solid #E2E8F0", color: "#020617", fontWeight: 700, fontSize: 10.5, textTransform: "uppercase" } }, h)))),
                         React.createElement("tbody", null, scan.results.map((r) => React.createElement("tr", { key: r.assetId, style: { borderBottom: "1px solid #F1F5F9" } },
                             React.createElement("td", { style: { padding: "6px 8px" } }, r.reachable && React.createElement("input", { type: "checkbox", checked: selected.has(r.assetId), onChange: () => toggle(r.assetId) })),
                             React.createElement("td", { style: { padding: "6px 8px" } }, r.assetId),
@@ -8714,7 +8714,7 @@ function RfHwDetailModal({ asset, canEdit, onClose, onChanged }) {
     useEffect(open, [asset.id]);
     useEffect(() => { const h = (e) => { if (e.key === "Escape") onClose(); }; document.addEventListener("keydown", h); return () => document.removeEventListener("keydown", h); }, [onClose]);
     const collect = async () => { setBusy(true); setErr(""); try { await api.collectRedfishHardware(asset.id); open(); if (onChanged) onChanged(); } catch (e) { setErr(e.message || "Could not read the hardware from the BMC"); } finally { setBusy(false); } };
-    const th = { textAlign: "left", padding: "6px 8px", fontSize: 10, textTransform: "uppercase", color: "#64748B", borderBottom: "1px solid #E2E8F0", whiteSpace: "nowrap" };
+    const th = { textAlign: "left", padding: "6px 8px", fontSize: 10, textTransform: "uppercase", color: "#020617", borderBottom: "1px solid #E2E8F0", whiteSpace: "nowrap" };
     const td = { padding: "6px 8px", fontSize: 12, borderBottom: "1px solid #F1F5F9", fontFamily: "Inter" };
     const mono = { ...td, fontFamily: "'JetBrains Mono'", fontSize: 11 };
     const sections = {
@@ -8729,7 +8729,7 @@ function RfHwDetailModal({ asset, canEdit, onClose, onChanged }) {
         React.createElement("div", { className: "neu-card", onClick: (e) => e.stopPropagation(), style: { width: 900, maxWidth: "94vw", maxHeight: "88vh", overflow: "auto", padding: 22 } },
             React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 12 } },
                 React.createElement("div", null,
-                    React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 16, fontWeight: 700, color: "#0F172A" } }, "Hardware details"),
+                    React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 16, fontWeight: 700, color: "#020617" } }, "Hardware details"),
                     React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginTop: 2 } }, `${asset.redfishSerialNumber || asset.serialNumber || asset.deviceName || asset.id} · ${asset.vendor || ""} ${asset.model || ""}`.trim() + (data && data.collectedAt ? " · read " + new Date(data.collectedAt).toLocaleString() : " · not read yet"))),
                 React.createElement("div", { style: { display: "flex", gap: 8 } },
                     canEdit && React.createElement("button", { onClick: collect, disabled: busy, className: "neu-btn-primary", style: { fontSize: 11.5 } }, busy ? "Reading…" : "Read from BMC now"),
@@ -8780,7 +8780,7 @@ function RfOverviewModules({ rows, onPick }) {
     const viewSel = (st, setSt, opts) => React.createElement("span", { key: "v" }, sel(st.view, (v) => setSt({ ...st, view: v }), singleSite ? opts.filter((o) => o[0] !== "site") : opts, null, "Break the counts down by"));
     const dimOf = (a, view) => (view === "site" ? (a.site || "—") : view === "zone" ? (singleSite ? (a.zone || "—") : (a.site || "—") + " › " + (a.zone || "—")) : (a.hardwareType || "Uncategorized"));
     const pickDim = (view, label, extra) => { if (view === "site") return onPick({ site: [label], ...extra }); if (view === "zone") { const parts = label.split(" › "); const s = singleSite ? sites[0] : parts[0], z = singleSite ? parts[0] : parts[1]; return onPick({ site: [s], ...(z && z !== "—" ? { zone: [z] } : {}), ...extra }); } return onPick({ hardwareType: [label], ...extra }); };
-    const tbl = (head, body) => React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontFamily: "Inter", fontSize: 10.5 } }, React.createElement("thead", null, React.createElement("tr", null, head.map((h, i) => React.createElement("th", { key: h, style: { textAlign: i ? "right" : "left", fontSize: 8.5, textTransform: "uppercase", color: "#94A3B8", padding: "1px 4px", position: "sticky", top: 0, background: "#F4F7FC" } }, h)))), React.createElement("tbody", null, body));
+    const tbl = (head, body) => React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontFamily: "Inter", fontSize: 10.5 } }, React.createElement("thead", null, React.createElement("tr", null, head.map((h, i) => React.createElement("th", { key: h, style: { textAlign: i ? "right" : "left", fontSize: 8.5, textTransform: "uppercase", color: "#020617", padding: "1px 4px", position: "sticky", top: 0, background: "#F4F7FC" } }, h)))), React.createElement("tbody", null, body));
     const td = (v, i, extra) => React.createElement("td", { key: i, style: { padding: "1.5px 4px", ...(i ? num : trunc), ...(extra || {}) } }, v);
 
     // 1 - device items
@@ -8866,7 +8866,7 @@ function RedfishTab({ canEdit, allowedSites }) {
     const filtered = useMemo(() => sortListRows(filteredUnsorted, REDFISH_COLUMNS.find((c) => c.key === sortKey), sortDir), [filteredUnsorted, sortKey, sortDir]);
     const optionRowsForColumn = (key) => categoryRows.filter((row) => REDFISH_COLUMNS.every((col) => col.key === key || listColumnFilterMatches(columnFilters[col.key], col, row)));
     const activeColumnFilterCount = countListColumnFilters(columnFilters);
-    const thBase = { textAlign: "left", padding: "8px 9px", borderBottom: "1px solid #E2E8F0", color: "#64748B", fontWeight: 700, fontSize: 10.5, textTransform: "uppercase", whiteSpace: "nowrap" };
+    const thBase = { textAlign: "left", padding: "8px 9px", borderBottom: "1px solid #E2E8F0", color: "#020617", fontWeight: 700, fontSize: 10.5, textTransform: "uppercase", whiteSpace: "nowrap" };
     const toggleIgnore = async (a) => { try { await api.setRedfishIgnored(a.id, !a.monitorIgnored); load(); } catch (e) { alert(e.message || "Could not update monitoring status"); } };
     const deleteSelected = async () => {
         const ids = Array.from(selectedIds); if (!ids.length) return;
@@ -8948,7 +8948,7 @@ function RedfishTab({ canEdit, allowedSites }) {
     return React.createElement("div", { className: "neu-card anim-in d1", style: { padding: 20 } },
         React.createElement("div", { style: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 16 } },
             React.createElement("div", null,
-                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15.5, fontWeight: 700, color: "#0F172A" } }, "Multi-Vendor Server Hardware (Redfish)"),
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15.5, fontWeight: 700, color: "#020617" } }, "Multi-Vendor Server Hardware (Redfish)"),
                 React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#475569", marginTop: 3, maxWidth: 680, lineHeight: 1.5 } }, "Works directly against any server's management port (Dell iDRAC, HPE iLO, Lenovo XCC, Cisco standalone IMC, NVIDIA DGX, and any other Redfish-capable BMC) — no vendor appliance needed. This is additional to Dell OME / HPE OneView above, not a replacement.")),
             canEdit && React.createElement("div", { style: { display: "flex", gap: 8 } },
                 React.createElement("button", { onClick: () => runSync(false), disabled: !!(syncState && syncState.running), className: "neu-btn-secondary", title: "Re-read health, power, alerts and BIOS version from every configured device shown below" }, syncState && syncState.running ? `Syncing ${syncState.processed || 0}/${syncState.total || 0}…` : "Sync"),
@@ -9043,7 +9043,7 @@ function FirmwareJobsTab({ canEdit }) {
     return React.createElement("div", { className: "neu-card anim-in d1", style: { padding: 20 } },
         React.createElement("div", { style: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 12 } },
             React.createElement("div", null,
-                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15.5, fontWeight: 700, color: "#0F172A" } }, "Firmware Update Jobs"),
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15.5, fontWeight: 700, color: "#020617" } }, "Firmware Update Jobs"),
                 React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#475569", marginTop: 3, maxWidth: 640, lineHeight: 1.5 } }, "Every firmware update running or finished in the last 6 months at the locations you can access — started from DCIM or directly in Dell OME / HPE OneView (the appliances are checked about every 30 seconds). A server with a running update is locked in DCIM.")),
             React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } }, chip("Running", count("Running"), "#2563EB"), chip("Completed", count("Completed"), "#059669"), chip("Failed", count("Failed"), "#DC2626"))),
         React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 } },
@@ -9069,7 +9069,7 @@ function FirmwareJobsTab({ canEdit }) {
         jobs !== null && shown.length === 0 && React.createElement("div", { style: { padding: "34px 12px", textAlign: "center", color: "#64748B", fontFamily: "Inter", fontSize: 12.5, border: "1px dashed #CBD5E1", borderRadius: 10 } }, all.length ? "No jobs match these filters." : "No firmware updates running or finished in the last 24 hours."),
         shown.length > 0 && React.createElement("div", { style: { overflowX: "auto" } },
             React.createElement("div", { style: { minWidth: 900, border: "1px solid #E2E8F0", borderRadius: 10, overflow: "hidden", background: "#fff" } },
-                React.createElement("div", { style: { display: "grid", gridTemplateColumns: grid, columnGap: 12, padding: "8px 12px", background: "#F1F5F9", fontFamily: "Inter", fontSize: 10.5, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.4 } },
+                React.createElement("div", { style: { display: "grid", gridTemplateColumns: grid, columnGap: 12, padding: "8px 12px", background: "#F1F5F9", fontFamily: "Inter", fontSize: 10.5, fontWeight: 700, color: "#020617", textTransform: "uppercase", letterSpacing: 0.4 } },
                     React.createElement("span"), React.createElement("span", null, "Started"), React.createElement("span", null, "Location"), React.createElement("span", null, "Vendor"), React.createElement("span", null, "Started from"), React.createElement("span", null, "By"), React.createElement("span", null, "Baseline / job"), React.createElement("span", { style: { textAlign: "right" } }, "Servers"), React.createElement("span", null, "Status")),
                 shown.map((j, i) => {
                     const k = j.vendor + "|" + j.site + "|" + j.zone + "|" + j.jobRef + "|" + j.startedAt;
@@ -9091,7 +9091,7 @@ function FirmwareJobsTab({ canEdit }) {
                                 React.createElement("span", { style: { color: col, fontWeight: 700 } }, j.status + (avg != null && j.status !== "Failed" ? " · " + avg + "%" : "")),
                                 j.status !== "Failed" && avg != null && React.createElement("div", { style: { height: 4, background: "#E2E8F0", borderRadius: 2, marginTop: 4, overflow: "hidden" } }, React.createElement("div", { style: { width: avg + "%", height: "100%", background: col, transition: "width .4s" } })))),
                         isOpen && React.createElement("div", { style: { padding: "4px 12px 12px 40px", background: "#F8FAFC" } },
-                            j.finishedAt && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748B", marginBottom: 6 } }, "Finished " + fwJobTime(j.finishedAt)),
+                            j.finishedAt && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, color: "#020617", marginBottom: 6 } }, "Finished " + fwJobTime(j.finishedAt)),
                             React.createElement(FwServerRows, { rows: j.rows })));
                 }))));
 }
@@ -9210,7 +9210,7 @@ function MonitorVendorPanel({ vendorLabel, icon, result, canEdit, selectedIds, o
     const filterRows = listSort.apply(devices.filter((row) => MONITOR_LIST_COLUMNS.every((col) => listColumnFilterMatches(columnFilters[col.key], col, row))), MONITOR_LIST_COLUMNS);
     const optionRowsForColumn = (key) => devices.filter((row) => MONITOR_LIST_COLUMNS.every((col) => col.key === key || listColumnFilterMatches(columnFilters[col.key], col, row)));
     const activeColumnFilterCount = countListColumnFilters(columnFilters);
-    const thSm = { textAlign: "left", padding: "9px 8px", borderBottom: "0.5px solid rgba(163,177,198,0.3)", fontFamily: "Inter", fontSize: 10, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.4, whiteSpace: "nowrap", position: "sticky", top: 0, background: "#FFFFFF" };
+    const thSm = { textAlign: "left", padding: "9px 8px", borderBottom: "0.5px solid rgba(163,177,198,0.3)", fontFamily: "Inter", fontSize: 10, color: "#020617", textTransform: "uppercase", letterSpacing: 0.4, whiteSpace: "nowrap", position: "sticky", top: 0, background: "#FFFFFF" };
     const tdSm = { padding: "9px 8px", fontFamily: "Inter", fontSize: 12.5, color: "#334155", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 160 };
     const lockOf = (d) => (lockedInfo && lockedInfo.get(keyOf(d))) || null; // a firmware update is already running on this server
     const selectableDevices = devices.filter((d) => keyOf(d) && !lockOf(d));
@@ -9220,7 +9220,7 @@ function MonitorVendorPanel({ vendorLabel, icon, result, canEdit, selectedIds, o
         React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 } },
             React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
                 icon,
-                React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 700, color: "#0F172A" } }, vendorLabel),
+                React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 700, color: "#020617" } }, vendorLabel),
                 result && result.configured && result.host && (() => {
                     const displayHost = String(result.host).replace(/^https?:\/\//, "");
                     const href = /^https?:\/\//.test(result.host) ? result.host : `https://${result.host}`;
@@ -9255,7 +9255,7 @@ function MonitorVendorPanel({ vendorLabel, icon, result, canEdit, selectedIds, o
                 React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 12, flexWrap: "wrap" } }, Object.entries(counts).map(([k, v]) => React.createElement(MonitorHealthDot, { key: k, status: `${v} ${k}` }))),
                 React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" } },
                     React.createElement("div", { style: { flex: 1, minWidth: 140, background: "#F8FAFC", borderRadius: 10, padding: "9px 12px" } },
-                        React.createElement("div", { style: { fontSize: 10, color: "#475569", textTransform: "uppercase", fontWeight: 700, marginBottom: 4 } }, "Power"),
+                        React.createElement("div", { style: { fontSize: 10, color: "#020617", textTransform: "uppercase", fontWeight: 700, marginBottom: 4 } }, "Power"),
                         React.createElement("div", { style: { fontSize: 12.5 } },
                             React.createElement("span", { style: { color: "#10B981", fontWeight: 700 } },
                                 powerOn,
@@ -9265,7 +9265,7 @@ function MonitorVendorPanel({ vendorLabel, icon, result, canEdit, selectedIds, o
                                 powerOff,
                                 " Off"))),
                     React.createElement("div", { style: { flex: 1, minWidth: 220, background: "#F8FAFC", borderRadius: 10, padding: "9px 12px" } },
-                        React.createElement("div", { style: { fontSize: 10, color: "#475569", textTransform: "uppercase", fontWeight: 700, marginBottom: 4 } }, "Manual BIOS compliance"),
+                        React.createElement("div", { style: { fontSize: 10, color: "#020617", textTransform: "uppercase", fontWeight: 700, marginBottom: 4 } }, "Manual BIOS compliance"),
                         React.createElement("div", { style: { fontSize: 12.5 } },
                             React.createElement("span", { style: { color: "#10B981", fontWeight: 700 } },
                                 complianceCounts.latest,
@@ -9477,16 +9477,16 @@ function FirmwareUpdateModal({ vendor, vendorLabel, site, zone, deviceIds, devic
     };
     return React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }, onClick: onClose },
         React.createElement("div", { onClick: (e) => e.stopPropagation(), className: "neu-card", style: { width: 560, maxWidth: "94vw", maxHeight: "92vh", overflowY: "auto", padding: 26, borderRadius: 18 } },
-            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 17, fontWeight: 800, color: "#0F172A", marginBottom: 4 } },
+            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 17, fontWeight: 800, color: "#020617", marginBottom: 4 } },
                 "Update Firmware \u2014 ",
                 vendorLabel),
-            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#64748B", marginBottom: 16 } },
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#020617", marginBottom: 16 } },
                 "Apply a firmware update to ",
                 deviceIds.length,
                 " selected device",
                 deviceIds.length === 1 ? "" : "s",
                 "."),
-            React.createElement("label", { style: { display: "block", fontFamily: "Inter", fontSize: 11.5, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 } },
+            React.createElement("label", { style: { display: "block", fontFamily: "Inter", fontSize: 11.5, fontWeight: 700, color: "#020617", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 } },
                 vendor === "ome" ? "Firmware / driver baseline" : "Firmware bundle",
                 " \u2014 pulled live from this appliance"),
             baselines === null && !loadErr && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#475569", padding: "10px 0" } }, "Loading\u2026"),
@@ -9508,7 +9508,7 @@ function FirmwareUpdateModal({ vendor, vendorLabel, site, zone, deviceIds, devic
                         "\u2026"),
                     baselines.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.label)))),
             vendor === "ome" && React.createElement("div", { style: { marginBottom: 16 } },
-                React.createElement("label", { style: { display: "block", fontFamily: "Inter", fontSize: 11.5, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 } }, "Timing"),
+                React.createElement("label", { style: { display: "block", fontFamily: "Inter", fontSize: 11.5, fontWeight: 700, color: "#020617", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 } }, "Timing"),
                 React.createElement("div", { style: { display: "flex", gap: 20 } },
                     React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 6, fontFamily: "Inter", fontSize: 12.5, color: "#475569" } },
                         React.createElement("input", { type: "radio", name: "ome-schedule", checked: scheduleMode === "now", onChange: () => setScheduleMode("now"), style: { accentColor: "#4338CA" } }),
@@ -9517,7 +9517,7 @@ function FirmwareUpdateModal({ vendor, vendorLabel, site, zone, deviceIds, devic
                         React.createElement("input", { type: "radio", name: "ome-schedule", checked: scheduleMode === "stage", onChange: () => setScheduleMode("stage"), style: { accentColor: "#4338CA" } }),
                         " Stage for next reboot"))),
             vendor === "oneview" && React.createElement("div", { style: { marginBottom: 14 } },
-                React.createElement("label", { style: { display: "block", fontFamily: "Inter", fontSize: 11.5, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 } }, "Installation policy"),
+                React.createElement("label", { style: { display: "block", fontFamily: "Inter", fontSize: 11.5, fontWeight: 700, color: "#020617", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 } }, "Installation policy"),
                 React.createElement(ThemedSelect, { value: installPolicy, onChange: (e) => setInstallPolicy(e.target.value), style: { width: "100%", boxSizing: "border-box", padding: "10px 12px", borderRadius: 10, border: "1px solid #CBD5E1", fontFamily: "Inter", fontSize: 13 } },
                     React.createElement("option", { value: "lower" }, "Update components lower than baseline"),
                     React.createElement("option", { value: "all" }, "Update components even if same or newer (allow downgrade)"))),
@@ -9525,7 +9525,7 @@ function FirmwareUpdateModal({ vendor, vendorLabel, site, zone, deviceIds, devic
                 React.createElement("input", { type: "checkbox", checked: reinstall, onChange: (e) => setReinstall(e.target.checked), style: { width: 15, height: 15, accentColor: "#059669" } }),
                 "Reinstall components"),
             vendor === "oneview" && React.createElement("div", { style: { marginBottom: 16 } },
-                React.createElement("label", { style: { display: "block", fontFamily: "Inter", fontSize: 11.5, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 } }, "Installation method"),
+                React.createElement("label", { style: { display: "block", fontFamily: "Inter", fontSize: 11.5, fontWeight: 700, color: "#020617", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 } }, "Installation method"),
                 React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
                     React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 6, fontFamily: "Inter", fontSize: 12.5, color: "#475569" } },
                         React.createElement("input", { type: "radio", name: "ov-install", checked: installType === "osdrivers", onChange: () => setInstallType("osdrivers"), style: { accentColor: "#059669" } }),
@@ -10179,7 +10179,7 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
     return React.createElement("div", { style: { display: "flex", gap: 20, alignItems: "flex-start" } },
         React.createElement("div", { className: "neu-card anim-in d1", style: { width: 280, flexShrink: 0, padding: 14, position: "sticky", top: 20, maxHeight: "calc(100vh - 40px)", overflowY: "auto", alignSelf: "flex-start" } },
             React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, padding: "0 4px" } },
-                React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, color: "#0F172A" } }, "Locations"),
+                React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, color: "#020617" } }, "Locations"),
                 canManageLocations && React.createElement("button", { onClick: onAddLocation, className: "neu-icon-btn", title: "Add new location", style: { width: 26, height: 26, borderRadius: 8 } },
                     React.createElement(Plus, { s: 13, c: "#6366F1" }))),
             React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 2 } },
@@ -10214,15 +10214,15 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
             searchActive && React.createElement("div", { "data-mon-search-results": "1", className: "neu-card anim-in", style: { padding: 16, marginBottom: 16 } },
                 gErr && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#B91C1C" } }, gErr),
                 gRes && React.createElement(React.Fragment, null,
-                    React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 14, fontWeight: 700, color: "#0F172A", marginBottom: 4 } }, gRes.total, " server", gRes.total === 1 ? "" : "s", " found for \u201C", gq.trim(), "\u201D"),
-                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 10 } }, "Searched ", gRes.zonesSearched, " synced zone", gRes.zonesSearched === 1 ? "" : "s", " (data as of each zone's last sync). Click a row to open that zone.", gRes.truncated ? " Showing the first " + gRes.results.length + " \u2013 type more to narrow down." : ""),
+                    React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 14, fontWeight: 700, color: "#020617", marginBottom: 4 } }, gRes.total, " server", gRes.total === 1 ? "" : "s", " found for \u201C", gq.trim(), "\u201D"),
+                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#020617", marginBottom: 10 } }, "Searched ", gRes.zonesSearched, " synced zone", gRes.zonesSearched === 1 ? "" : "s", " (data as of each zone's last sync). Click a row to open that zone.", gRes.truncated ? " Showing the first " + gRes.results.length + " \u2013 type more to narrow down." : ""),
                     gRes.notLoaded && gRes.notLoaded.length > 0 && React.createElement("div", { "data-mon-notloaded": "1", style: { padding: "8px 11px", borderRadius: 10, background: "#FFFBEB", border: "1px solid #FDE68A", color: "#92400E", fontFamily: "Inter", fontSize: 11.5, marginBottom: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" } },
                         React.createElement("span", { style: { flex: "1 1 260px" } }, gRes.notLoaded.length, " configured zone(s) have not been synced yet and are not included: ", Array.from(new Set(gRes.notLoaded.map((z) => z.site + " \u00B7 " + z.zone))).join(", ")),
                         React.createElement("button", { type: "button", onClick: loadUnsyncedZones, disabled: !!gLoad, className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "6px 10px" } }, gLoad ? "Loading " + gLoad.done + "/" + gLoad.total + "\u2026" : "Load these zones and search again")),
                     gRes.results.length === 0 ? React.createElement("div", { "data-mon-nomatch": "1", style: { fontFamily: "Inter", fontSize: 12.5, color: "#64748B", padding: "10px 0" } }, "No server matches. Check the spelling, or sync the zone first.") :
                         React.createElement(React.Fragment, null, React.createElement("div", { style: { overflowX: "auto", border: "1px solid rgba(163,177,198,0.25)", borderRadius: 10 } },
                             React.createElement("table", { style: { borderCollapse: "collapse", width: "100%", minWidth: 900 } },
-                                React.createElement("thead", null, React.createElement("tr", null, MON_SEARCH_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: monSearchFilters[col.key], onOpen: setMonSearchOpen, sortKey: monSort.key, sortDir: monSort.dir, onSort: monSort.onSort, style: { textAlign: "left", padding: "7px 9px", background: "#F8FAFC", fontFamily: "Inter", fontSize: 10.5, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: .4, whiteSpace: "nowrap" } })))),
+                                React.createElement("thead", null, React.createElement("tr", null, MON_SEARCH_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: monSearchFilters[col.key], onOpen: setMonSearchOpen, sortKey: monSort.key, sortDir: monSort.dir, onSort: monSort.onSort, style: { textAlign: "left", padding: "7px 9px", background: "#F8FAFC", fontFamily: "Inter", fontSize: 10.5, fontWeight: 700, color: "#020617", textTransform: "uppercase", letterSpacing: .4, whiteSpace: "nowrap" } })))),
                                 React.createElement("tbody", null, monSearchRows.map((r, i) => React.createElement("tr", { key: i, "data-mon-result": r.serialNumber || r.name, onClick: () => openZoneFromSearch(r), title: "Open " + r.site + " \u00B7 " + r.zone + " and select this server", style: { cursor: "pointer", borderTop: i ? "0.5px solid rgba(163,177,198,0.2)" : "none" } },
                                     React.createElement("td", { style: { padding: "7px 9px", fontFamily: "Inter", fontSize: 12, fontWeight: 700, color: "#4338CA", whiteSpace: "nowrap" } }, r.site, " \u00B7 ", r.zone),
                                     React.createElement("td", { style: { padding: "7px 9px", fontFamily: "Inter", fontSize: 11.5, color: "#475569", whiteSpace: "nowrap" } }, r.vendor),
@@ -10246,12 +10246,12 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
             tab === "status" && React.createElement(React.Fragment, null,
                 !selected && React.createElement("div", { className: "neu-card anim-in d2", style: { padding: "60px 30px", textAlign: "center" } },
                     React.createElement(Server, { s: 30, c: "#CBD5E1" }),
-                    React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 16, fontWeight: 700, color: "#475569", marginTop: 14 } }, "Select a zone"),
+                    React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 16, fontWeight: 700, color: "#020617", marginTop: 14 } }, "Select a zone"),
                     React.createElement("div", { style: { fontFamily: "Inter", fontSize: 13, color: "#475569", marginTop: 6 } }, "Pick a location and zone on the left to view its live Dell OME / HPE OneView hardware status.")),
                 selected && React.createElement(React.Fragment, null,
                     React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 } },
                         React.createElement("div", null,
-                            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 20, fontWeight: 800, color: "#0F172A" } },
+                            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 20, fontWeight: 800, color: "#020617" } },
                                 selected.site,
                                 " \u00B7 ",
                                 selected.zone),
@@ -10291,8 +10291,8 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
                         React.createElement(MonitorVendorPanel, { vendorLabel: "Dell OME", icon: React.createElement(Server, { s: 16, c: "#0076CE" }), result: data && data.ome, canEdit: canEdit, accent: "#4338CA", vendorKey: "ome", firmwareTargets: firmwareTargets.ome || [], selectedIds: selOme, onToggle: toggleOne(setSelOme), onToggleAll: toggleAll(setSelOme), onUpdateFirmware: openFirmwareModal("ome", "Dell OME"), onRefreshHardware: refreshHardware("ome"), lockedInfo: lockedFor("ome") }),
                         React.createElement(MonitorVendorPanel, { vendorLabel: "HPE OneView", icon: React.createElement(HardDrive, { s: 16, c: "#01A982" }), result: data && data.oneview, canEdit: canEdit, accent: "#059669", vendorKey: "oneview", firmwareTargets: firmwareTargets.oneview || [], selectedIds: selOv, onToggle: toggleOne(setSelOv), onToggleAll: toggleAll(setSelOv), onUpdateFirmware: openFirmwareModal("oneview", "HPE OneView"), onRefreshHardware: refreshHardware("oneview"), lockedInfo: lockedFor("oneview") })))),
             tab === "firmware" && React.createElement("div", { className: "neu-card anim-in d2", style: { padding: 20 } },
-                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15.5, fontWeight: 700, color: "#0F172A", marginBottom: 4 } }, "Manual BIOS Targets by Model"),
-                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 14, lineHeight: 1.55 } },
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15.5, fontWeight: 700, color: "#020617", marginBottom: 4 } }, "Manual BIOS Targets by Model"),
+                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#020617", marginBottom: 14, lineHeight: 1.55 } },
                     "Targets are maintained manually per hardware model. Dell OME / HPE OneView only provide the installed System BIOS for comparison. ",
                     React.createElement("b", null, "No appliance baseline or new OME/OneView release automatically changes these targets.")),
                 React.createElement("div", { style: { display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap" } },
@@ -10300,7 +10300,7 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
                     React.createElement(FirmwareModelTargetManager, { vendor: "oneview", vendorLabel: "HPE OneView", targets: firmwareTargets.oneview || [], canEdit: canEdit, onChanged: reloadFirmwareTargets })),
                 React.createElement("div", { style: { height: 1, background: "#F1F4FA", margin: "0 0 20px" } }),
                 React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 } },
-                    React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15.5, fontWeight: 700, color: "#0F172A" } }, "Asset Inventory vs. vendor APIs"),
+                    React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15.5, fontWeight: 700, color: "#020617" } }, "Asset Inventory vs. vendor APIs"),
                     canEdit && React.createElement("button", { onClick: runFirmwareSync, disabled: fwSyncLoading, className: "neu-btn-secondary", style: { fontSize: 12, display: "flex", alignItems: "center", gap: 6 } }, fwSyncLoading ? "Syncing…" : "Sync Firmware into Asset Inventory")),
                 React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#475569", marginBottom: 16 } }, "Matches by serial number across every site you have access to \u00B7 writes only the Firmware column on matched rows \u00B7 never touches Add Asset or bulk import \u00B7 never fetches from Dell OME / HPE OneView itself, only reads what's already cached from Monitoring (or the 30-min auto-sync)."),
                 fwSyncErr && React.createElement("div", { style: { background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)", borderRadius: 10, padding: "12px 14px", color: "#DC2626", fontFamily: "Inter", fontSize: 12.5, marginBottom: 12 } }, fwSyncErr),
@@ -10386,10 +10386,10 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
                                 React.createElement("button", { onClick: () => exportPivot("csv"), className: "neu-btn-secondary", style: { fontSize: 11 } }, "Export CSV")),
                             React.createElement("div", { style: { maxHeight: 420, overflowY: "auto", overflowX: "auto", border: "1px solid rgba(163,177,198,0.3)", borderRadius: 10 } },
                                 React.createElement("div", { style: { display: "grid", gridTemplateColumns: `repeat(${pivotFields.length}, minmax(100px, 1fr)) 110px 110px 100px`, gap: 8, padding: "8px 12px", background: "#F8FAFC", borderBottom: "1px solid rgba(163,177,198,0.3)", position: "sticky", top: 0, minWidth: 600 } },
-                                    pivotFields.map((f) => React.createElement("span", { key: f, style: { fontFamily: "Inter", fontSize: 10.5, fontWeight: 700, color: "#475569", textTransform: "uppercase" } }, PIVOT_FIELDS.find((p) => p.key === f).label)),
+                                    pivotFields.map((f) => React.createElement("span", { key: f, style: { fontFamily: "Inter", fontSize: 10.5, fontWeight: 700, color: "#020617", textTransform: "uppercase" } }, PIVOT_FIELDS.find((p) => p.key === f).label)),
                                     React.createElement("span", { style: { fontFamily: "Inter", fontSize: 10.5, fontWeight: 700, color: "#4F46E5", textTransform: "uppercase" } }, "Inventory"),
                                     React.createElement("span", { style: { fontFamily: "Inter", fontSize: 10.5, fontWeight: 700, color: "#0D9488", textTransform: "uppercase" } }, "API"),
-                                    React.createElement("span", { style: { fontFamily: "Inter", fontSize: 10.5, fontWeight: 700, color: "#475569", textTransform: "uppercase" } }, "Diff")),
+                                    React.createElement("span", { style: { fontFamily: "Inter", fontSize: 10.5, fontWeight: 700, color: "#020617", textTransform: "uppercase" } }, "Diff")),
                                 pivotGroups.length === 0 && React.createElement("div", { style: { padding: 16, textAlign: "center", color: "#475569", fontFamily: "Inter", fontSize: 12 } }, "No rows match the current comparison."),
                                 pivotGroups.map((g, i) => {
                                     const diff = g.inventoryCount - g.apiCount;
@@ -10416,7 +10416,7 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
                             React.createElement("span", { style: { display: "block", fontFamily: "'Space Grotesk'", fontSize: 22, fontWeight: 800, color: "#059669" } }, reconResult.foundViaApiNotInInventory.length),
                             React.createElement("span", { style: { fontSize: 11, color: "#64748B" } }, "Found via API, not in Inventory"))),
                     React.createElement("div", { className: "neu-card anim-in d2", style: { padding: 20 } },
-                        React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 14, fontWeight: 700, color: "#0F172A", marginBottom: 4 } }, "Asset Inventory vs. API-Fetched Server Count, by Zone"),
+                        React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 14, fontWeight: 700, color: "#020617", marginBottom: 4 } }, "Asset Inventory vs. API-Fetched Server Count, by Zone"),
                         React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, color: "#475569", marginBottom: 14 } }, "A flat overall total can hide the real picture \u2014 some zones may under-report via the API, others over-report."),
                         React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, reconResult.zones.map((z) => {
                             const max = Math.max(1, ...reconResult.zones.map((zz) => Math.max(zz.inventoryCount, zz.apiCount)));
@@ -10473,7 +10473,7 @@ function MonitoringPage({ locations, zones, allowedSites, onAddLocation, canEdit
                                 React.createElement(ListFilterHeaderCell, { column: RECON_NONSTD_COLUMNS[2], filter: nonStdColFilters.name, onOpen: (col) => setReconOpenFilter({ listKey: "nonstd", column: col }) }),
                                 React.createElement(ListFilterHeaderCell, { column: RECON_NONSTD_COLUMNS[3], filter: nonStdColFilters.serialNumber, onOpen: (col) => setReconOpenFilter({ listKey: "nonstd", column: col }) }),
                                 React.createElement(ListFilterHeaderCell, { column: RECON_NONSTD_COLUMNS[4], filter: nonStdColFilters.hardwareType, onOpen: (col) => setReconOpenFilter({ listKey: "nonstd", column: col }) }),
-                                React.createElement("span", { style: { fontFamily: "Inter", fontSize: 10.5, fontWeight: 700, color: "#475569", textTransform: "uppercase" } }, "Model")),
+                                React.createElement("span", { style: { fontFamily: "Inter", fontSize: 10.5, fontWeight: 700, color: "#020617", textTransform: "uppercase" } }, "Model")),
                             filteredNonStandardMatches.length === 0 && React.createElement("div", { style: { padding: 16, textAlign: "center", color: "#475569", fontFamily: "Inter", fontSize: 12 } }, "No entries match the current filters."),
                             filteredNonStandardMatches.map((m) => React.createElement("div", { key: m.assetId, style: { display: "grid", gridTemplateColumns: "28px 1fr 1fr 1.4fr 1.4fr", gap: 8, padding: "8px 12px", borderBottom: "0.5px solid rgba(163,177,198,0.2)", alignItems: "center", minWidth: 620 } },
                                 canEdit && React.createElement("input", { type: "checkbox", checked: stdSelected.has(m.assetId), onChange: (e) => toggleStdOne(m.assetId, e.target.checked), style: { width: 14, height: 14 } }),
@@ -10606,7 +10606,7 @@ function DCCapacity({ assets, rackComponents, issues, allowedSites, site, setSit
             const deviceCount = zoneAssets.length - componentCount;
             return React.createElement("div", { key: zone, className: `neu-card anim-in d${zi + 1} ref-rack-elevation`, style: { padding: "22px 24px", marginBottom: 22, background: "linear-gradient(165deg, #FFFFFF 0%, #FAFBFF 100%)" } },
                 React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 16 } },
-                    React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 14, fontWeight: 800, color: "#0F172A" } },
+                    React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 14, fontWeight: 800, color: "#020617" } },
                         site,
                         " \u00B7 ",
                         zone,
@@ -10660,7 +10660,7 @@ function DCCapacity({ assets, rackComponents, issues, allowedSites, site, setSit
                         React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } },
                             React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 7 } },
                                 React.createElement("span", { style: { width: 9, height: 9, borderRadius: "50%", background: color, boxShadow: `0 0 6px ${color}77` } }),
-                                React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontWeight: 800, fontSize: 13, color: "#0F172A" } }, tg.type)),
+                                React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontWeight: 800, fontSize: 13, color: "#020617" } }, tg.type)),
                             React.createElement("span", { className: "neu-badge", style: { color: color, background: color + "18", fontSize: 10, padding: "3px 10px" } },
                                 tg.racks.length,
                                 " racks")),
@@ -10745,7 +10745,7 @@ function DeleteLocationModal({ onClose, onArchive, onRestore, onDelete, location
                 React.createElement("button", { onClick: onClose, className: "neu-icon-btn", style: { width: 36, height: 36, borderRadius: 10 } },
                     React.createElement(X, { s: 16, c: "#64748B" }))),
             React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", margin: "10px 0 14px", lineHeight: 1.5 } }, "Archiving removes the location from normal operational selectors but preserves assets, issues, activities, material movements, racks, users and floor plans. This avoids destroying DC history."),
-            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, fontWeight: 800, color: "#64748B", letterSpacing: .6, textTransform: "uppercase", marginBottom: 8 } }, "Active locations"),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, fontWeight: 800, color: "#020617", letterSpacing: .6, textTransform: "uppercase", marginBottom: 8 } }, "Active locations"),
             React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, maxHeight: 220, overflowY: "auto" } },
                 active.map((l) => React.createElement("div", { key: l.id, style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderRadius: 12, background: "#F8FAFC", border: "1px solid #E2E8F0" } },
                     React.createElement("div", null,
@@ -10754,7 +10754,7 @@ function DeleteLocationModal({ onClose, onArchive, onRestore, onDelete, location
                     React.createElement("button", { onClick: () => onArchive(l), title: `Archive ${l.name}`, className: "neu-btn-secondary", style: { padding: "6px 10px", borderRadius: 9, fontSize: 11, color: "#B45309" } }, "Archive"))),
                 !active.length && React.createElement("div", { style: { padding: 12, color: "#475569", fontSize: 12 } }, "No active locations.")),
             archived.length > 0 && React.createElement(React.Fragment, null,
-                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, fontWeight: 800, color: "#64748B", letterSpacing: .6, textTransform: "uppercase", margin: "16px 0 8px" } }, "Archived locations"),
+                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, fontWeight: 800, color: "#020617", letterSpacing: .6, textTransform: "uppercase", margin: "16px 0 8px" } }, "Archived locations"),
                 React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, maxHeight: 180, overflowY: "auto" } }, archived.map((l) => React.createElement("div", { key: l.id, style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "10px 14px", borderRadius: 12, background: "#FFFBEB", border: "1px solid #FDE68A" } },
                     React.createElement("div", { style: { minWidth: 0 } },
                         React.createElement("div", { style: { fontFamily: "Inter", fontSize: 14, color: "#78350F", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, l.name),
@@ -10776,7 +10776,7 @@ function AddZoneModal({ onClose, onCreate, allowedSites }) {
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617" } }, "Add Zone"),
                 React.createElement("button", { onClick: onClose, className: "neu-icon-btn", style: { width: 36, height: 36, borderRadius: 10 } },
                     React.createElement(X, { s: 16, c: "#64748B" }))),
-            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", marginBottom: 18 } }, "Create a new availability zone ahead of any racks or devices \u2014 useful for planning future expansion."),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#020617", marginBottom: 18 } }, "Create a new availability zone ahead of any racks or devices \u2014 useful for planning future expansion."),
             React.createElement(Field, { label: "Location", style: { marginBottom: 14 } },
                 React.createElement(ThemedSelect, { value: form.site, onChange: (e) => set("site", e.target.value), className: "neu-input" }, allowedSites.map((s) => React.createElement("option", { key: s, value: s }, s)))),
             React.createElement(Field, { label: "Zone Name", style: { marginBottom: 6 } },
@@ -10837,7 +10837,7 @@ function AddRackModal({ onClose, onCreate, allowedSites, zones, rackTypes, onCre
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617" } }, "Add Rack / Component"),
                 React.createElement("button", { onClick: onClose, className: "neu-icon-btn", style: { width: 36, height: 36, borderRadius: 10 } },
                     React.createElement(X, { s: 16, c: "#64748B" }))),
-            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", marginBottom: 18 } },
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#020617", marginBottom: 18 } },
                 "Reserve a rack slot ahead of any devices \u2014 it appears on the Floor View immediately. For a column, use the ",
                 React.createElement("b", null, "Pillar"),
                 " rack type; for a deliberate gap, use ",
@@ -10880,7 +10880,7 @@ function AddRackModal({ onClose, onCreate, allowedSites, zones, rackTypes, onCre
                         React.createElement("input", { type: "number", step: "0.1", min: "0.5", value: form.wTiles, onChange: (e) => { const v = parseFloat(e.target.value) || 1; set("wTiles", v); set("wMm", Math.round(v * 600)); }, className: "neu-input" })),
                     React.createElement(Field, { label: "H Tiles" },
                         React.createElement("input", { type: "number", step: "0.1", min: "0.5", value: form.hTiles, onChange: (e) => { const v = parseFloat(e.target.value) || 2; set("hTiles", v); set("dMm", Math.round(v * 600)); }, className: "neu-input" }))),
-                !isCustomSize && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748B", marginBottom: 10, padding: "6px 10px", background: "#F8FAFC", borderRadius: 8 } },
+                !isCustomSize && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, color: "#020617", marginBottom: 10, padding: "6px 10px", background: "#F8FAFC", borderRadius: 8 } },
                     "Floor footprint: ",
                     React.createElement("b", null,
                         form.wMm,
@@ -10972,7 +10972,7 @@ function EditRackDimensionModal({ rack, onClose, onSave }) {
                     React.createElement("input", { type: "number", step: "0.1", min: "0.5", value: form.wTiles, onChange: (e) => { const v = parseFloat(e.target.value) || 1; set("wTiles", v); set("wMm", Math.round(v * 600)); }, className: "neu-input" })),
                 React.createElement(Field, { label: "H Tiles" },
                     React.createElement("input", { type: "number", step: "0.1", min: "0.5", value: form.hTiles, onChange: (e) => { const v = parseFloat(e.target.value) || 2; set("hTiles", v); set("dMm", Math.round(v * 600)); }, className: "neu-input" }))),
-            !isCustomSize && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748B", marginBottom: 12, padding: "7px 10px", background: "#F8FAFC", borderRadius: 8 } },
+            !isCustomSize && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, color: "#020617", marginBottom: 12, padding: "7px 10px", background: "#F8FAFC", borderRadius: 8 } },
                 "Floor footprint: ",
                 React.createElement("b", null,
                     form.wMm,
@@ -11059,7 +11059,7 @@ function RackLayoutModal({ rack, assets, rackComponents, racks, zones, onClose, 
                     React.createElement(X, { s: 15, c: "#64748B" }))),
             React.createElement("div", { style: { flex: 1, display: "flex", minHeight: 0 } },
                 React.createElement("div", { style: { width: 210, flexShrink: 0, borderRight: "1px solid #EEF1F5", background: "#FAFBFC", overflowY: "auto", padding: "14px 10px" } },
-                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#475569", fontWeight: 800, textTransform: "uppercase", letterSpacing: .4, padding: "0 6px 10px" } },
+                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#020617", fontWeight: 800, textTransform: "uppercase", letterSpacing: .4, padding: "0 6px 10px" } },
                         "Select Rack \u2014 ",
                         rack.zone,
                         " (",
@@ -11098,11 +11098,11 @@ function RackLayoutModal({ rack, assets, rackComponents, racks, zones, onClose, 
                     " (it may have just been removed or renamed). Pick a rack from the list on the left.")) : React.createElement(React.Fragment, null,
                     React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 3 } },
                         React.createElement("span", { style: { width: 8, height: 8, borderRadius: "50%", background: typeColor, flexShrink: 0 } }),
-                        React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#0F172A" } },
+                        React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#020617" } },
                             "Rack ",
                             active.rackNo),
                         React.createElement("span", { style: { fontFamily: "Inter", fontSize: 10.5, fontWeight: 800, color: typeColor, background: typeColor + "18", padding: "2px 9px", borderRadius: 20 } }, active.rackType || "Unassigned")),
-                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 12 } },
+                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#020617", marginBottom: 12 } },
                         active.deviceCount != null ? active.deviceCount : active.assets.length,
                         " device(s)",
                         active.componentCount ? ` \u00B7 ${active.componentCount} component(s)` : "",
@@ -11177,7 +11177,7 @@ function RackLayoutModal({ rack, assets, rackComponents, racks, zones, onClose, 
                             React.createElement(Download, { s: 12 }),
                             " Export device list")))),
                 active && !isStructural && React.createElement("div", { style: { width: 250, flexShrink: 0, borderLeft: "1px solid #EEF1F5", background: "#FAFBFC", overflowY: "auto", padding: "16px 16px 20px" } },
-                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#475569", fontWeight: 800, textTransform: "uppercase", letterSpacing: .4, marginBottom: 10 } }, "Device Details"),
+                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#020617", fontWeight: 800, textTransform: "uppercase", letterSpacing: .4, marginBottom: 10 } }, "Device Details"),
                     selectedDevice ? React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 10, marginBottom: 18 } }, [
                         ["Device Name", selectedDevice.deviceName || selectedDevice.assetTag || "—"],
                         ["Model", [selectedDevice.manufacturer, selectedDevice.model].filter(Boolean).join(" ") || "—"],
@@ -11187,9 +11187,9 @@ function RackLayoutModal({ rack, assets, rackComponents, racks, zones, onClose, 
                         ["Rack", `${active.rackNo} (${rack.zone})`],
                         ["U Position", formatUPosition(selectedDevice.position, selectedDevice.height)],
                     ].map(([label, value]) => React.createElement("div", { key: label },
-                        React.createElement("div", { style: { fontFamily: "Inter", fontSize: 9.5, color: "#475569", fontWeight: 800, textTransform: "uppercase", letterSpacing: .3 } }, label),
+                        React.createElement("div", { style: { fontFamily: "Inter", fontSize: 9.5, color: "#020617", fontWeight: 800, textTransform: "uppercase", letterSpacing: .3 } }, label),
                         React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, fontWeight: 700, color: "#0F172A", marginTop: 1, wordBreak: "break-word" } }, value)))) : React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#475569", marginBottom: 18 } }, "No devices installed in this rack yet."),
-                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#475569", fontWeight: 800, textTransform: "uppercase", letterSpacing: .4, marginBottom: 8 } },
+                    React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#020617", fontWeight: 800, textTransform: "uppercase", letterSpacing: .4, marginBottom: 8 } },
                         "Devices in ",
                         active.rackNo),
                     React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
@@ -11225,7 +11225,7 @@ function RackLayoutPickerModal({ allowedSites, zones, assets, racks, presetSite,
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617" } }, "Open Rack Layout"),
                 React.createElement("button", { onClick: onClose, className: "neu-icon-btn", style: { width: 36, height: 36, borderRadius: 10 } },
                     React.createElement(X, { s: 16, c: "#64748B" }))),
-            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", marginBottom: 18 } }, "Pick a location and zone to browse its racks \u2014 scoped to what you have access to."),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#020617", marginBottom: 18 } }, "Pick a location and zone to browse its racks \u2014 scoped to what you have access to."),
             React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 22 } },
                 React.createElement(Field, { label: "Location" },
                     React.createElement(ThemedSelect, { value: site, onChange: (e) => setSite(e.target.value), className: "neu-input" }, allowedSites.map((s) => React.createElement("option", { key: s, value: s }, s)))),
@@ -11267,7 +11267,7 @@ function MoveRackModal({ rack, zones, onClose, onMove }) {
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617" } }, "Move / Rename Rack"),
                 React.createElement("button", { onClick: onClose, className: "neu-icon-btn", style: { width: 36, height: 36, borderRadius: 10 } },
                     React.createElement(X, { s: 16, c: "#64748B" }))),
-            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", marginBottom: 18 } },
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#020617", marginBottom: 18 } },
                 "Moving ",
                 React.createElement("b", null, rack.rackNo),
                 " (",
@@ -11304,7 +11304,7 @@ function AddLocationModal({ onClose, onCreate, onArchive, onRestore, onDelete, l
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617" } }, "Add Location"),
                 React.createElement("button", { onClick: onClose, className: "neu-icon-btn", style: { width: 36, height: 36, borderRadius: 10 } },
                     React.createElement(X, { s: 16, c: "#64748B" }))),
-            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", marginBottom: 18 } }, "Create a new data center location and define its first zone now. You can add additional zones later from Manage DC Capacity. Any zone name is supported (for example AZ-1, Hall-A, Whitefield-01, DC-Floor-2)."),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#020617", marginBottom: 18 } }, "Create a new data center location and define its first zone now. You can add additional zones later from Manage DC Capacity. Any zone name is supported (for example AZ-1, Hall-A, Whitefield-01, DC-Floor-2)."),
             React.createElement(Field, { label: "Location Name", style: { marginBottom: 12 } },
                 React.createElement("input", { autoFocus: true, value: name, onChange: (e) => setName(e.target.value), onKeyDown: (e) => { if (e.key === "Enter" && canSave)
                         onCreate({ name: name.trim(), zoneName: zoneName.trim() }); }, placeholder: "e.g. Bengaluru", className: "neu-input" })),
@@ -11316,7 +11316,7 @@ function AddLocationModal({ onClose, onCreate, onArchive, onRestore, onDelete, l
                 React.createElement("button", { onClick: onClose, className: "neu-btn-secondary", style: { flex: 1, padding: "12px 0", fontSize: 14 } }, "Cancel"),
                 React.createElement("button", { disabled: !canSave, onClick: () => onCreate({ name: name.trim(), zoneName: zoneName.trim() }), className: "neu-btn-primary", style: { flex: 1, padding: "12px 0", fontSize: 14, opacity: canSave ? 1 : 0.5, cursor: canSave ? "pointer" : "not-allowed" } }, "Add Location")),
             existingNames.length > 0 && React.createElement(React.Fragment, null,
-                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, fontWeight: 700, color: "#475569", letterSpacing: 0.6, textTransform: "uppercase", borderTop: "1px solid rgba(163,177,198,0.3)", paddingTop: 16, marginBottom: 10 } }, "Existing locations"),
+                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, fontWeight: 700, color: "#020617", letterSpacing: 0.6, textTransform: "uppercase", borderTop: "1px solid rgba(163,177,198,0.3)", paddingTop: 16, marginBottom: 10 } }, "Existing locations"),
                 React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6, maxHeight: 180, overflowY: "auto" } }, locations.map((l) => React.createElement("div", { key: l.id, style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderRadius: 10, background: (l.status || 'Active') === 'Archived' ? "#FFFBEB" : "#F8FAFC" } },
                     React.createElement("span", { style: { fontFamily: "Inter", fontSize: 13, color: (l.status || 'Active') === 'Archived' ? "#78350F" : "#1E293B", fontWeight: 500 } },
                         l.name,
@@ -11345,7 +11345,7 @@ function LicenseLockScreen({ reason, isGlobalAdmin, user, onLogout }) {
     return React.createElement("div", { "data-license": "lock-screen", style: { position: "fixed", inset: 0, zIndex: 9999, overflowY: "auto", background: "linear-gradient(160deg,#EEF2FF,#F8FAFC)", padding: "40px 16px", display: "flex", justifyContent: "center", alignItems: "flex-start" } },
         React.createElement("div", { style: { width: "100%", maxWidth: 760 } },
             React.createElement("div", { className: "neu-card", style: { padding: 26, marginBottom: 16 } },
-                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 22, fontWeight: 800, color: "#0F172A", marginBottom: 6 } }, "Application locked"),
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 22, fontWeight: 800, color: "#020617", marginBottom: 6 } }, "Application locked"),
                 React.createElement("p", { "data-license": "lock-reason", style: { fontFamily: "Inter", fontSize: 13.5, color: "#475569", lineHeight: 1.55, margin: "0 0 10px" } }, reason || "A valid license is required."),
                 React.createElement("p", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#64748B", margin: "0 0 14px" } }, isGlobalAdmin ? "Activate a license below to unlock immediately. Your data is untouched." : `Signed in as ${user && user.name}. Ask a global administrator to activate a license; your data is untouched.`),
                 React.createElement("button", { onClick: onLogout, className: "neu-btn-secondary", style: { fontSize: 12 } }, "Sign out")),
@@ -11679,7 +11679,7 @@ function BackupRestorePanel() {
         setBusy("");
     };
     const card = { padding: 22, marginBottom: 18 };
-    const h3 = { fontFamily: "'Space Grotesk'", fontSize: 16, fontWeight: 800, color: "#0F172A", margin: "0 0 4px" };
+    const h3 = { fontFamily: "'Space Grotesk'", fontSize: 16, fontWeight: 800, color: "#020617", margin: "0 0 4px" };
     const sub = { fontFamily: "Inter", fontSize: 12, color: "#64748B", margin: "0 0 14px", lineHeight: 1.5 };
     const btn = (bg, fg, dis) => ({ padding: "8px 16px", borderRadius: 10, border: "none", cursor: dis ? "not-allowed" : "pointer", fontFamily: "Inter", fontSize: 12.5, fontWeight: 700, background: dis ? "#E2E8F0" : bg, color: dis ? "#94A3B8" : fg, display: "inline-flex", alignItems: "center", gap: 6 });
     const kindBadge = (k) => { const c = { auto: ["#DBEAFE", "#1D4ED8", "Automatic"], manual: ["#DCFCE7", "#166534", "Manual"], prerestore: ["#FEF3C7", "#92400E", "Before restore"] }[k] || ["#E2E8F0", "#475569", k]; return React.createElement("span", { style: { background: c[0], color: c[1], fontSize: 10.5, fontWeight: 800, padding: "2px 8px", borderRadius: 20 } }, c[2]); };
@@ -11833,7 +11833,7 @@ function MyAccountPanel({ currentUser, onChangePassword }) {
         React.createElement("div", { style: { width: 150, color: "#64748B", fontWeight: 700 } }, k),
         React.createElement("div", { style: { fontWeight: 600, color: "#0F172A" } }, v));
     return React.createElement("div", { className: "neu-card", "data-account-panel": "1", style: { padding: 22, maxWidth: 640 } },
-        React.createElement("h3", { style: { fontFamily: "'Space Grotesk'", fontSize: 16, fontWeight: 800, margin: "0 0 12px", color: "#0F172A" } }, "My account"),
+        React.createElement("h3", { style: { fontFamily: "'Space Grotesk'", fontSize: 16, fontWeight: 800, margin: "0 0 12px", color: "#020617" } }, "My account"),
         row("Name", currentUser.name),
         row("Username", currentUser.username),
         row("Role", currentUser.role),
@@ -11864,7 +11864,7 @@ function ScopedBackupPanel({ currentUser }) {
         setBusy(false);
     };
     return React.createElement("div", { className: "neu-card", "data-scoped-backup": "1", style: { padding: 22, maxWidth: 760 } },
-        React.createElement("h3", { style: { fontFamily: "'Space Grotesk'", fontSize: 16, fontWeight: 800, margin: "0 0 4px", color: "#0F172A" } }, "Manual backup"),
+        React.createElement("h3", { style: { fontFamily: "'Space Grotesk'", fontSize: 16, fontWeight: 800, margin: "0 0 4px", color: "#020617" } }, "Manual backup"),
         React.createElement("p", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", margin: "0 0 14px", lineHeight: 1.5 } },
             "Saves a copy of the data for ",
             React.createElement("b", null, sites.join(", ") || "your location"),
@@ -11970,13 +11970,13 @@ function LicensePanel({ onActivated }) {
                 React.createElement("div", null, React.createElement("b", null, "Seats: "), status.license.maxUsers || "Unlimited"),
                 React.createElement("div", null, React.createElement("b", null, "Expires: "), status.license.expiresAt ? new Date(status.license.expiresAt).toLocaleDateString() : "Never"),
                 React.createElement("div", null, React.createElement("b", null, "Machine-locked: "), status.license.machineBound ? "Yes" : "No")),
-            React.createElement("div", { style: { fontSize: 11.5, color: "#64748B", marginBottom: 4 } }, "This machine's ID (send this to your vendor to request a license):"),
+            React.createElement("div", { style: { fontSize: 11.5, color: "#020617", marginBottom: 4 } }, "This machine's ID (send this to your vendor to request a license):"),
             React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
                 React.createElement("code", { className: "neu-pressed", style: { padding: "6px 10px", borderRadius: 8, fontSize: 12.5, letterSpacing: 0.5 } }, status.fingerprint),
                 React.createElement("button", { className: "neu-btn", onClick: copyFingerprint, style: { fontSize: 11.5, padding: "6px 10px" } }, copied ? "Copied!" : "Copy"))),
         React.createElement("div", { className: "neu-card", style: card },
             React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontWeight: 700, fontSize: 14, marginBottom: 10 } }, status.valid && status.mode !== "trial" ? "Replace license" : "Activate a license"),
-            React.createElement("div", { style: { fontSize: 11.5, color: "#64748B", marginBottom: 8 } }, "Paste the activation code your vendor sent you:"),
+            React.createElement("div", { style: { fontSize: 11.5, color: "#020617", marginBottom: 8 } }, "Paste the activation code your vendor sent you:"),
             React.createElement("textarea", { className: "neu-input", rows: 3, value: code, onChange: (e) => setCode(e.target.value), placeholder: "DCIM-LIC-...", style: { width: "100%", fontFamily: "monospace", fontSize: 11.5, marginBottom: 10, resize: "vertical" } }),
             React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" } },
                 React.createElement("button", { className: "neu-btn-primary", disabled: busy || !code.trim(), onClick: activateCode, style: { fontSize: 12.5, padding: "8px 16px" } }, busy ? "Activating..." : "Activate"),
@@ -12049,8 +12049,8 @@ function NotificationSettingsPanel() {
         loadErr && React.createElement("div", { style: { color: "#B91C1C", fontSize: 12.5, background: "#FEF2F2", border: "1px solid #FECACA", padding: "9px 12px", borderRadius: 10 } }, loadErr),
         note && React.createElement("div", { style: { color: note.ok ? "#065F46" : "#B91C1C", fontSize: 12.5, background: note.ok ? "#ECFDF5" : "#FEF2F2", border: `1px solid ${note.ok ? "#A7F3D0" : "#FECACA"}`, padding: "9px 12px", borderRadius: 10 } }, note.text),
         React.createElement("div", { className: "neu-card anim-in d1", style: { padding: 24 } },
-            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 700, color: "#0F172A", marginBottom: 4 } }, "Email (SMTP) server"),
-            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", marginBottom: 16 } }, "Used to send all automated notifications - ticket creation, approvals/rejections, monthly reports, and manual report emails."),
+            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 700, color: "#020617", marginBottom: 4 } }, "Email (SMTP) server"),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#020617", marginBottom: 16 } }, "Used to send all automated notifications - ticket creation, approvals/rejections, monthly reports, and manual report emails."),
             React.createElement("div", { style: { display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14, marginBottom: 14 } },
                 React.createElement(Field, { label: "SMTP host" },
                     React.createElement("input", { value: smtp.host, onChange: (e) => setS("host", e.target.value), className: "neu-input", placeholder: "smtp.example.com" })),
@@ -12072,8 +12072,8 @@ function NotificationSettingsPanel() {
                 React.createElement("input", { value: testTo, onChange: (e) => setTestTo(e.target.value), className: "neu-input", placeholder: "Send a test email to…", style: { width: 220, flex: "0 0 auto" } }),
                 React.createElement("button", { onClick: sendTest, disabled: busy === "test", className: "neu-btn-secondary", style: { fontSize: 13 } }, busy === "test" ? "Sending…" : "Send Test Email"))),
         React.createElement("div", { className: "neu-card anim-in d2", style: { padding: 24 } },
-            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 700, color: "#0F172A", marginBottom: 4 } }, "Notification recipients"),
-            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", marginBottom: 16 } }, "These addresses receive all automated emails, and their names appear as the Approver choices when approving or rejecting a visitor or material movement request."),
+            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 700, color: "#020617", marginBottom: 4 } }, "Notification recipients"),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#020617", marginBottom: 16 } }, "These addresses receive all automated emails, and their names appear as the Approver choices when approving or rejecting a visitor or material movement request."),
             React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 } },
                 recipients.length === 0 && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#94A3B8" } }, "No recipients configured yet."),
                 recipients.map((r) => React.createElement("div", { key: r.email, className: "neu-pressed", style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 14px", borderRadius: 12 } },
@@ -12193,9 +12193,9 @@ function ActivityLogsPanel({ isAdmin }) {
     const pageCount = Math.max(1, Math.ceil(total / pageSize));
     return React.createElement("div", { className: "neu-card", style: { padding: 24 } },
         React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 4, flexWrap: "wrap" } },
-            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#0F172A" } }, "Activity Logs"),
+            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#020617" } }, "Activity Logs"),
             React.createElement("span", { style: { fontSize: 11, color: "#94A3B8" } }, `${total} record${total === 1 ? "" : "s"}`)),
-        React.createElement("div", { style: { fontSize: 11.5, color: "#64748B", marginBottom: 16, lineHeight: 1.5 } },
+        React.createElement("div", { style: { fontSize: 11.5, color: "#020617", marginBottom: 16, lineHeight: 1.5 } },
             "Every create, update, approval and deletion across the app, with who did it and when. Kept for 6 months, then automatically cleared. ",
             isAdmin ? "Deleted records with a saved snapshot can be restored." : "Only an Admin can restore a deleted record."),
         React.createElement("div", { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16, alignItems: "center" } },
@@ -12221,7 +12221,7 @@ function ActivityLogsPanel({ isAdmin }) {
         React.createElement("div", { style: { overflowX: "auto" } },
             React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12 } },
                 React.createElement("thead", null,
-                    React.createElement("tr", { style: { textAlign: "left", color: "#94A3B8", fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.4 } },
+                    React.createElement("tr", { style: { textAlign: "left", color: "#020617", fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.4 } },
                         ACTIVITY_LOG_LIST_COLUMNS.map((col) => React.createElement(SortableListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpenFilter: setOpenFilter, sortKey: sortKey, sortDir: sortDir, onSort: handleSort, style: { padding: "8px 10px", borderBottom: "1px solid #E2E8F0", whiteSpace: "nowrap" } })),
                         React.createElement("th", { style: { padding: "8px 10px", borderBottom: "1px solid #E2E8F0", whiteSpace: "nowrap" } }, "Restore"))),
                 React.createElement("tbody", null, loading ? React.createElement("tr", null, React.createElement("td", { colSpan: 8, style: { padding: "30px 10px", textAlign: "center", color: "#94A3B8" } }, "Loading…")) :
@@ -12279,7 +12279,7 @@ function FeaturesPanel({ onChanged }) {
             React.createElement("span", { style: { display: "block", fontFamily: "Inter", fontSize: 12, color: "#64748B", marginTop: 3, lineHeight: 1.5 } }, text)));
     return React.createElement("div", { className: "neu-card", "data-features-panel": "1", style: { padding: 22, maxWidth: 720 } },
         React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617" } }, "Features"),
-        React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", marginTop: 4, marginBottom: 18 } }, "Optional modules that are switched off until you need them."),
+        React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#020617", marginTop: 4, marginBottom: 18 } }, "Optional modules that are switched off until you need them."),
         row("approvalAccess", "approvalAccessEnabled", "Approval flow and Visitor Access", "When off (default): the Visitor Access page, the approval steps for Material Movements and the Approver option for users are hidden, and new Material Movements get their ticket straight away. When on: they are shown to everyone and new Material Movements wait for approval first.", "Enabled. Approval flow and Visitor Access are now visible to everyone.", "Disabled. Approval flow and Visitor Access are now hidden."),
         row("multiVendor", "multiVendorEnabled", "Multi-Vendor (Redfish) page", "When off (default): the Multi-Vendor (Redfish) tab in Monitoring is hidden for everyone. Turn it on to show it again.", "Enabled. The Multi-Vendor (Redfish) tab is now visible in Monitoring.", "Disabled. The Multi-Vendor (Redfish) tab is now hidden."),
         msg && React.createElement("div", { "data-features-msg": "1", style: { marginTop: 14, fontFamily: "Inter", fontSize: 12.5, color: "#4F46E5" } }, msg));
@@ -12294,11 +12294,11 @@ function opsBadge(st) {
 }
 function opsCard(title, sub, children, extra) {
     return opsH("div", { className: "neu-card", style: Object.assign({ padding: 22, marginBottom: 18 }, extra || {}) },
-        opsH("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#17345D" } }, title),
+        opsH("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617" } }, title),
         sub && opsH("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", marginTop: 4 } }, sub),
         opsH("div", { style: { marginTop: 14 } }, children));
 }
-const opsTh = { textAlign: "left", fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.6, color: "#64748B", padding: "8px 8px", cursor: "pointer", whiteSpace: "nowrap", userSelect: "none" };
+const opsTh = { textAlign: "left", fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.6, color: "#020617", padding: "8px 8px", cursor: "pointer", whiteSpace: "nowrap", userSelect: "none" };
 const opsTd = { padding: "9px 8px", fontSize: 12.5, borderTop: "1px solid rgba(148,163,184,.18)", verticalAlign: "top", color: "#334155" };
 function opsText(c, r) { return c.text ? c.text(r) : (r[c.key] != null ? String(r[c.key]) : ""); }
 /* Filterable, sortable table used by every new list. cols: [{key,label,render?,text?}] */
@@ -12522,7 +12522,7 @@ function DataQualityPanel({ isGlobalAdmin }) {
     return opsH("div", { "data-dq-panel": "1" },
         opsCard("Data Quality", "Read-only report on gaps in the inventory. Nothing here edits an asset or blocks a save.", d ? opsH("div", null,
             opsH("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(170px,1fr))", gap: 10 } }, d.summary.map((s) => opsH("button", { key: s.key, onClick: () => setIssue(issue === s.key ? "all" : s.key), "aria-pressed": issue === s.key, style: { textAlign: "left", border: issue === s.key ? "2px solid #3157EE" : "2px solid transparent", borderRadius: 16, padding: 12, background: "#F4F7FC", cursor: "pointer" } },
-                opsH("div", { style: { fontSize: 10, fontWeight: 800, color: "#64748B", textTransform: "uppercase" } }, s.label),
+                opsH("div", { style: { fontSize: 10, fontWeight: 800, color: "#020617", textTransform: "uppercase" } }, s.label),
                 opsH("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 24, fontWeight: 800, color: s.count ? "#17345D" : "#059669" } }, s.count),
                 opsH("div", { style: { fontSize: 10, color: "#64748B" } }, "of " + s.applicable + " checked")))),
             opsH("div", { style: { display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", margin: "16px 0 8px" } },
@@ -12532,7 +12532,7 @@ function DataQualityPanel({ isGlobalAdmin }) {
                 opsH("span", { style: { flex: 1 } }),
                 opsBtn("Export Excel", () => exportToExcel(rows, exportCols, "data-quality-" + stamp + ".xlsx")), opsBtn("Export PDF", pdf)),
             msg && opsH("div", { style: { fontSize: 12.5, color: "#4F46E5", marginBottom: 6 } }, msg),
-            opsH("div", { style: { fontSize: 11.5, color: "#64748B", marginBottom: 6 } }, d.notes.missingPdu + " " + d.notes.deviceNameStatusText),
+            opsH("div", { style: { fontSize: 11.5, color: "#020617", marginBottom: 6 } }, d.notes.missingPdu + " " + d.notes.deviceNameStatusText),
             opsH(OpsTable, { rows, cols, empty: "No assets match.", pageSize: 100 })) : opsH("div", { style: { color: "#64748B" } }, L.err || "Loading…")),
         d && opsCard("Hardware type catalog", "Suggested standard class for every hardware type spelling found. \"Accept\" only records the spelling as standard here (global administrators); assets are never edited.",
             opsH(OpsTable, { rows: d.hwTypes, statusKey: null, cols: [{ key: "raw", label: "Hardware type in inventory" }, { key: "count", label: "Assets" }, { key: "category", label: "Suggested class", render: (r) => r.category || "— none" }, { key: "standard", label: "Status", text: (r) => r.standard ? "Standard" : "Not in catalog", render: (r) => r.standard ? opsBadge("PASS") : opsBadge("WARNING") },
@@ -12579,7 +12579,7 @@ function SettingsPage({ users, onRefresh, locations, currentUser, isAdmin, isGlo
     const pill = (key, label) => React.createElement("button", { key: key, "data-settings-tab": key, onClick: () => setSection(key), className: `tab-pill ${section === key ? "active" : ""}`, style: { fontSize: 12.5 } }, label);
     return React.createElement("div", { "data-settings-page": "1" },
         React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12, marginBottom: 18, flexWrap: "wrap" } },
-            React.createElement("h2", { style: { fontFamily: "'Space Grotesk'", fontSize: 20, fontWeight: 800, color: "#0F172A", margin: 0, display: "inline-flex", alignItems: "center", gap: 8 } },
+            React.createElement("h2", { style: { fontFamily: "'Space Grotesk'", fontSize: 20, fontWeight: 800, color: "#020617", margin: 0, display: "inline-flex", alignItems: "center", gap: 8 } },
                 React.createElement(Settings, { s: 20, c: "#4F46E5" }),
                 " Settings"),
             React.createElement("span", { style: { fontSize: 11.5, color: "#64748B" } }, isAdmin ? "Administrator" : currentUser.name),
@@ -12738,8 +12738,8 @@ function UserManagement({ users, onRefresh, canAdmin, locations }) {
             React.createElement("table", { style: { borderCollapse: "collapse", width: "100%" } },
                 React.createElement("thead", null,
                     React.createElement("tr", null,
-                        USER_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, sortKey: listSort.key, sortDir: listSort.dir, onSort: listSort.onSort, style: { textAlign: "left", padding: "12px 14px", borderBottom: "0.5px solid rgba(163,177,198,0.3)", fontFamily: "Inter", fontSize: 11, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.5 } })),
-                        React.createElement("th", { style: { textAlign: "left", padding: "12px 14px", borderBottom: "0.5px solid rgba(163,177,198,0.3)", fontFamily: "Inter", fontSize: 11, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.5 } }))),
+                        USER_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, sortKey: listSort.key, sortDir: listSort.dir, onSort: listSort.onSort, style: { textAlign: "left", padding: "12px 14px", borderBottom: "0.5px solid rgba(163,177,198,0.3)", fontFamily: "Inter", fontSize: 11, color: "#020617", textTransform: "uppercase", letterSpacing: 0.5 } })),
+                        React.createElement("th", { style: { textAlign: "left", padding: "12px 14px", borderBottom: "0.5px solid rgba(163,177,198,0.3)", fontFamily: "Inter", fontSize: 11, color: "#020617", textTransform: "uppercase", letterSpacing: 0.5 } }))),
                 React.createElement("tbody", null, filteredUsers.map((u) => (React.createElement("tr", { key: u.id, className: "neu-table-row" },
                     React.createElement("td", { style: { padding: "11px 14px", borderBottom: "0.5px solid rgba(163,177,198,0.25)", fontFamily: "'JetBrains Mono'", fontSize: 12, color: "#1E293B" } }, u.username),
                     React.createElement("td", { style: { padding: "11px 14px", borderBottom: "0.5px solid rgba(163,177,198,0.25)", fontFamily: "Inter", fontSize: 12, color: "#1E293B" } }, u.name),
@@ -12996,8 +12996,8 @@ function AssetLifecyclePage({ assets, allowedSites, zones, racks, canEdit, onAct
             React.createElement("table", { style: { borderCollapse: "collapse", width: "100%", minWidth: 1240 } },
                 React.createElement("thead", null,
                     React.createElement("tr", null,
-                        LIFECYCLE_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, sortKey: listSort.key, sortDir: listSort.dir, onSort: listSort.onSort, style: { textAlign: "left", padding: "11px 12px", fontFamily: "Inter", fontSize: 10.5, color: "#64748B", textTransform: "uppercase", letterSpacing: .4, borderBottom: "1px solid #E2E8F0" } })),
-                        React.createElement("th", { style: { textAlign: "left", padding: "11px 12px", fontFamily: "Inter", fontSize: 10.5, color: "#64748B", textTransform: "uppercase", letterSpacing: .4, borderBottom: "1px solid #E2E8F0" } }, "Actions"))),
+                        LIFECYCLE_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, sortKey: listSort.key, sortDir: listSort.dir, onSort: listSort.onSort, style: { textAlign: "left", padding: "11px 12px", fontFamily: "Inter", fontSize: 10.5, color: "#020617", textTransform: "uppercase", letterSpacing: .4, borderBottom: "1px solid #E2E8F0" } })),
+                        React.createElement("th", { style: { textAlign: "left", padding: "11px 12px", fontFamily: "Inter", fontSize: 10.5, color: "#020617", textTransform: "uppercase", letterSpacing: .4, borderBottom: "1px solid #E2E8F0" } }, "Actions"))),
                 React.createElement("tbody", null,
                     filteredLifecycleRows.map(a => React.createElement("tr", { key: a.id, className: "neu-table-row" },
                         React.createElement("td", { style: { padding: "10px 12px", borderBottom: "1px solid #F1F5F9", fontFamily: "'JetBrains Mono'", fontSize: 11.5, fontWeight: 800, color: "#0F172A", whiteSpace: "nowrap" } }, a.serialNumber || "—"),
@@ -13227,7 +13227,7 @@ function OpeningStockImportModal({ sites, onClose, onDone }) {
                 React.createElement("label", { className: "neu-btn-primary", style: { fontSize: 12, padding: "9px 14px", cursor: busy ? "wait" : "pointer", display: "inline-flex", alignItems: "center", gap: 6 } }, "Choose filled file",
                     React.createElement("input", { type: "file", accept: ".xlsx,.xls,.csv", onChange: onFile, disabled: busy, style: { display: "none" }, "data-os-file": "1" })),
                 fileName && React.createElement("span", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B" } }, fileName)),
-            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#64748B", marginBottom: 12 } }, "The template lists your allowed Sites and Hardware Types on its last sheet."),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#020617", marginBottom: 12 } }, "The template lists your allowed Sites and Hardware Types on its last sheet."),
             busy && React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#4F46E5", marginBottom: 10 } }, "Working\u2026"),
             err && React.createElement("div", { "data-os-error": "1", style: { color: "#DC2626", fontFamily: "Inter", fontSize: 12, background: "rgba(220,38,38,0.08)", padding: "8px 12px", borderRadius: 10, marginBottom: 10 } }, err),
             sm && React.createElement("div", { "data-os-summary": "1" },
@@ -13315,7 +13315,7 @@ function StoreSummaryPanel({ rows }) {
     return React.createElement("div", { className: "neu-card", style: { padding: "14px 16px", marginBottom: 14 }, "data-store-summary": "1" },
         React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" } },
             React.createElement("div", null,
-                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 14, fontWeight: 800, color: "#0F172A" } }, "Store stock counts"),
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 14, fontWeight: 800, color: "#020617" } }, "Store stock counts"),
                 React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748B", marginTop: 2 } }, total + " device(s) in " + types.length + " hardware type(s) and " + models.length + " model(s)" + (opening ? " · " + opening + " with no received date (Opening stock)" : "") + ". Follows the search, location and column filters below.")),
             React.createElement("button", { onClick: () => setOpen(!open), className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "6px 11px" }, "data-store-summary-toggle": "1" }, open ? "Hide" : "Show")),
         open && (total === 0
@@ -13350,7 +13350,7 @@ function AssetLifecycleHub({ view, onViewChange, assets, canEdit, onAction, page
     const q = search.trim().toLowerCase();
     const match = (r) => (siteFilter === "all" || r.site === siteFilter) && (!q || [r.serialNumber, r.assetTag, r.deviceName, r.manufacturer, r.model, r.sourceSite, r.site, r.custodyLocation, r.rejectedBy].filter(Boolean).some((v) => String(v).toLowerCase().includes(q)));
     const sites = pageProps.allowedSites || [];
-    const th = { textAlign: "left", padding: "10px 12px", fontFamily: "Inter", fontSize: 10.5, color: "#64748B", textTransform: "uppercase", letterSpacing: .4, borderBottom: "1px solid #E2E8F0", whiteSpace: "nowrap" };
+    const th = { textAlign: "left", padding: "10px 12px", fontFamily: "Inter", fontSize: 10.5, color: "#020617", textTransform: "uppercase", letterSpacing: .4, borderBottom: "1px solid #E2E8F0", whiteSpace: "nowrap" };
     const td = { padding: "10px 12px", borderBottom: "1px solid #F1F5F9", fontFamily: "Inter", fontSize: 12, color: "#334155" };
     const mono = { ...td, fontFamily: "'JetBrains Mono'", fontSize: 11.5, fontWeight: 800, color: "#0F172A", whiteSpace: "nowrap" };
     const pill = (id, label, n) => React.createElement("button", { key: id, onClick: () => onViewChange(id), className: view === id ? "tab-pill active" : "tab-pill", style: { fontSize: 11.5 }, "data-hub": id }, label, n != null ? " (" + n + ")" : "");
@@ -13372,8 +13372,8 @@ function AssetLifecycleHub({ view, onViewChange, assets, canEdit, onAction, page
     if (view === "pending") {
         const rows = viewRows("pending", incoming.filter(match));
         content = React.createElement(React.Fragment, null,
-            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#0F172A", marginBottom: 4 } }, "Pending Transfer Acceptance"),
-            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 12 } }, "Assets transferred to your DC that are waiting to be accepted. Moving to store keeps the asset in your inventory without a rack position; installing assigns zone, rack and U."),
+            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#020617", marginBottom: 4 } }, "Pending Transfer Acceptance"),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#020617", marginBottom: 12 } }, "Assets transferred to your DC that are waiting to be accepted. Moving to store keeps the asset in your inventory without a rack position; installing assigns zone, rack and U."),
             toolbar(clearBtn("pending")),
             table([...PENDING_COLUMNS, "Actions"], rows.map((r) => {
                 const full = byId.get(r.id);
@@ -13390,8 +13390,8 @@ function AssetLifecycleHub({ view, onViewChange, assets, canEdit, onAction, page
                         histBtn(r)));
             }), ov ? "No transfers are waiting for acceptance." : "Loading…", "pending"),
             outgoing.length > 0 && React.createElement(React.Fragment, null,
-                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 14, fontWeight: 800, color: "#0F172A", margin: "6px 0 4px" } }, "Outgoing transfers awaiting acceptance (view only)"),
-                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 10 } }, "Sent from your DC. The destination DC accepts or rejects them."),
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 14, fontWeight: 800, color: "#020617", margin: "6px 0 4px" } }, "Outgoing transfers awaiting acceptance (view only)"),
+                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#020617", marginBottom: 10 } }, "Sent from your DC. The destination DC accepts or rejects them."),
                 table(["Serial Number", "Asset Tag", "Device Name", "Destination Site", "Transfer Date", "Status"], outgoing.filter(match).map((r) => React.createElement("tr", { key: r.id, className: "neu-table-row", "data-outgoing-row": r.serialNumber },
                     React.createElement("td", { style: mono }, r.serialNumber || "—"), React.createElement("td", { style: td }, r.assetTag || "—"), React.createElement("td", { style: td }, r.deviceName || r.model || "—"),
                     React.createElement("td", { style: td }, r.site), React.createElement("td", { style: { ...td, whiteSpace: "nowrap" } }, trfDate(r.transferDate)), React.createElement("td", { style: td }, badge("Awaiting acceptance", "#D97706")))), "")));
@@ -13404,8 +13404,8 @@ function AssetLifecycleHub({ view, onViewChange, assets, canEdit, onAction, page
             { key: "sourceDc", label: "Source DC" }, { key: "site", label: "Current Site" }, { key: "transferDateTxt", label: "Transfer Date" }, { key: "acceptedDateTxt", label: "Accepted Date" }, { key: "receivedDateTxt", label: "Received Date" }, { key: "custodyLocation", label: "Store Location" }, { key: "lifecycleStatus", label: "Status" }
         ], "store-inventory-" + localDateStr(today) + ".csv");
         content = React.createElement(React.Fragment, null,
-            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#0F172A", marginBottom: 4 } }, "Store Inventory"),
-            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 12 } }, "Assets held in store. They belong to the DC's inventory but have no zone, rack or U position and are not counted in rack capacity or elevation."),
+            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#020617", marginBottom: 4 } }, "Store Inventory"),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#020617", marginBottom: 12 } }, "Assets held in store. They belong to the DC's inventory but have no zone, rack or U position and are not counted in rack capacity or elevation."),
             React.createElement(StoreSummaryPanel, { rows: baseStore }),
             toolbar(React.createElement(React.Fragment, null, clearBtn("store"), canEdit && React.createElement("button", { onClick: () => setOsImport(true), className: "neu-btn-primary", style: { fontSize: 12, padding: "9px 13px", marginRight: 8 }, "data-os-open": "1" }, "Import Old Store Devices"), React.createElement("button", { onClick: exportStore, className: "neu-btn-secondary", style: { fontSize: 12, padding: "9px 13px", display: "inline-flex", alignItems: "center", gap: 6 } }, React.createElement(Download, { s: 13 }), " Export CSV"))),
             table([...STORE_COLUMNS, "Status", "Actions"], rows.map((r) => {
@@ -13423,8 +13423,8 @@ function AssetLifecycleHub({ view, onViewChange, assets, canEdit, onAction, page
     else if (view === "rejected") {
         const rows = viewRows("rejected", rejected.filter(match));
         content = React.createElement(React.Fragment, null,
-            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#0F172A", marginBottom: 4 } }, "Rejected Transfers"),
-            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginBottom: 12 } }, "Transfers refused by the destination DC. The asset returns to the source DC for handling."),
+            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#020617", marginBottom: 4 } }, "Rejected Transfers"),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#020617", marginBottom: 12 } }, "Transfers refused by the destination DC. The asset returns to the source DC for handling."),
             toolbar(clearBtn("rejected")),
             table([...REJECTED_COLUMNS, "Status", "Actions"], rows.map((r) => React.createElement("tr", { key: r.id, className: "neu-table-row", "data-rejected-row": r.serialNumber },
                 React.createElement("td", { style: mono }, r.serialNumber || "—"), React.createElement("td", { style: td }, r.assetTag || "—"), React.createElement("td", { style: td }, r.deviceName || r.model || "—"),
@@ -14224,7 +14224,7 @@ function DashFirmwareCompliance({ assets = [] }) {
     const num = (n) => n.toLocaleString();
     const kpi = (k, v) => React.createElement("div", { key: k, "data-fwc": "kpi-" + k, style: { flex: 1, minWidth: 0, padding: "7px 9px", borderRadius: 10, background: FWC_META[k].bg } },
         React.createElement("div", { style: { fontFamily: "Inter", fontSize: 9.5, fontWeight: 800, letterSpacing: ".04em", color: FWC_META[k].fg, textTransform: "uppercase" } }, FWC_META[k].label),
-        React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 19, fontWeight: 800, color: "#0F172A", lineHeight: 1.15, fontVariantNumeric: "tabular-nums" } }, loading ? "—" : num(v)));
+        React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 19, fontWeight: 800, color: "#020617", lineHeight: 1.15, fontVariantNumeric: "tabular-nums" } }, loading ? "—" : num(v)));
     const action = React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
         React.createElement("button", { onClick: syncNow, disabled: syncing, className: "neu-btn-secondary pdu-sync-btn" + (syncing ? " syncing" : ""), "data-fwc": "sync", "aria-label": "Sync firmware and device status from the latest cache", title: "Update firmware and device status from the latest Dell OME / HPE OneView data already cached (no appliance call)", style: { fontSize: 11, padding: "4px 9px", display: "flex", alignItems: "center", gap: 4, opacity: syncing ? 0.6 : 1 } }, React.createElement(RefreshCw, { s: 11 }), syncing ? "Syncing\u2026" : "Sync"),
         React.createElement("button", { onClick: () => setOpen(true), className: "neu-btn-secondary", "data-fwc": "open", style: { fontSize: 11, padding: "4px 10px" }, title: "Location / zone comparison, device list and export" }, "View details"),
@@ -14338,8 +14338,8 @@ function FwcDetails({ rows, inv, missing, zones, lastSync, types, typeCounts, se
         React.createElement("option", { value: "" }, all), opts.map((o) => React.createElement("option", { key: o.v, value: o.v }, o.t)));
     const stat = (k, label, v) => React.createElement("div", { key: k, style: { flex: "1 1 120px", padding: "9px 12px", borderRadius: 12, background: FWC_META[k] ? FWC_META[k].bg : k === "missing" ? "rgba(139,92,246,.12)" : "#EEF2FF", minWidth: 0 } },
         React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10, fontWeight: 800, letterSpacing: ".04em", textTransform: "uppercase", color: FWC_META[k] ? FWC_META[k].fg : k === "missing" ? "#6D28D9" : "#3730A3" } }, label),
-        React.createElement("div", { "data-fwc": "k-" + k, style: { fontFamily: "'Space Grotesk'", fontSize: 24, fontWeight: 800, color: "#0F172A", fontVariantNumeric: "tabular-nums", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, v));
-    const th = (c, sortable) => React.createElement("th", { key: c.key + c.label, onClick: sortable ? () => { setSort((s) => ({ key: c.key, dir: s.key === c.key ? -s.dir : 1 })); setPage(0); } : undefined, style: { position: "sticky", top: 0, background: "#F1F5F9", textAlign: NUMK.includes(c.key) ? "right" : "left", padding: "6px 9px", fontFamily: "Inter", fontSize: 10.5, fontWeight: 800, letterSpacing: ".03em", textTransform: "uppercase", color: "#475569", cursor: sortable ? "pointer" : "default", whiteSpace: "nowrap" } }, c.label, sortable && sort.key === c.key ? (sort.dir > 0 ? " ▲" : " ▼") : "");
+        React.createElement("div", { "data-fwc": "k-" + k, style: { fontFamily: "'Space Grotesk'", fontSize: 24, fontWeight: 800, color: "#020617", fontVariantNumeric: "tabular-nums", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, v));
+    const th = (c, sortable) => React.createElement("th", { key: c.key + c.label, onClick: sortable ? () => { setSort((s) => ({ key: c.key, dir: s.key === c.key ? -s.dir : 1 })); setPage(0); } : undefined, style: { position: "sticky", top: 0, background: "#F1F5F9", textAlign: NUMK.includes(c.key) ? "right" : "left", padding: "6px 9px", fontFamily: "Inter", fontSize: 10.5, fontWeight: 800, letterSpacing: ".03em", textTransform: "uppercase", color: "#020617", cursor: sortable ? "pointer" : "default", whiteSpace: "nowrap" } }, c.label, sortable && sort.key === c.key ? (sort.dir > 0 ? " ▲" : " ▼") : "");
     const cell = { padding: "6px 9px", borderBottom: "1px solid #F1F5F9", fontFamily: "Inter", fontSize: 12, color: "#1E293B", whiteSpace: "nowrap", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis" };
     const numC = { ...cell, textAlign: "right", fontVariantNumeric: "tabular-nums" };
     const go = (patch, nextTab) => { setF((p) => ({ ...p, ...patch })); setTab(nextTab); setPage(0); };
@@ -14373,7 +14373,7 @@ function FwcDetails({ rows, inv, missing, zones, lastSync, types, typeCounts, se
         ["servers", "missing", "extra"].includes(tab) && React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 8 } },
             React.createElement("button", { disabled: pg === 0, onClick: () => setPage(pg - 1), className: "neu-btn-secondary", style: { fontSize: 11, padding: "3px 9px" } }, "Prev"), `Page ${pg + 1} of ${pages}`,
             React.createElement("button", { disabled: pg >= pages - 1, onClick: () => setPage(pg + 1), className: "neu-btn-secondary", style: { fontSize: 11, padding: "3px 9px" } }, "Next")));
-    const fld = (l, v) => React.createElement("div", { key: l, style: { minWidth: 0 } }, React.createElement("div", { style: { fontFamily: "Inter", fontSize: 9.5, fontWeight: 800, letterSpacing: ".04em", textTransform: "uppercase", color: "#64748B" } }, l), React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, fontWeight: 600, color: "#0F172A", overflowWrap: "anywhere" } }, v || "—"));
+    const fld = (l, v) => React.createElement("div", { key: l, style: { minWidth: 0 } }, React.createElement("div", { style: { fontFamily: "Inter", fontSize: 9.5, fontWeight: 800, letterSpacing: ".04em", textTransform: "uppercase", color: "#020617" } }, l), React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, fontWeight: 600, color: "#0F172A", overflowWrap: "anywhere" } }, v || "—"));
     const detail = pick && ["servers", "extra"].includes(tab) && React.createElement("div", { "data-fwc": "detail", style: { background: "#fff", border: "1px solid #C7D2FE", borderRadius: 14, padding: 14, display: "flex", flexDirection: "column", gap: 10 } },
         React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" } }, React.createElement("b", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, color: "#0F172A" } }, pick.name), React.createElement(FwcStatusPill, { s: pick.status }), React.createElement("span", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B" } }, `${pick.src} · ${pick.site} / ${pick.zone}`), React.createElement("button", { onClick: () => setPick(null), className: "neu-btn-secondary", style: { marginLeft: "auto", fontSize: 11, padding: "3px 9px" } }, "Close")),
         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(170px,1fr))", gap: 10 } },
@@ -14387,7 +14387,7 @@ function FwcDetails({ rows, inv, missing, zones, lastSync, types, typeCounts, se
         React.createElement("div", { style: { background: "#F8FAFC", borderRadius: 18, width: "min(1380px,100%)", maxHeight: "94vh", overflow: "auto", boxShadow: "0 30px 80px rgba(15,23,42,.35)", padding: 20, display: "flex", flexDirection: "column", gap: 14 } },
             React.createElement("div", { style: { display: "flex", alignItems: "flex-start", gap: 10, flexWrap: "wrap" } },
                 React.createElement("div", { style: { flex: 1, minWidth: 220 } },
-                    React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 20, fontWeight: 800, color: "#0F172A" } }, "Firmware Compliance"),
+                    React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 20, fontWeight: 800, color: "#020617" } }, "Firmware Compliance"),
                     React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginTop: 2, lineHeight: 1.45 } }, "Dell OME and HPE OneView together, by location and zone, compared with the asset inventory (matched by serial number). Firmware and Compliant / Outdated status are the same as the Monitoring page (cached from the 30-minute sync).")),
                 React.createElement("button", { onClick: () => doExport("xlsx"), className: "neu-btn-secondary", "data-fwc": "x-xlsx", style: { fontSize: 12, padding: "6px 12px" } }, "Export Excel"),
                 React.createElement("button", { onClick: () => doExport("csv"), className: "neu-btn-secondary", "data-fwc": "x-csv", style: { fontSize: 12, padding: "6px 12px" } }, "Export CSV"),
@@ -14638,7 +14638,7 @@ function DashboardOverview({ issues, assets, rackComponents = [], activities, ov
         React.createElement("div", { className: "dash-pair dash-quad", style: { marginBottom: 14 } }, React.createElement(DashPowerStatus, null), React.createElement(DashServerPower, null), React.createElement(DashDeviceCounts, { assets: activeAssets, sites: allowedSites }), React.createElement(DashFirmwareCompliance, { assets: activeAssets })),
         React.createElement("div", { className: "neu-card anim-in d1", style: { padding: "18px 20px", marginBottom: 14 } }, [
             React.createElement("div", { key: "head", style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 } }, [
-                React.createElement("div", { key: "t", style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#17345D" } }, "⚡ Total Power Load by Location"),
+                React.createElement("div", { key: "t", style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#020617" } }, "⚡ Total Power Load by Location"),
                 pduSummary && React.createElement("div", { key: "s", style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B" } }, (pduSummary.overall.totalKw || 0).toFixed(1) + " kW of " + (pduSummary.overall.ratedKw || 0).toFixed(1) + " kW rated · " + (pduSummary.overall.onlineCount || 0) + "/" + (pduSummary.overall.pduCount || 0) + " PDUs online"),
             ]),
             !pduSummary ? React.createElement("div", { key: "body", style: { fontFamily: "Inter", fontSize: 12.5, color: "#64748B" } }, "Loading…") :
@@ -14649,7 +14649,7 @@ function DashboardOverview({ issues, assets, rackComponents = [], activities, ov
                             const color = pct >= 85 ? "#DC2626" : pct >= 70 ? "#EA7A0C" : "#059669";
                             return React.createElement("div", { key: s.site, style: { background: "linear-gradient(145deg,rgba(255,255,255,.95),rgba(240,245,252,.9))", border: "1px solid rgba(255,255,255,.85)", borderRadius: 14, padding: "13px 15px" } }, [
                                 React.createElement("div", { key: "n", style: { fontFamily: "Inter", fontSize: 11.5, fontWeight: 800, color: "#17345D", marginBottom: 6 } }, s.site),
-                                React.createElement("div", { key: "v", style: { fontFamily: "'Space Grotesk'", fontSize: 19, fontWeight: 800, color: "#17345D" } }, s.totalKw.toFixed(1), React.createElement("span", { style: { fontSize: 12, color: "#94A3B8", fontWeight: 600 } }, " / " + s.ratedKw.toFixed(1) + " kW")),
+                                React.createElement("div", { key: "v", style: { fontFamily: "'Space Grotesk'", fontSize: 19, fontWeight: 800, color: "#020617" } }, s.totalKw.toFixed(1), React.createElement("span", { style: { fontSize: 12, color: "#94A3B8", fontWeight: 600 } }, " / " + s.ratedKw.toFixed(1) + " kW")),
                                 React.createElement("div", { key: "b", style: { display: "flex", alignItems: "center", gap: 7, marginTop: 7 } }, [
                                     React.createElement("div", { key: "track", style: { flex: 1, height: 6, borderRadius: 5, background: "rgba(148,163,184,.25)", overflow: "hidden" } }, React.createElement("div", { style: { width: pct + "%", height: "100%", borderRadius: 5, background: color } })),
                                     React.createElement("span", { key: "pct", style: { fontFamily: "'Space Grotesk'", fontWeight: 800, fontSize: 12, color } }, pct, "%"),
@@ -15070,26 +15070,26 @@ td{padding:8px 10px;border-bottom:1px solid #1E293B;color:#E2E8F0}
             emailNote && React.createElement("div", { style: { marginBottom: 14, padding: "8px 12px", borderRadius: 8, fontSize: 11.5, background: emailNote.ok ? "rgba(16,185,129,0.12)" : "rgba(220,38,38,0.12)", color: emailNote.ok ? "#34D399" : "#F87171", border: `1px solid ${emailNote.ok ? "#059669" : "#DC2626"}` } }, emailNote.text),
             React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 18 } },
                 React.createElement("div", { style: { background: "linear-gradient(135deg,#1E293B 0%,#0F172A 100%)", borderRadius: 12, padding: 15, border: "1px solid #334155", textAlign: "center", minHeight: 128 } },
-                    React.createElement("div", { style: { fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "#94A3B8", fontWeight: 800 } }, "Total Assets"),
+                    React.createElement("div", { style: { fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "#020617", fontWeight: 800 } }, "Total Assets"),
                     React.createElement("div", { style: { fontSize: 26, fontWeight: 800, color: "#6366F1", marginTop: 5, fontFamily: "'Space Grotesk'" } }, total),
                     React.createElement("div", { style: { fontSize: 9, color: "#64748B", marginTop: 3 } }, "All locations")),
                 React.createElement("div", { style: { background: "linear-gradient(135deg,#1E293B 0%,#0F172A 100%)", borderRadius: 12, padding: 15, border: "1px solid #334155", textAlign: "center", minHeight: 128 } },
-                    React.createElement("div", { style: { fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "#94A3B8", fontWeight: 800 } }, "Open Issues"),
+                    React.createElement("div", { style: { fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "#020617", fontWeight: 800 } }, "Open Issues"),
                     React.createElement("div", { style: { fontSize: 26, fontWeight: 800, color: "#EF4444", marginTop: 5, fontFamily: "'Space Grotesk'" } }, openIssues.length),
                     React.createElement("div", { style: { fontSize: 9, color: "#64748B", marginTop: 3 } }, "All locations")),
                 React.createElement("div", { style: { background: "linear-gradient(135deg,#1E293B 0%,#0F172A 100%)", borderRadius: 12, padding: 15, border: "1px solid #334155", minHeight: 128 } },
-                    React.createElement("div", { style: { textAlign: "center", fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "#94A3B8", fontWeight: 800 } }, "Activities"),
+                    React.createElement("div", { style: { textAlign: "center", fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "#020617", fontWeight: 800 } }, "Activities"),
                     React.createElement("div", { style: { textAlign: "center", fontSize: 26, fontWeight: 800, color: "#0EA5E9", marginTop: 5, fontFamily: "'Space Grotesk'" } }, actTotal),
                     React.createElement("div", { style: { textAlign: "center", fontSize: 9, color: "#64748B", marginTop: 3 } }, "Total activity records"),
-                    React.createElement("div", { style: { borderTop: "1px solid #334155", marginTop: 8, paddingTop: 7, fontSize: 9, color: "#94A3B8", fontWeight: 800, textTransform: "uppercase", textAlign: "left" } }, "Location-wise"),
+                    React.createElement("div", { style: { borderTop: "1px solid #334155", marginTop: 8, paddingTop: 7, fontSize: 9, color: "#020617", fontWeight: 800, textTransform: "uppercase", textAlign: "left" } }, "Location-wise"),
                     reportSites.map(site => React.createElement("div", { key: site, style: { display: "flex", justifyContent: "space-between", fontSize: 10, marginTop: 4, color: "#E2E8F0" } },
                         React.createElement("span", null, site),
                         React.createElement("strong", { style: { color: "#0EA5E9" } }, actBySite[site] || 0)))),
                 React.createElement("div", { style: { background: "linear-gradient(135deg,#1E293B 0%,#0F172A 100%)", borderRadius: 12, padding: 15, border: "1px solid #334155", minHeight: 128 } },
-                    React.createElement("div", { style: { textAlign: "center", fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "#94A3B8", fontWeight: 800 } }, "In Progress"),
+                    React.createElement("div", { style: { textAlign: "center", fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "#020617", fontWeight: 800 } }, "In Progress"),
                     React.createElement("div", { style: { textAlign: "center", fontSize: 26, fontWeight: 800, color: "#F59E0B", marginTop: 5, fontFamily: "'Space Grotesk'" } }, actInProgress),
                     React.createElement("div", { style: { textAlign: "center", fontSize: 9, color: "#64748B", marginTop: 3 } }, "Not yet completed"),
-                    React.createElement("div", { style: { borderTop: "1px solid #334155", marginTop: 8, paddingTop: 7, fontSize: 9, color: "#94A3B8", fontWeight: 800, textTransform: "uppercase", textAlign: "left" } }, "Location-wise"),
+                    React.createElement("div", { style: { borderTop: "1px solid #334155", marginTop: 8, paddingTop: 7, fontSize: 9, color: "#020617", fontWeight: 800, textTransform: "uppercase", textAlign: "left" } }, "Location-wise"),
                     reportSites.map(site => React.createElement("div", { key: site, style: { display: "flex", justifyContent: "space-between", fontSize: 10, marginTop: 4, color: "#E2E8F0" } },
                         React.createElement("span", null, site),
                         React.createElement("strong", { style: { color: "#F59E0B" } }, actInProgressBySite[site] || 0))))),
@@ -15121,12 +15121,12 @@ td{padding:8px 10px;border-bottom:1px solid #1E293B;color:#E2E8F0}
                     { label: "Completed", value: actCompleted, color: "#10B981" }
                 ].map(k => React.createElement("div", { key: k.label, style: { textAlign: "center", padding: "11px 6px", background: "#0F172A", borderRadius: 10, border: "1px solid #334155" } },
                     React.createElement("div", { style: { fontSize: 21, fontWeight: 800, color: k.color, fontFamily: "'Space Grotesk'" } }, k.value),
-                    React.createElement("div", { style: { fontSize: 9, color: "#64748B", textTransform: "uppercase", letterSpacing: .5, marginTop: 4 } }, k.label)))),
+                    React.createElement("div", { style: { fontSize: 9, color: "#020617", textTransform: "uppercase", letterSpacing: .5, marginTop: 4 } }, k.label)))),
                 React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 } },
                     React.createElement("div", null,
-                        React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: "#94A3B8", marginBottom: 10, textTransform: "uppercase" } }, "Activities by Location"),
+                        React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: "#020617", marginBottom: 10, textTransform: "uppercase" } }, "Activities by Location"),
                         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 8 } }, actSiteEntries.length ? actSiteEntries.map(([site, count]) => React.createElement("div", { key: site, style: { background: "#0F172A", border: "1px solid #334155", borderRadius: 9, padding: "10px 12px" } },
-                            React.createElement("div", { style: { fontSize: 10, color: "#94A3B8", fontWeight: 700, textTransform: "uppercase", letterSpacing: .5 } }, site),
+                            React.createElement("div", { style: { fontSize: 10, color: "#020617", fontWeight: 700, textTransform: "uppercase", letterSpacing: .5 } }, site),
                             React.createElement("div", { style: { fontSize: 22, fontWeight: 800, color: "#0EA5E9", fontFamily: "'Space Grotesk'", marginTop: 3 } }, count),
                             React.createElement("div", { style: { fontSize: 9, color: "#64748B", marginTop: 2 } }, "Total activities"))) : React.createElement("div", { style: { fontSize: 11, color: "#64748B" } }, "No activity records.")),
                         React.createElement("div", { style: { marginTop: 10, fontSize: 10, color: "#64748B" } }, "In Progress by Location"),
@@ -15140,10 +15140,10 @@ td{padding:8px 10px;border-bottom:1px solid #1E293B;color:#E2E8F0}
                             ": ",
                             actCompletedBySite[site] || 0)))),
                     React.createElement("div", null,
-                        React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: "#94A3B8", marginBottom: 10, textTransform: "uppercase" } }, "By Activity Type"),
+                        React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: "#020617", marginBottom: 10, textTransform: "uppercase" } }, "By Activity Type"),
                         bar(actTypeEntries, maxActType, 3, 105))),
                 React.createElement("div", { style: { marginTop: 12 } },
-                    React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: "#94A3B8", marginBottom: 10, textTransform: "uppercase" } }, "By Hardware Type"),
+                    React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: "#020617", marginBottom: 10, textTransform: "uppercase" } }, "By Hardware Type"),
                     bar(actHwEntries, maxActHw, 5, 105))),
             React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18, marginBottom: 18 } },
                 React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 18, border: "1px solid #334155" } },
@@ -15167,14 +15167,14 @@ td{padding:8px 10px;border-bottom:1px solid #1E293B;color:#E2E8F0}
                 React.createElement("div", { style: { overflowX: "auto" } },
                     React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 11 } },
                         React.createElement("thead", null,
-                            React.createElement("tr", null, ASSET_COLUMNS.map(c => React.createElement("th", { key: c.key, style: { textAlign: "left", padding: "8px 10px", borderBottom: "1px solid #334155", color: "#64748B", textTransform: "uppercase", fontSize: 9, whiteSpace: "nowrap" } }, c.label)))),
+                            React.createElement("tr", null, ASSET_COLUMNS.map(c => React.createElement("th", { key: c.key, style: { textAlign: "left", padding: "8px 10px", borderBottom: "1px solid #334155", color: "#020617", textTransform: "uppercase", fontSize: 9, whiteSpace: "nowrap" } }, c.label)))),
                         React.createElement("tbody", null, assets.map(a => React.createElement("tr", { key: a.id }, ASSET_COLUMNS.map(c => { const val = c.format ? c.format(a[c.key], a) : a[c.key]; return React.createElement("td", { key: c.key, style: { padding: "7px 10px", borderBottom: "1px solid #1E293B", color: "#E2E8F0", whiteSpace: "nowrap" } }, val != null && val !== "" ? val : "—"); }))))))),
             React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 18, border: "1px solid #334155" } },
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 14, fontWeight: 700, marginBottom: 10, color: "#fff" } }, "DC Activity Detail"),
                 React.createElement("div", { style: { overflowX: "auto" } },
                     React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 11 } },
                         React.createElement("thead", null,
-                            React.createElement("tr", null, ACTIVITY_COLUMNS.map(c => React.createElement("th", { key: c.key, style: { textAlign: "left", padding: "8px 10px", borderBottom: "1px solid #334155", color: "#64748B", textTransform: "uppercase", fontSize: 9, whiteSpace: "nowrap" } }, c.label)))),
+                            React.createElement("tr", null, ACTIVITY_COLUMNS.map(c => React.createElement("th", { key: c.key, style: { textAlign: "left", padding: "8px 10px", borderBottom: "1px solid #334155", color: "#020617", textTransform: "uppercase", fontSize: 9, whiteSpace: "nowrap" } }, c.label)))),
                         React.createElement("tbody", null, activities.map(a => React.createElement("tr", { key: a.id }, ACTIVITY_COLUMNS.map(c => { const val = c.format ? c.format(a[c.key], a) : a[c.key]; return React.createElement("td", { key: c.key, style: { padding: "7px 10px", borderBottom: "1px solid #1E293B", color: "#E2E8F0", whiteSpace: "nowrap" } }, val != null && val !== "" ? val : "—"); }))))))),
             React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", marginTop: 18, paddingTop: 14, borderTop: "1px solid #1E293B" } },
                 React.createElement("button", { onClick: downloadReport, title: "Download Report", style: { width: 52, height: 52, borderRadius: "50%", background: "linear-gradient(135deg,#6366F1,#4F46E5)", color: "#fff", border: "none", cursor: "pointer", boxShadow: "0 6px 22px rgba(79,70,229,0.55)", display: "flex", alignItems: "center", justifyContent: "center", transition: "transform 0.2s ease" }, onMouseEnter: e => e.currentTarget.style.transform = "scale(1.08)", onMouseLeave: e => e.currentTarget.style.transform = "scale(1)" },
@@ -15510,7 +15510,7 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
         (rackComponents || []).forEach((c) => { const k = String(c.hardwareType || "Other").trim() || "Other"; compCounts[k] = (compCounts[k] || 0) + 1; });
         const compList = Object.entries(compCounts).sort((x, y) => y[1] - x[1]);
         const compTotal = compList.reduce((n, e) => n + e[1], 0);
-        const lab = { fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "#64748B", fontWeight: 700, marginBottom: 8 };
+        const lab = { fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "#020617", fontWeight: 700, marginBottom: 8 };
         return E("div", { "data-summary": "assets-single", style: { background: "linear-gradient(135deg, #1E293B 0%, #0F172A 100%)", borderRadius: 12, padding: 16, border: "1px solid #334155", display: "grid", gridTemplateColumns: "minmax(140px, 0.6fr) minmax(0, 1fr) minmax(0, 1fr)", gap: 20, alignItems: "stretch" } },
             E("div", { style: { display: "flex", flexDirection: "column", justifyContent: "center", borderRight: "1px solid #334155", paddingRight: 16 } },
                 E("div", { style: lab }, "Total Assets"),
@@ -15565,7 +15565,7 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
             s: rows.some((r) => r.s) ? { loadWatts: sum((r) => r.s && r.s.loadWatts), capacityWatts: sum((r) => r.s && r.s.capacityWatts) } : null, d: rows.some((r) => r.d) ? { totalKw: sum((r) => r.d && r.d.totalKw), ratedKw: sum((r) => r.d && r.d.ratedKw) } : null,
             f: fwRows ? fwcCount(fwRows) : null, makes: (() => { const m = {}; rows.forEach((r) => Object.entries(r.makes).forEach(([k, v]) => { m[k] = (m[k] || 0) + v; })); return m; })(), srvN: srv.length,
             iss: { New: sum((r) => r.iss.New), "In Progress": sum((r) => r.iss["In Progress"]), Resolved: sum((r) => r.iss.Resolved), Completed: sum((r) => r.iss.Completed) }, tr: { pend: sum((r) => r.tr.pend), store: sum((r) => r.tr.store), rej: sum((r) => r.tr.rej) } };
-        const th = (t, extra) => E("th", { style: { textAlign: "right", padding: "5px 8px", fontSize: 8.5, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: .5, whiteSpace: "nowrap", ...extra } }, t);
+        const th = (t, extra) => E("th", { style: { textAlign: "right", padding: "5px 8px", fontSize: 8.5, fontWeight: 700, color: "#020617", textTransform: "uppercase", letterSpacing: .5, whiteSpace: "nowrap", ...extra } }, t);
         const grp = (t, span, color) => E("th", { colSpan: span, style: { padding: "6px 8px", fontSize: 10, fontWeight: 800, color, textAlign: "center", borderLeft: "1px solid #334155", borderBottom: `2px solid ${color}55`, textTransform: "uppercase", letterSpacing: .6 } }, t);
         const td = (v, color, first) => E("td", { style: { padding: "7px 8px", textAlign: "right", fontFamily: "'Space Grotesk'", fontSize: 12.5, fontWeight: 800, color: color || "#fff", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", borderLeft: first ? "1px solid #334155" : undefined } }, v);
         const nameCell = (r, isTotal) => E("td", { style: { padding: "7px 8px", whiteSpace: "nowrap" } }, E("span", { style: { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, fontWeight: 800, color: "#E2E8F0" } }, !isTotal && E("span", { style: { width: 8, height: 8, borderRadius: "50%", background: sc[r.st] || "#6366F1" } }), r.st));
@@ -15767,7 +15767,7 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
             React.createElement("div", { style: { display: "grid", gridTemplateColumns: singleLoc ? "1fr" : "minmax(220px, 0.7fr) minmax(0, 1.3fr)", gap: 12, marginBottom: 20 } },
                 singleLoc && assetsSingle(),
                 React.createElement("div", { style: { background: "linear-gradient(135deg, #1E293B 0%, #0F172A 100%)", borderRadius: 12, padding: 14, border: "1px solid #334155", textAlign: "center", display: singleLoc ? "none" : undefined } },
-                    React.createElement("div", { style: { fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "#64748B", fontWeight: 700 } }, "Assets"),
+                    React.createElement("div", { style: { fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "#020617", fontWeight: 700 } }, "Assets"),
                     React.createElement("div", { style: { fontSize: 24, fontWeight: 800, color: "#6366F1", marginTop: 6, fontFamily: "'Space Grotesk'" } }, totalAssets),
                     // Devices + rack components combined - called out explicitly since the
                     // Dashboard's "Installed Devices" tile is device-only, so the two numbers
@@ -15805,12 +15805,12 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                     { label: "Completed", value: actCompleted, color: "#10B981" }
                 ].map(k => React.createElement("div", { key: k.label, style: { textAlign: "center", padding: "11px 6px", background: "#0F172A", borderRadius: 10, border: "1px solid #334155" } },
                     React.createElement("div", { style: { fontSize: 21, fontWeight: 800, color: k.color, fontFamily: "'Space Grotesk'" } }, k.value),
-                    React.createElement("div", { style: { fontSize: 9, color: "#64748B", textTransform: "uppercase", letterSpacing: .5, marginTop: 4 } }, k.label)))),
+                    React.createElement("div", { style: { fontSize: 9, color: "#020617", textTransform: "uppercase", letterSpacing: .5, marginTop: 4 } }, k.label)))),
                 React.createElement("div", { style: { display: "grid", gridTemplateColumns: singleLoc ? "1fr" : "1fr 1fr", gap: 18 } },
                     React.createElement("div", { style: singleLoc ? { display: "none" } : undefined },
-                        React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: "#94A3B8", marginBottom: 10, textTransform: "uppercase" } }, "Activities by Location"),
+                        React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: "#020617", marginBottom: 10, textTransform: "uppercase" } }, "Activities by Location"),
                         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 8 } }, actSiteEntries.length ? actSiteEntries.map(([site, count]) => React.createElement("div", { key: site, style: { background: "#0F172A", border: "1px solid #334155", borderRadius: 9, padding: "10px 12px" } },
-                            React.createElement("div", { style: { fontSize: 10, color: "#94A3B8", fontWeight: 700, textTransform: "uppercase", letterSpacing: .5 } }, site),
+                            React.createElement("div", { style: { fontSize: 10, color: "#020617", fontWeight: 700, textTransform: "uppercase", letterSpacing: .5 } }, site),
                             React.createElement("div", { style: { fontSize: 22, fontWeight: 800, color: "#0EA5E9", fontFamily: "'Space Grotesk'", marginTop: 3 } }, count),
                             React.createElement("div", { style: { fontSize: 9, color: "#64748B", marginTop: 2 } }, "Total activities"))) : React.createElement("div", { style: { fontSize: 11, color: "#64748B" } }, "No activity records.")),
                         React.createElement("div", { style: { marginTop: 10, fontSize: 10, color: "#64748B" } }, "In Progress by Location"),
@@ -15824,7 +15824,7 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                             ": ",
                             actCompletedBySite[site] || 0)))),
                     React.createElement("div", null,
-                        React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: "#94A3B8", marginBottom: 10, textTransform: "uppercase" } }, "Activity Notes"),
+                        React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: "#020617", marginBottom: 10, textTransform: "uppercase" } }, "Activity Notes"),
                         // A short text summary instead of a donut chart - the counts are
                         // already captured per type, so a ranked list reads faster than a
                         // chart + separate legend did.
@@ -15927,13 +15927,13 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                             React.createElement("div", { style: { display: singleLoc ? "grid" : "none", gridTemplateColumns: "repeat(3, 1fr)", gap: 6, marginBottom: 10 } },
                                 React.createElement("div", { style: { textAlign: "center", background: "#0F172A", borderRadius: 8, padding: "7px 4px" } },
                                     React.createElement("div", { style: { fontSize: 16, fontWeight: 800, color: "#fff" } }, sd.siteMovements.length),
-                                    React.createElement("div", { style: { fontSize: 8, color: "#64748B", textTransform: "uppercase" } }, "Total")),
+                                    React.createElement("div", { style: { fontSize: 8, color: "#020617", textTransform: "uppercase" } }, "Total")),
                                 React.createElement("div", { style: { textAlign: "center", background: "#0F172A", borderRadius: 8, padding: "7px 4px" } },
                                     React.createElement("div", { style: { fontSize: 16, fontWeight: 800, color: "#10B981" } }, sd.siteMovements.filter(m => m.movementType === 'Inward').length),
-                                    React.createElement("div", { style: { fontSize: 8, color: "#64748B", textTransform: "uppercase" } }, "Inward")),
+                                    React.createElement("div", { style: { fontSize: 8, color: "#020617", textTransform: "uppercase" } }, "Inward")),
                                 React.createElement("div", { style: { textAlign: "center", background: "#0F172A", borderRadius: 8, padding: "7px 4px" } },
                                     React.createElement("div", { style: { fontSize: 16, fontWeight: 800, color: "#EF4444" } }, sd.siteMovements.filter(m => m.movementType === 'Outward').length),
-                                    React.createElement("div", { style: { fontSize: 8, color: "#64748B", textTransform: "uppercase" } }, "Outward"))),
+                                    React.createElement("div", { style: { fontSize: 8, color: "#020617", textTransform: "uppercase" } }, "Outward"))),
                             (() => {
                                 // Items moved, split by direction so a received item is never mixed with a sent-out one.
                                 const labelW = singleLoc ? 190 : 130;
@@ -15963,7 +15963,7 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                             })())),
                     React.createElement("div", { style: { background: "#1E293B", borderRadius: 12, padding: 16, border: "1px solid #334155" } },
                         React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, marginBottom: 4, color: "#fff" } }, "Zone-wise Rack Overview"),
-                        React.createElement("div", { style: { fontSize: 11, color: "#64748B", marginBottom: 12 } }, "Per-zone rack count, occupancy, and U-space utilization (used U / total rack capacity U)."),
+                        React.createElement("div", { style: { fontSize: 11, color: "#020617", marginBottom: 12 } }, "Per-zone rack count, occupancy, and U-space utilization (used U / total rack capacity U)."),
                         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 } },
                             sd.zoneRackData.map(zd => (React.createElement("div", { key: zd.zone, style: { background: "#0F172A", borderRadius: 10, padding: 12, border: "1px solid #334155" } },
                                 React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 } },
@@ -15974,18 +15974,18 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                                 React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 } },
                                     React.createElement("div", { style: { textAlign: "center" } },
                                         React.createElement("div", { style: { fontSize: 16, fontWeight: 800, color: "#fff", fontFamily: "'Space Grotesk'" } }, zd.totalRacks),
-                                        React.createElement("div", { style: { fontSize: 9, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.5 } }, "Total Racks")),
+                                        React.createElement("div", { style: { fontSize: 9, color: "#020617", textTransform: "uppercase", letterSpacing: 0.5 } }, "Total Racks")),
                                     React.createElement("div", { style: { textAlign: "center" } },
                                         React.createElement("div", { style: { fontSize: 16, fontWeight: 800, color: "#10B981", fontFamily: "'Space Grotesk'" } }, zd.usedRacks),
-                                        React.createElement("div", { style: { fontSize: 9, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.5 } }, "Racks with Devices")),
+                                        React.createElement("div", { style: { fontSize: 9, color: "#020617", textTransform: "uppercase", letterSpacing: 0.5 } }, "Racks with Devices")),
                                     React.createElement("div", { style: { textAlign: "center" } },
                                         React.createElement("div", { style: { fontSize: 16, fontWeight: 800, color: "#F59E0B", fontFamily: "'Space Grotesk'" } }, zd.emptyRacks),
-                                        React.createElement("div", { style: { fontSize: 9, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.5 } }, "Empty Racks")),
+                                        React.createElement("div", { style: { fontSize: 9, color: "#020617", textTransform: "uppercase", letterSpacing: 0.5 } }, "Empty Racks")),
                                     React.createElement("div", { style: { textAlign: "center" } },
                                         React.createElement("div", { style: { fontSize: 16, fontWeight: 800, color: "#0EA5E9", fontFamily: "'Space Grotesk'" } },
                                             zd.utilPct,
                                             "%"),
-                                        React.createElement("div", { style: { fontSize: 9, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.5 } }, "U Utilization"),
+                                        React.createElement("div", { style: { fontSize: 9, color: "#020617", textTransform: "uppercase", letterSpacing: 0.5 } }, "U Utilization"),
                                         React.createElement("div", { style: { fontSize: 9, color: "#475569", marginTop: 2, fontFamily: "'JetBrains Mono'" } },
                                             zd.usedU,
                                             "U used / ",
@@ -16035,9 +16035,9 @@ function OverallSummaryModal({ assets, rackComponents, issues, activities, movem
                                     React.createElement("option", { value: "total" }, "Sort: Total (high to low)"),
                                     React.createElement("option", { value: "name" }, "Sort: Name (A to Z)"))),
                             React.createElement("div", { style: { display: "grid", gridTemplateColumns: `1.4fr ${zoneNames.map(() => colW + "px").join(" ")} 80px`, gap: 0, borderRadius: 8, overflow: "hidden", border: "1px solid #334155" } },
-                                React.createElement("div", { style: { padding: "8px 10px", background: "#0F172A", fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.5, borderBottom: "1px solid #334155", borderRight: "1px solid #334155" } }, mixBy === "type" ? "Hardware Type" : "Vendor"),
-                                zoneNames.map(zn => (React.createElement("div", { key: zn, style: { padding: "8px 10px", background: "#0F172A", fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.5, textAlign: "center", borderBottom: "1px solid #334155", borderRight: "1px solid #334155" } }, zn))),
-                                React.createElement("div", { style: { padding: "8px 10px", background: "#0F172A", fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.5, textAlign: "center", borderBottom: "1px solid #334155" } }, "Total"),
+                                React.createElement("div", { style: { padding: "8px 10px", background: "#0F172A", fontSize: 10, fontWeight: 700, color: "#020617", textTransform: "uppercase", letterSpacing: 0.5, borderBottom: "1px solid #334155", borderRight: "1px solid #334155" } }, mixBy === "type" ? "Hardware Type" : "Vendor"),
+                                zoneNames.map(zn => (React.createElement("div", { key: zn, style: { padding: "8px 10px", background: "#0F172A", fontSize: 10, fontWeight: 700, color: "#020617", textTransform: "uppercase", letterSpacing: 0.5, textAlign: "center", borderBottom: "1px solid #334155", borderRight: "1px solid #334155" } }, zn))),
+                                React.createElement("div", { style: { padding: "8px 10px", background: "#0F172A", fontSize: 10, fontWeight: 700, color: "#020617", textTransform: "uppercase", letterSpacing: 0.5, textAlign: "center", borderBottom: "1px solid #334155" } }, "Total"),
                                 allRows.map((r, ri) => {
                                     const isGrand = r.hw === "Grand Total";
                                     const bg = isGrand ? "rgba(99,102,241,0.12)" : (ri % 2 === 0 ? "#1E293B" : "#172033");
@@ -16129,7 +16129,7 @@ function buildPduSparkSvg(rows) {
     const area = path + `L${W},${H} L0,${H} Z`;
     return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:100%;display:block"><defs><linearGradient id="pduSparkFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#3157EE" stop-opacity="0.3"/><stop offset="100%" stop-color="#3157EE" stop-opacity="0.02"/></linearGradient></defs><path d="${area}" fill="url(#pduSparkFill)"/><path d="${path}" fill="none" stroke="#3157EE" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 }
-const PDU_LABEL_STYLE = { display: "block", fontFamily: "Inter", fontSize: 10, fontWeight: 800, letterSpacing: ".04em", textTransform: "uppercase", color: "#64748B", marginBottom: 5 };
+const PDU_LABEL_STYLE = { display: "block", fontFamily: "Inter", fontSize: 10, fontWeight: 800, letterSpacing: ".04em", textTransform: "uppercase", color: "#020617", marginBottom: 5 };
 const PDU_RACK_COLUMNS = [
     { key: "site", label: "Site" },
     { key: "zone", label: "Zone" },
@@ -16220,12 +16220,12 @@ function PduImportModal({ onClose, onDone }) {
     const c = report && report.counts;
     const statLabel = { invalid: "Invalid", denied: "Access denied", duplicate_in_file: "Duplicate" };
     const stat = (label, value, color) => React.createElement("div", { key: label, style: { flex: "1 1 120px", background: "rgba(148,163,184,.12)", borderRadius: 10, padding: "8px 12px" } },
-        React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#64748B", textTransform: "uppercase", letterSpacing: .4 } }, label),
+        React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#020617", textTransform: "uppercase", letterSpacing: .4 } }, label),
         React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 22, fontWeight: 800, color } }, value));
     return ReactDOM.createPortal(React.createElement("div", { className: "pdu-modal-backdrop", style: { position: "fixed", inset: 0, background: "rgba(14,18,28,0.5)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 90 }, onClick: busy ? undefined : onClose },
         React.createElement("div", { onClick: (e) => e.stopPropagation(), className: "neu-card pdu-modal-pop", style: { width: 760, maxWidth: "94vw", maxHeight: "90vh", overflowY: "auto", padding: 26 } },
-            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#1E293B", marginBottom: 4 } }, "Bulk Import PDUs"),
-            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#64748B", marginBottom: 14, lineHeight: 1.5 } }, "Choose a sheet (.xlsx or .csv) with Site, Rack No and IP Address columns at minimum. A row whose IP already exists updates that PDU instead of creating a duplicate. Nothing is saved until you press Import."),
+            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617", marginBottom: 4 } }, "Bulk Import PDUs"),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#020617", marginBottom: 14, lineHeight: 1.5 } }, "Choose a sheet (.xlsx or .csv) with Site, Rack No and IP Address columns at minimum. A row whose IP already exists updates that PDU instead of creating a duplicate. Nothing is saved until you press Import."),
             React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 14 } },
                 React.createElement("button", { onClick: () => fileRef.current && fileRef.current.click(), disabled: busy, className: "neu-btn-secondary", style: { display: "flex", alignItems: "center", gap: 6 } }, React.createElement(Upload, { s: 14 }), " Choose sheet"),
                 React.createElement("button", { onClick: downloadPduImportTemplate, disabled: busy, className: "neu-btn-secondary", style: { display: "flex", alignItems: "center", gap: 6, fontSize: 12 } }, React.createElement(Download, { s: 14 }), " Download template"),
@@ -16241,7 +16241,7 @@ function PduImportModal({ onClose, onDone }) {
                 c.duplicateInFile ? stat("Duplicates", c.duplicateInFile, "#64748B") : null),
             report && report.issues && report.issues.length > 0 && React.createElement("div", { style: { maxHeight: 240, overflow: "auto", border: "1px solid rgba(148,163,184,.35)", borderRadius: 10, marginBottom: 14 } },
                 React.createElement("table", { style: { borderCollapse: "collapse", width: "100%", fontFamily: "Inter", fontSize: 12 } },
-                    React.createElement("thead", null, React.createElement("tr", null, ["Row", "IP", "Result", "Detail"].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "7px 10px", fontSize: 10.5, color: "#64748B", textTransform: "uppercase", position: "sticky", top: 0, background: "#F8FAFC" } }, h)))),
+                    React.createElement("thead", null, React.createElement("tr", null, ["Row", "IP", "Result", "Detail"].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "7px 10px", fontSize: 10.5, color: "#020617", textTransform: "uppercase", position: "sticky", top: 0, background: "#F8FAFC" } }, h)))),
                     React.createElement("tbody", null, report.issues.slice(0, 300).map((i, n) => React.createElement("tr", { key: n, style: { borderTop: "0.5px solid rgba(148,163,184,.3)" } },
                         React.createElement("td", { style: { padding: "6px 10px", fontFamily: "'JetBrains Mono'" } }, i.row),
                         React.createElement("td", { style: { padding: "6px 10px", fontFamily: "'JetBrains Mono'" } }, i.ip || "—"),
@@ -16316,15 +16316,15 @@ function PduDiscoveryModal({ onClose, onDone }) {
     };
     const c = report || { scanned: 0, enrichable: [], unreachable: [], newFound: [], alreadyComplete: 0, ranges: [] };
     const stat = (label, value, color) => React.createElement("div", { key: label, style: { flex: "1 1 110px", background: "rgba(148,163,184,.12)", borderRadius: 10, padding: "8px 12px" } },
-        React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10, color: "#64748B", textTransform: "uppercase", letterSpacing: .4 } }, label),
+        React.createElement("div", { style: { fontFamily: "Inter", fontSize: 10, color: "#020617", textTransform: "uppercase", letterSpacing: .4 } }, label),
         React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 20, fontWeight: 800, color } }, value));
-    const th = (h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "7px 10px", fontSize: 10, color: "#64748B", textTransform: "uppercase", position: "sticky", top: 0, background: "#F8FAFC" } }, h);
+    const th = (h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "7px 10px", fontSize: 10, color: "#020617", textTransform: "uppercase", position: "sticky", top: 0, background: "#F8FAFC" } }, h);
     return ReactDOM.createPortal(React.createElement("div", { className: "pdu-modal-backdrop", style: { position: "fixed", inset: 0, background: "rgba(14,18,28,0.5)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 90, padding: 20 }, onClick: onClose },
         React.createElement("div", { onClick: (e) => e.stopPropagation(), className: "neu-card pdu-modal-pop", style: { width: 900, maxWidth: "96vw", maxHeight: "90vh", overflowY: "auto", padding: 26 } },
             React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 } },
-                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#1E293B" } }, "Discover PDUs"),
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617" } }, "Discover PDUs"),
                 React.createElement("button", { onClick: () => scan(), disabled: loading, className: "neu-btn-secondary", style: { fontSize: 11.5, padding: "7px 12px" } }, loading ? "Scanning…" : "↻ Rescan")),
-            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#64748B", marginBottom: 14, lineHeight: 1.5 } }, c.ranges.length ? ("Scanning " + c.ranges.map((r) => `${r.startIp}–${r.endIp} (${r.site} · ${r.zone})`).join(", ") + " via SNMP - nothing is saved until you apply or add below.") : "Scans the IP range(s) your admin configured in PDU_DISCOVERY_RANGES (.env)."),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#020617", marginBottom: 14, lineHeight: 1.5 } }, c.ranges.length ? ("Scanning " + c.ranges.map((r) => `${r.startIp}–${r.endIp} (${r.site} · ${r.zone})`).join(", ") + " via SNMP - nothing is saved until you apply or add below.") : "Scans the IP range(s) your admin configured in PDU_DISCOVERY_RANGES (.env)."),
             err && React.createElement("div", { style: { background: "#FEF2F2", border: "1px solid rgba(220,38,38,.3)", color: "#991B1B", borderRadius: 10, padding: "10px 12px", fontFamily: "Inter", fontSize: 12.5, marginBottom: 12 } }, err),
             loading && !report && React.createElement("div", { style: { textAlign: "center", padding: "30px 0", color: "#64748B", fontFamily: "Inter" } }, "Scanning the configured range(s) — this can take a few seconds…"),
             report && React.createElement(React.Fragment, null, [
@@ -16334,7 +16334,7 @@ function PduDiscoveryModal({ onClose, onDone }) {
                     stat("New found", c.newFound.length, "#7C3AED")),
                 c.enrichable.length > 0 && React.createElement("div", { key: "enrich", style: { marginBottom: 18 } }, [
                     React.createElement("div", { key: "h", style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 } }, [
-                        React.createElement("div", { key: "t", style: { fontFamily: "'Space Grotesk'", fontSize: 13.5, fontWeight: 800, color: "#17345D" } }, "Fill in missing Vendor / Model / Serial / Firmware"),
+                        React.createElement("div", { key: "t", style: { fontFamily: "'Space Grotesk'", fontSize: 13.5, fontWeight: 800, color: "#020617" } }, "Fill in missing Vendor / Model / Serial / Firmware"),
                         React.createElement("button", { key: "b", onClick: applyEnrich, disabled: applying || !selectedEnrich.size, className: "neu-btn-primary", style: { fontSize: 11.5, padding: "7px 14px" } }, applying ? "Applying…" : `Apply to ${selectedEnrich.size}`),
                     ]),
                     applyMsg && React.createElement("div", { key: "msg", style: { fontFamily: "Inter", fontSize: 12, color: "#244DE5", marginBottom: 8 } }, applyMsg),
@@ -16353,7 +16353,7 @@ function PduDiscoveryModal({ onClose, onDone }) {
                 ]),
                 c.newFound.length > 0 && React.createElement("div", { key: "new", style: { marginBottom: 18 } }, [
                     React.createElement("div", { key: "h", style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 } }, [
-                        React.createElement("div", { key: "t", style: { fontFamily: "'Space Grotesk'", fontSize: 13.5, fontWeight: 800, color: "#17345D" } }, "Found on the network, not in your PDU list yet"),
+                        React.createElement("div", { key: "t", style: { fontFamily: "'Space Grotesk'", fontSize: 13.5, fontWeight: 800, color: "#020617" } }, "Found on the network, not in your PDU list yet"),
                         React.createElement("button", { key: "b", onClick: addSelectedNew, disabled: adding || !newRows.some((r) => r.selected), className: "neu-btn-primary", style: { fontSize: 11.5, padding: "7px 14px" } }, adding ? "Adding…" : `Add ${newRows.filter((r) => r.selected).length} PDU(s)`),
                     ]),
                     React.createElement("div", { key: "hint", style: { fontFamily: "Inter", fontSize: 11.5, color: "#94A3B8", marginBottom: 8 } }, "Rack No is required per device - SNMP can't tell us which rack a device is physically in."),
@@ -16373,7 +16373,7 @@ function PduDiscoveryModal({ onClose, onDone }) {
                         ])),
                 ]),
                 c.unreachable.length > 0 && React.createElement("div", { key: "unreach" }, [
-                    React.createElement("div", { key: "t", style: { fontFamily: "'Space Grotesk'", fontSize: 13.5, fontWeight: 800, color: "#17345D", marginBottom: 8 } }, "Existing PDUs that didn't respond this scan"),
+                    React.createElement("div", { key: "t", style: { fontFamily: "'Space Grotesk'", fontSize: 13.5, fontWeight: 800, color: "#020617", marginBottom: 8 } }, "Existing PDUs that didn't respond this scan"),
                     React.createElement("div", { key: "list", style: { display: "flex", flexWrap: "wrap", gap: 8 } }, c.unreachable.map((u) => React.createElement("div", { key: u.id, style: { fontFamily: "Inter", fontSize: 11.5, color: "#DC2626", background: "rgba(220,38,38,.08)", padding: "5px 10px", borderRadius: 8 } }, u.ipAddress + " (" + u.site + " · Rack " + u.rackNo + ")"))),
                 ]),
                 !c.enrichable.length && !c.newFound.length && !c.unreachable.length && React.createElement("div", { key: "empty", style: { textAlign: "center", padding: "20px 0", color: "#64748B", fontFamily: "Inter", fontSize: 13 } }, "Everything in range is already up to date."),
@@ -16490,8 +16490,8 @@ function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
     return React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(14,18,28,.45)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, zIndex: 400 }, onClick: onClose },
         React.createElement("div", { className: "neu-card anim-in d1", style: { width: 640, maxWidth: "94vw", maxHeight: "90vh", overflowY: "auto", padding: 28, position: "relative" }, onClick: (e) => e.stopPropagation() },
             React.createElement("button", { onClick: onClose, style: { position: "absolute", top: 18, right: 20, background: "none", border: "none", fontSize: 20, color: "#94A3B8", cursor: "pointer" } }, "×"),
-            React.createElement("h2", { style: { margin: "0 0 3px", fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#17345D" } }, isNew ? "Add PDU" : "Edit PDU"),
-            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", marginBottom: 18 } }, "Enter the rack + IP, then auto-detect — or fill everything in manually if the unit isn't reachable yet."),
+            React.createElement("h2", { style: { margin: "0 0 3px", fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617" } }, isNew ? "Add PDU" : "Edit PDU"),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#020617", marginBottom: 18 } }, "Enter the rack + IP, then auto-detect — or fill everything in manually if the unit isn't reachable yet."),
             React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 12 } },
                 React.createElement("div", { style: { flex: 1 } },
                     React.createElement("label", { style: PDU_LABEL_STYLE }, "Site"),
@@ -16577,15 +16577,15 @@ function PduTrendModal({ site, zone, allowedSites, zonesForSite, onClose }) {
     const statTiles = [["Period Total Energy", Math.round(total) + " kWh"], ["Average Load", avg.toFixed(2) + " kW"], ["Peak Load", peak.toFixed(2) + " kW"], ["Days with Data", String(rows.length)]];
     const statRow = React.createElement("div", { key: "stats", style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 } },
         statTiles.map(([label, val]) => React.createElement("div", { key: label, style: { flex: 1, minWidth: 130, background: "linear-gradient(145deg,rgba(255,255,255,.95),rgba(240,245,252,.9))", border: "1px solid rgba(255,255,255,.85)", borderRadius: 13, padding: "11px 13px" } }, [
-            React.createElement("small", { key: "s", style: { display: "block", fontFamily: "Inter", fontSize: 9, fontWeight: 800, letterSpacing: ".05em", textTransform: "uppercase", color: "#64748B" } }, label),
-            React.createElement("b", { key: "v", style: { display: "block", marginTop: 3, fontFamily: "'Space Grotesk'", fontSize: 17, fontWeight: 800, color: "#17345D" } }, val),
+            React.createElement("small", { key: "s", style: { display: "block", fontFamily: "Inter", fontSize: 9, fontWeight: 800, letterSpacing: ".05em", textTransform: "uppercase", color: "#020617" } }, label),
+            React.createElement("b", { key: "v", style: { display: "block", marginTop: 3, fontFamily: "'Space Grotesk'", fontSize: 17, fontWeight: 800, color: "#020617" } }, val),
         ])));
     const sectionDivider = React.createElement("div", { key: "divider", style: { margin: "4px 0 10px", display: "flex", alignItems: "center", gap: 10 } }, [
-        React.createElement("h3", { key: "h", style: { margin: 0, fontFamily: "Inter", fontSize: 12, fontWeight: 800, color: "#64748B", textTransform: "uppercase", letterSpacing: ".05em" } }, "Date-wise Values"),
+        React.createElement("h3", { key: "h", style: { margin: 0, fontFamily: "Inter", fontSize: 12, fontWeight: 800, color: "#020617", textTransform: "uppercase", letterSpacing: ".05em" } }, "Date-wise Values"),
         React.createElement("div", { key: "l", style: { flex: 1, height: 1, background: "rgba(148,163,184,.3)" } }),
     ]);
     const tableHead = React.createElement("thead", { key: "thead" }, React.createElement("tr", null,
-        ["Date", "Avg Load (kW)", "Peak Load (kW)", "Energy (kWh)"].map((h) => React.createElement("th", { key: h, style: { position: "sticky", top: 0, background: "#fff", textAlign: "left", padding: "9px 14px", fontSize: 10, fontWeight: 800, color: "#64748B", textTransform: "uppercase", letterSpacing: ".05em", borderBottom: "1px solid rgba(148,163,184,.25)" } }, h))));
+        ["Date", "Avg Load (kW)", "Peak Load (kW)", "Energy (kWh)"].map((h) => React.createElement("th", { key: h, style: { position: "sticky", top: 0, background: "#fff", textAlign: "left", padding: "9px 14px", fontSize: 10, fontWeight: 800, color: "#020617", textTransform: "uppercase", letterSpacing: ".05em", borderBottom: "1px solid rgba(148,163,184,.25)" } }, h))));
     const tableBodyRows = rows.slice().reverse().map((r) => React.createElement("tr", { key: r.date },
         [r.date, r.avgKw.toFixed(2), r.peakKw.toFixed(2), Math.round(r.energyKwh)].map((v, i) => React.createElement("td", { key: i, style: { padding: "9px 14px", borderBottom: "1px solid rgba(148,163,184,.1)" } }, v))));
     if (!rows.length) {
@@ -16595,8 +16595,8 @@ function PduTrendModal({ site, zone, allowedSites, zonesForSite, onClose }) {
         React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12.5, fontFamily: "Inter" } }, [tableHead, React.createElement("tbody", { key: "tbody" }, tableBodyRows)]));
     const modalBody = [
         React.createElement("button", { key: "close", onClick: onClose, style: { position: "absolute", top: 18, right: 20, background: "none", border: "none", fontSize: 20, color: "#94A3B8", cursor: "pointer" } }, "×"),
-        React.createElement("h2", { key: "h2", style: { margin: "0 0 3px", fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#17345D" } }, "Power Consumption · Date Range Report"),
-        React.createElement("div", { key: "sub", style: { fontFamily: "Inter", fontSize: 12, color: "#64748B", marginBottom: 16 } }, "Showing " + (mSite === "all" ? "All Sites" : (mZone === "all" ? mSite : mSite + " · " + mZone)) + " — choose a preset or a custom From/To date."),
+        React.createElement("h2", { key: "h2", style: { margin: "0 0 3px", fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617" } }, "Power Consumption · Date Range Report"),
+        React.createElement("div", { key: "sub", style: { fontFamily: "Inter", fontSize: 12, color: "#020617", marginBottom: 16 } }, "Showing " + (mSite === "all" ? "All Sites" : (mZone === "all" ? mSite : mSite + " · " + mZone)) + " — choose a preset or a custom From/To date."),
         siteZoneRow, presetRow, dateRow, chartDiv, statRow, sectionDivider, tableWrap,
     ];
     return React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(14,18,28,.45)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, zIndex: 400 }, onClick: onClose },
@@ -16682,12 +16682,12 @@ function PduPage({ allowedSites = [], canEdit = false }) {
                     ["Total Load / Capacity", overall.totalKw.toFixed(1) + " / " + overall.ratedKw.toFixed(1) + "kW", usedPctOverall + "% of rated capacity used", null],
                     ["Highest Rack Load", highestLoadRack ? highestLoadRack.usedPct + "%" : "—", highestLoadRack ? "Rack-" + highestLoadRack.rackNo + " — " + (highestLoadRack.usedPct >= 85 ? "nearing max" : highestLoadRack.usedPct >= 70 ? "high load" : "within capacity") : "no data yet", highestLoadRack ? pduLoadColor(highestLoadRack.usedPct) : null],
                     ["Online PDUs", overall.onlineCount + " / " + overall.pduCount, "currently reporting", null]].map(([label, val, sub, color]) => React.createElement("div", { key: label, className: "sample-kpi", style: { display: "flex", flexDirection: "column", gap: 4, padding: "14px 16px" } },
-                    React.createElement("small", { style: { fontFamily: "Inter", fontSize: 9, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: "#64748B" } }, label),
+                    React.createElement("small", { style: { fontFamily: "Inter", fontSize: 9, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: "#020617" } }, label),
                     React.createElement("b", { style: { fontFamily: "'Space Grotesk'", fontSize: 21, fontWeight: 800, color: color || "#17345D" } }, val),
                     React.createElement("span", { style: { fontFamily: "Inter", fontSize: 10.5, color: "#94A3B8", fontWeight: 600 } }, sub)))),
             React.createElement("div", { className: "neu-card anim-in d1", style: { padding: "18px 20px", marginBottom: 18, display: "flex", alignItems: "center", gap: 22, flexWrap: "wrap", cursor: "pointer" }, onClick: () => setTrendOpen(true) },
                 React.createElement("div", { style: { flex: 1, minWidth: 220 } },
-                    React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#17345D" } }, "⚡ Power Consumption Trend"),
+                    React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#020617" } }, "⚡ Power Consumption Trend"),
                     React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginTop: 3 } }, "Last 30 days across all your locations — click to customize the date range")),
                 React.createElement("div", { ref: sparkRef, style: { flex: "0 0 220px", height: 56 } }),
                 React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, fontWeight: 700, color: "#244DE5", background: "rgba(49,87,238,.08)", padding: "9px 14px", borderRadius: 20 } }, "View & Customize ›")),
@@ -16695,8 +16695,8 @@ function PduPage({ allowedSites = [], canEdit = false }) {
                 React.createElement("div", { style: { overflowX: "auto" } },
                     React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 13, fontFamily: "Inter" } },
                         React.createElement("thead", null, React.createElement("tr", null, [
-                            ...PDU_RACK_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, sortKey: listSort.key, sortDir: listSort.dir, onSort: listSort.onSort, style: { textAlign: "left", padding: "10px 14px", fontSize: 9.5, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: "#64748B", borderBottom: "1px solid rgba(148,163,184,.25)", whiteSpace: "nowrap" } })),
-                            ...["Load / Rated Capacity", "Capacity Used", "Last Reading", ""].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "10px 14px", fontSize: 9.5, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: "#64748B", borderBottom: "1px solid rgba(148,163,184,.25)", whiteSpace: "nowrap" } }, h)),
+                            ...PDU_RACK_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, sortKey: listSort.key, sortDir: listSort.dir, onSort: listSort.onSort, style: { textAlign: "left", padding: "10px 14px", fontSize: 9.5, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: "#020617", borderBottom: "1px solid rgba(148,163,184,.25)", whiteSpace: "nowrap" } })),
+                            ...["Load / Rated Capacity", "Capacity Used", "Last Reading", ""].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "10px 14px", fontSize: 9.5, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: "#020617", borderBottom: "1px solid rgba(148,163,184,.25)", whiteSpace: "nowrap" } }, h)),
                         ])),
                         React.createElement("tbody", null, filteredRacks.length === 0 ? React.createElement("tr", null, React.createElement("td", { colSpan: 10, style: { padding: 30, textAlign: "center", color: "#94A3B8" } }, "No racks match the current filters.")) : filteredRacks.map((rack) => {
                             const { totalKw, ratedKw, usedPct, phaseLabel } = pduRackTotals(rack);
@@ -16718,10 +16718,10 @@ function PduPage({ allowedSites = [], canEdit = false }) {
                                 open && React.createElement("tr", null, React.createElement("td", { colSpan: 10, style: { padding: "0 14px 18px 20px", borderBottom: "1px solid rgba(148,163,184,.14)" } },
                                     React.createElement("div", { style: { display: "grid", gridTemplateColumns: rack.feeds.length > 1 ? "1fr 1fr" : "1fr", gap: 10, marginTop: 6 } }, rack.feeds.map((f) => React.createElement("div", { key: f.id, style: { background: f.status === "offline" ? "rgba(241,245,249,.9)" : "rgba(255,255,255,.92)", border: "1px solid rgba(255,255,255,.95)", borderRadius: 13, padding: "11px 13px" } },
                                         React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 7 } }, React.createElement("b", { style: { fontSize: 12 } }, f.feedLabel), React.createElement(PduBadge, { kind: "status", text: f.status })),
-                                        React.createElement("div", { style: { fontSize: 10.5, color: "#64748B", marginBottom: 3 } }, [f.vendor, f.model].filter(Boolean).join(" ") || "Vendor/model not set"),
+                                        React.createElement("div", { style: { fontSize: 10.5, color: "#020617", marginBottom: 3 } }, [f.vendor, f.model].filter(Boolean).join(" ") || "Vendor/model not set"),
                                         React.createElement("div", { style: { fontSize: 10, color: "#94A3B8", fontFamily: "monospace", marginBottom: 8 } }, "S/N ", f.serialNumber || "—", " · ", f.ipAddress),
                                         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 7 } },
-                                            [["Power", f.lastPowerKw != null ? f.lastPowerKw.toFixed(2) + " kW" : "—"], ["Max Load", f.maxLoadKw != null ? f.maxLoadKw.toFixed(1) + " kW" : "—"], ["Capacity Used", f.lastPowerKw != null && f.maxLoadKw ? Math.round(f.lastPowerKw / f.maxLoadKw * 100) + "%" : "—"]].map(([l, v]) => React.createElement("div", { key: l }, React.createElement("small", { style: { display: "block", fontSize: 8.5, fontWeight: 700, textTransform: "uppercase", color: "#94A3B8" } }, l), React.createElement("b", { style: { fontFamily: "'Space Grotesk'", fontSize: 13 } }, v)))),
+                                            [["Power", f.lastPowerKw != null ? f.lastPowerKw.toFixed(2) + " kW" : "—"], ["Max Load", f.maxLoadKw != null ? f.maxLoadKw.toFixed(1) + " kW" : "—"], ["Capacity Used", f.lastPowerKw != null && f.maxLoadKw ? Math.round(f.lastPowerKw / f.maxLoadKw * 100) + "%" : "—"]].map(([l, v]) => React.createElement("div", { key: l }, React.createElement("small", { style: { display: "block", fontSize: 8.5, fontWeight: 700, textTransform: "uppercase", color: "#020617" } }, l), React.createElement("b", { style: { fontFamily: "'Space Grotesk'", fontSize: 13 } }, v)))),
                                         f.lastError && React.createElement("div", { style: { marginTop: 7, fontSize: 10, color: "#EA7A0C" } }, f.lastError),
                                         canEdit && React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 9 } },
                                             React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 11, padding: "6px 12px" }, onClick: (e) => { e.stopPropagation(); setEditing(f); } }, "✎ Edit"),
@@ -16733,8 +16733,8 @@ function PduPage({ allowedSites = [], canEdit = false }) {
         discoveryOpen && React.createElement(PduDiscoveryModal, { onClose: () => setDiscoveryOpen(false), onDone: load }),
         deleteConfirm && React.createElement("div", { className: "pdu-modal-backdrop", style: { position: "fixed", inset: 0, background: "rgba(14,18,28,.45)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, zIndex: 410 }, onClick: deleting ? undefined : () => setDeleteConfirm(null) },
             React.createElement("div", { className: "neu-card pdu-modal-pop", style: { width: 420, maxWidth: "92vw", padding: 24 }, onClick: (e) => e.stopPropagation() },
-                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 16, fontWeight: 800, color: "#17345D", marginBottom: 8 } }, "Delete this PDU?"),
-                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#64748B", marginBottom: 18, lineHeight: 1.5 } }, "This removes ", React.createElement("b", null, deleteConfirm.feedLabel, " · ", deleteConfirm.ipAddress), " (", deleteConfirm.site, " · Rack ", deleteConfirm.rackNo, ") and its power history. This cannot be undone."),
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 16, fontWeight: 800, color: "#020617", marginBottom: 8 } }, "Delete this PDU?"),
+                React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12.5, color: "#020617", marginBottom: 18, lineHeight: 1.5 } }, "This removes ", React.createElement("b", null, deleteConfirm.feedLabel, " · ", deleteConfirm.ipAddress), " (", deleteConfirm.site, " · Rack ", deleteConfirm.rackNo, ") and its power history. This cannot be undone."),
                 React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", gap: 10 } },
                     React.createElement("button", { className: "neu-btn-secondary", disabled: deleting, onClick: () => setDeleteConfirm(null) }, "Cancel"),
                     React.createElement("button", { className: "neu-btn-primary", disabled: deleting, style: { background: "#DC2626" }, onClick: confirmDelete }, deleting ? "Deleting…" : "Delete PDU")))),
@@ -18322,7 +18322,7 @@ function DataCenterDashboard() {
                     ")"),
                 React.createElement(FileActions, { onExportExcel: handleExportIssuesXlsx, onExportCSV: handleExportIssuesCsv, onImport: handleImportIssues, importError: importError, showImport: false })),
             React.createElement("div", { className: "neu-card anim-in d7 issue-table-card", style: { overflowX: "auto", overflowY: "hidden" } },
-                React.createElement("div", { style: { display: "grid", gridTemplateColumns: ISSUE_GRID_COLS, gap: 12, justifyItems: "start", minWidth: ISSUE_GRID_MIN, padding: "12px 18px", borderBottom: "0.5px solid rgba(163,177,198,0.3)", fontFamily: "Inter", fontSize: 11, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 } },
+                React.createElement("div", { style: { display: "grid", gridTemplateColumns: ISSUE_GRID_COLS, gap: 12, justifyItems: "start", minWidth: ISSUE_GRID_MIN, padding: "12px 18px", borderBottom: "0.5px solid rgba(163,177,198,0.3)", fontFamily: "Inter", fontSize: 11, color: "#020617", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 } },
                     React.createElement("div", null,
                         React.createElement("input", { type: "checkbox", checked: filtered.length > 0 && filtered.every(i => selectedIssueIds.has(i.id)), ref: el => { if (el)
                                 el.indeterminate = filtered.some(i => selectedIssueIds.has(i.id)) && !filtered.every(i => selectedIssueIds.has(i.id)); }, onChange: e => setSelectedIssueIds(prev => { const n = new Set(prev); filtered.forEach(i => e.target.checked ? n.add(i.id) : n.delete(i.id)); return n; }), style: { width: 15, height: 15, accentColor: "#6366F1", cursor: "pointer" } })),
@@ -18362,7 +18362,7 @@ function DataCenterDashboard() {
                         React.createElement(Columns3, { s: 14, c: "#4F46E5" }),
                         " Add Component"))),
             inventoryView === "inventory" ? React.createElement(React.Fragment, null,
-                React.createElement("div", { style: { display: "flex", gap: 16, marginBottom: 16, fontFamily: "Inter", fontSize: 11.5, color: "#64748B" } },
+                React.createElement("div", { style: { display: "flex", gap: 16, marginBottom: 16, fontFamily: "Inter", fontSize: 11.5, color: "#020617" } },
                     React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 6 } },
                         React.createElement("span", { style: { width: 10, height: 10, borderRadius: 3, background: "#10B981", display: "inline-block" } }),
                         "Firmware auto-synced from Dell OME / HPE OneView"),
@@ -18400,7 +18400,7 @@ function DataCenterDashboard() {
                         const zoneMax = Math.max(1, ...zoneEntries.map(([, n]) => n));
                         const zoneDeviceTotal = zoneEntries.reduce((sum, [, n]) => sum + n, 0);
                         return React.createElement("div", { className: "neu-card anim-in d1 loc-zone-card", style: { padding: "16px 18px", display: "flex", flexDirection: "column" } },
-                            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, color: "#0F172A", marginBottom: 10 } }, "Assets by Location & Zone"),
+                            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, color: "#020617", marginBottom: 10 } }, "Assets by Location & Zone"),
                             React.createElement("div", { style: { display: "flex", gap: 18, flexWrap: "wrap", flex: 1 } },
                                 React.createElement("div", { style: { flex: "0 0 215px", minWidth: 200, display: "flex", flexDirection: "column", alignItems: "center" } },
                                     React.createElement("div", { style: { fontFamily: "Inter", fontSize: 9.5, color: "#475569", marginBottom: 4, alignSelf: "flex-start" } }, "Total assets · by location"),
@@ -18511,7 +18511,7 @@ function DataCenterDashboard() {
                         // per-bucket color changes with AGE_BUCKET_HUES.
                         const ageShadeLegend = neutralShadeSeries(allowedSites.length);
                         return React.createElement("div", { className: "neu-card anim-in d2 asset-age-card", style: { padding: "14px 16px", minWidth: 0 } },
-                            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, color: "#0F172A", marginBottom: 3 } }, "Asset Aging"),
+                            React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, color: "#020617", marginBottom: 3 } }, "Asset Aging"),
                             React.createElement("div", { style: { fontFamily: "Inter", fontSize: 9.5, color: "#475569", marginBottom: 6 } }, "Years since installation · one row per period, light → dark by site"),
                             bucketTotal > 0 && React.createElement("div", { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 } }, allowedSites.map((s, si) => React.createElement("span", { key: s, style: { display: "flex", alignItems: "center", gap: 4 } },
                                 React.createElement("span", { style: { width: 8, height: 8, borderRadius: 2, background: ageShadeLegend[si], display: "inline-block", border: "1px solid rgba(15,23,42,0.12)" } }),
@@ -18579,7 +18579,7 @@ function DataCenterDashboard() {
                         return React.createElement("div", { className: "neu-card anim-in d3", style: { padding: "14px 16px", minWidth: 0, display: "flex", flexDirection: "column" } },
                             React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6, gap: 8 } },
                                 React.createElement("div", null,
-                                    React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, color: "#0F172A" } }, "Installs — Last 6 Months"),
+                                    React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 700, color: "#020617" } }, "Installs — Last 6 Months"),
                                     React.createElement("div", { style: { fontFamily: "Inter", fontSize: 9.5, color: "#475569", marginTop: 2 } }, "New assets installed, by month · one bar per location")),
                                 React.createElement("div", { style: { fontFamily: "'JetBrains Mono'", fontSize: 11, fontWeight: 800, color: "#0F172A" } }, total6)),
                             total6 > 0 && React.createElement("div", { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 8 } }, allowedSites.map((s) => React.createElement("span", { key: s, style: { display: "flex", alignItems: "center", gap: 4 } },
