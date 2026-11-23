@@ -107,9 +107,9 @@ test('event figures for a past month are rebuilt from dated records', async () =
   assert.deepStrictEqual(rep.materials.inward.find((i) => i.item === 'SSD'), { item: 'SSD', cur: 8, prev: 4 });
   assert.deepStrictEqual(rep.materials.outward.find((i) => i.item === 'Fan'), { item: 'Fan', cur: 2, prev: 0 }); // Pune's 9 not counted
   assert.deepStrictEqual(rep.materials.inwardTotals, { cur: 2, prev: 1 });
-  assert.deepStrictEqual(rep.activities.rows, [{ type: 'Cabling', cur: 1, prev: 1 }]);
-  assert.deepStrictEqual(rep.activities.total, { cur: 1, prev: 1 });
-  assert.strictEqual(rep.ops.rows.find((r) => r.label === 'Visits approved').cur, 1);
+  assert.deepStrictEqual(rep.activities.rows, [{ type: 'Cabling', cur: 1, prev: 1, prev2: 0 }]);
+  assert.deepStrictEqual(rep.activities.total, { cur: 1, prev: 1, prev2: 0 });
+  assert.strictEqual(rep.ops.rows.find((r) => r.label === 'Visits (visitor access)').cur, 1);
   assert.strictEqual(rep.power.rows.find((r) => /^Peak daily load/.test(r.label)).cur, 8.4);
   assert.strictEqual(rep.power.rows.find((r) => /80% of rating/.test(r.label)).cur, 1);
   assert.strictEqual(rep.power.feedsHot[0].pct, 84);
@@ -213,4 +213,14 @@ test('makeLabel: one make regardless of case / suffix, identical rule to the web
   for (const v of ['HP', 'hpe', 'Hewlett Packard Enterprise', 'OneView']) assert.strictEqual(makeLabel(v), 'HP');
   assert.strictEqual(makeLabel(''), 'Unknown');
   assert.strictEqual(makeLabel('NetApp'), 'NetApp');
+});
+
+test('report: DC activity rows carry the month before last; operations has no approval row', async () => {
+  const now = new Date(2026, 10, 5);
+  const rep = await data.buildReport(fakePool(), { sites: ['Chennai'], month: '2026-10', now });
+  assert.ok(rep.activities.rows.every((r) => 'prev2' in r));
+  assert.ok('prev2' in rep.activities.total);
+  assert.ok(rep.zones.every((z) => 'prev2' in z));
+  assert.ok(!rep.ops.rows.some((r) => /awaiting approval/i.test(r.label)));
+  assert.ok(rep.meta.prev2Short);
 });

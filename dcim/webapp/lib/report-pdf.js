@@ -143,24 +143,26 @@ function zones(L) {
   const h = 20.5 + rows.length * RH + 3;
   L.ensure(h);
   const p = L.page, b = L.card(h, 'Zone-wise Rack Overview', 'U-space utilization per zone · racks at 85% or more are flagged');
-  const cols = [{ label: 'ZONE', x: 0, w: 40 }, { label: 'RACKS', x: 42, w: 14, align: 'right' }, { label: rep.meta.prevShort.toUpperCase(), x: 60, w: 16, align: 'right' }, { label: rep.meta.shortLabel.toUpperCase(), x: 80, w: 18, align: 'right' },
-    { label: 'CHANGE', x: 102, w: 22, align: 'right' }, { label: 'RACKS ≥ 85% FULL', x: 132, w: 48 }];
-  cols[5].label = 'RACKS >= 85% FULL';
+  const cols = [{ label: 'ZONE', x: 0, w: 36 }, { label: 'RACKS', x: 38, w: 12, align: 'right' }, { label: (rep.meta.prev2Short || '').toUpperCase(), x: 54, w: 16, align: 'right' }, { label: rep.meta.prevShort.toUpperCase(), x: 74, w: 16, align: 'right' }, { label: rep.meta.shortLabel.toUpperCase(), x: 94, w: 16, align: 'right' },
+    { label: 'CHANGE', x: 114, w: 20, align: 'right' }, { label: 'RACKS ≥ 85% FULL', x: 140, w: 40 }];
+  cols[6].label = 'RACKS >= 85% FULL';
   L.head(b.x, b.y - 2.4, cols, b.w);
   rows.forEach((z, i) => {
     const y = b.y + 5.6 + i * RH;
     if (i) p.line(b.x, y - 5, b.x + b.w, y - 5, { stroke: C.row, lw: 0.15 });
-    p.text(z.zone, b.x, y, { size: 8.4, font: 'HB', color: C.white, maxW: 40 });
-    p.text(z.racks == null ? '—' : String(z.racks), b.x + 56, y, { size: 8.2, color: C.dim, align: 'right' });
-    p.text(z.prev == null ? '—' : z.prev + '%', b.x + 76 - (z.prev != null && rep.meta.prevEstimated ? 1.6 : 0), y, { size: 8.2, color: C.dim, align: 'right' });
-    if (z.prev != null && rep.meta.prevEstimated) p.text('*', b.x + 76 + 0.2, y - 0.8, { size: 8, font: 'HB', color: C.amber });
-    p.text(z.cur == null ? '—' : z.cur + '%', b.x + 96, y, { size: 8.6, font: 'HB', color: C.white, align: 'right' });
-    if (z.approx && z.cur != null) p.text('*', b.x + 96.4, y - 0.8, { size: 8, font: 'HB', color: C.amber });
-    if (z.cur != null && z.prev != null) L.deltaAt(b.x + 124, y, z.cur - z.prev, null, '%', 0, 8); else p.text('—', b.x + 124, y, { size: 8.2, color: C.dim, align: 'right' });
+    p.text(z.zone, b.x, y, { size: 8.4, font: 'HB', color: C.white, maxW: 36 });
+    p.text(z.racks == null ? '—' : String(z.racks), b.x + 50, y, { size: 8.2, color: C.dim, align: 'right' });
+    p.text(z.prev2 == null ? '—' : z.prev2 + '%', b.x + 70 - (z.prev2 != null && rep.meta.prev2Estimated !== false ? 1.6 : 0), y, { size: 8, color: C.dim, align: 'right' });
+    if (z.prev2 != null && rep.meta.prev2Estimated !== false) p.text('*', b.x + 70 + 0.2, y - 0.8, { size: 8, font: 'HB', color: C.amber });
+    p.text(z.prev == null ? '—' : z.prev + '%', b.x + 90 - (z.prev != null && rep.meta.prevEstimated ? 1.6 : 0), y, { size: 8.2, color: C.dim, align: 'right' });
+    if (z.prev != null && rep.meta.prevEstimated) p.text('*', b.x + 90 + 0.2, y - 0.8, { size: 8, font: 'HB', color: C.amber });
+    p.text(z.cur == null ? '—' : z.cur + '%', b.x + 110, y, { size: 8.6, font: 'HB', color: C.white, align: 'right' });
+    if (z.approx && z.cur != null) p.text('*', b.x + 110.4, y - 0.8, { size: 8, font: 'HB', color: C.amber });
+    if (z.cur != null && z.prev != null) L.deltaAt(b.x + 134, y, z.cur - z.prev, null, '%', 0, 8); else p.text('—', b.x + 134, y, { size: 8.2, color: C.dim, align: 'right' });
     if (z.hot.length) {
-      const w = p.text(z.hot.slice(0, 3).join(', ') + (z.hot.length > 3 ? ` +${z.hot.length - 3}` : ''), b.x + 132, y, { size: 7.4, color: '#FCA5A5', maxW: 34 });
-      const x0 = b.x + 132 + Math.min(w, 34) + 1.5; p.rect(x0, y - 3, 10.5, 4.1, { fill: '#3B1318', stroke: '#7F1D1D', lw: 0.15, r: 1 }); p.text('WATCH', x0 + 5.25, y - 0.1, { size: 4.8, font: 'HB', color: '#FCA5A5', align: 'center', spacing: 0.3 });
-    } else p.text('None', b.x + 132, y, { size: 7.8, color: C.dim });
+      const w = p.text(z.hot.slice(0, 2).join(', ') + (z.hot.length > 2 ? ` +${z.hot.length - 2}` : ''), b.x + 140, y, { size: 7.2, color: '#FCA5A5', maxW: 26 });
+      const x0 = b.x + 140 + Math.min(w, 26) + 1.5; p.rect(x0, y - 3, 10.5, 4.1, { fill: '#3B1318', stroke: '#7F1D1D', lw: 0.15, r: 1 }); p.text('WATCH', x0 + 5.25, y - 0.1, { size: 4.8, font: 'HB', color: '#FCA5A5', align: 'center', spacing: 0.3 });
+    } else p.text('None', b.x + 140, y, { size: 7.8, color: C.dim });
   });
   L.y += h + 5;
 }
@@ -209,22 +211,24 @@ function activities(L) {
   const h = 20.5 + (Math.max(rows.length, 1) + 1) * RH + (extra > 0 ? 5 : 0);
   L.ensure(h);
   const p = L.page, b = L.card(h, 'DC Activity Record Summary', `Activities started in ${rep.meta.label.split(' ')[0]}, by type`);
-  const cols = [{ label: 'ACTIVITY TYPE', x: 0, w: 80 }, { label: rep.meta.prevShort.toUpperCase(), x: 98, w: 20, align: 'right' }, { label: rep.meta.shortLabel.toUpperCase(), x: 122, w: 20, align: 'right' }, { label: 'CHANGE', x: 150, w: 30, align: 'right' }];
+  const cols = [{ label: 'ACTIVITY TYPE', x: 0, w: 80 }, { label: (rep.meta.prev2Short || '').toUpperCase(), x: 78, w: 18, align: 'right' }, { label: rep.meta.prevShort.toUpperCase(), x: 100, w: 18, align: 'right' }, { label: rep.meta.shortLabel.toUpperCase(), x: 122, w: 18, align: 'right' }, { label: 'CHANGE', x: 150, w: 30, align: 'right' }];
   L.head(b.x, b.y - 2.4, cols, b.w);
   if (!rows.length) p.text('No DC activity recorded in these two months.', b.x, b.y + 5.6, { size: 8, color: C.mute });
   rows.forEach((r, i) => {
     const y = b.y + 5.6 + i * RH;
     if (i) p.line(b.x, y - 5, b.x + b.w, y - 5, { stroke: C.row, lw: 0.15 });
     p.text(r.type, b.x, y, { size: 8.4, font: 'HB', color: C.white, maxW: 90 });
+    p.text(r.prev2 == null ? '—' : String(r.prev2), b.x + 96, y, { size: 8.2, color: C.dim, align: 'right' });
     p.text(String(r.prev), b.x + 118, y, { size: 8.4, color: C.dim, align: 'right' });
-    p.text(String(r.cur), b.x + 142, y, { size: 8.6, font: 'HB', color: C.white, align: 'right' });
+    p.text(String(r.cur), b.x + 140, y, { size: 8.6, font: 'HB', color: C.white, align: 'right' });
     L.deltaAt(b.x + b.w, y, r.cur - r.prev, null, '', 0, 8);
   });
   const ty = b.y + 5.6 + Math.max(rows.length, 1) * RH;
   p.rect(b.x - 1.5, ty - 5, b.w + 3, RH - 0.4, { fill: '#0A101C', r: 1 });
   p.text('Total activities', b.x, ty, { size: 8.4, font: 'HB', color: C.white });
+  p.text(a.total.prev2 == null ? '—' : String(a.total.prev2), b.x + 96, ty, { size: 8.2, font: 'HB', color: C.mute, align: 'right' });
   p.text(String(a.total.prev), b.x + 118, ty, { size: 8.4, font: 'HB', color: C.mute, align: 'right' });
-  p.text(String(a.total.cur), b.x + 142, ty, { size: 8.6, font: 'HB', color: C.white, align: 'right' });
+  p.text(String(a.total.cur), b.x + 140, ty, { size: 8.6, font: 'HB', color: C.white, align: 'right' });
   L.deltaAt(b.x + b.w, ty, a.total.cur - a.total.prev, null, '', 0, 8);
   if (extra > 0) p.text(`+ ${extra} more activity type${extra === 1 ? '' : 's'} not shown`, b.x, ty + 5.4, { size: 6.8, color: C.dim });
   L.y += h + 5;
@@ -249,27 +253,28 @@ function power(L) {
   measureCard(L, 'Power Capacity Monitoring', `From the PDU Capacity page · ${rep.meta.shortLabel} compared with ${rep.meta.prevShort}`, pw.rows, SPARK.power, note);
 }
 
-function ops(L) { measureCard(L, 'Operations Snapshot', 'Server monitoring, access and approvals', L.rep.ops.rows, SPARK.ops); }
+function ops(L) { measureCard(L, 'Operations Snapshot', 'Server monitoring and visitor access', L.rep.ops.rows, SPARK.ops); }
 
 function locations(L) {
   const { rep } = L; if (!rep.locations || !rep.locations.length) return;
   const rows = rep.locations.slice(0, 14), h = 20.5 + rows.length * RH + 3;
   L.ensure(h);
   const p = L.page, b = L.card(h, 'Location-wise Change', `${rep.meta.shortLabel} figure with the change since ${rep.meta.prevShort}`);
-  const cols = [{ label: 'LOCATION', x: 0, w: 38 }, { label: 'DEVICES', x: 40, w: 24, align: 'right' }, { label: 'RACK U %', x: 68, w: 24, align: 'right' }, { label: 'OPEN ISSUES', x: 96, w: 26, align: 'right' },
-    { label: 'PEAK kW', x: 126, w: 20, align: 'right' }, { label: 'RECEIVED', x: 150, w: 14, align: 'right' }, { label: 'SENT OUT', x: 166, w: 14, align: 'right' }];
+  // every figure sits in its own band: [value][gap][arrow + change], so a change can never run into the next column's figure
+  const cols = [{ label: 'LOCATION', x: 0, w: 28 }, { label: 'DEVICES', x: 25, w: 17, align: 'right' }, { label: 'RACK U %', x: 52, w: 16, align: 'right' }, { label: 'OPEN ISSUES', x: 73, w: 21, align: 'right' },
+    { label: 'PEAK kW', x: 109, w: 15, align: 'right' }, { label: 'RECEIVED', x: 146, w: 16, align: 'right' }, { label: 'SENT OUT', x: 164, w: 16, align: 'right' }];
   L.head(b.x, b.y - 2.4, cols, b.w);
   const cell = (pair, xr, y, good, unit = '') => {
     const c = pair[1], d = pair[0] == null || pair[1] == null ? null : +(pair[1] - pair[0]).toFixed(1);
-    p.text(c == null ? '—' : fmtNum(c, unit, !Number.isInteger(c) ? 1 : 0), xr - 10, y, { size: 8, font: 'HB', color: C.white, align: 'right' });
+    p.text(c == null ? '—' : fmtNum(c, unit, !Number.isInteger(c) ? 1 : 0), xr - 16, y, { size: 8, font: 'HB', color: C.white, align: 'right' });
     if (d != null) L.deltaAt(xr, y, d, good, unit === '%' ? '%' : '', 0, 6.8);
   };
   rows.forEach((r, i) => {
     const y = b.y + 5.6 + i * RH;
     if (i) p.line(b.x, y - 5, b.x + b.w, y - 5, { stroke: C.row, lw: 0.15 });
-    p.text(r.site, b.x, y, { size: 8.4, font: 'HB', color: C.white, maxW: 38 });
-    cell(r.devices, b.x + 64, y, null); cell(r.util, b.x + 92, y, null, '%'); cell(r.openIssues, b.x + 122, y, false); cell(r.peak, b.x + 146, y, null);
-    p.text(String(r.inward[1]), b.x + 164, y, { size: 8, font: 'HB', color: C.white, align: 'right' }); p.text(String(r.outward[1]), b.x + 180, y, { size: 8, font: 'HB', color: C.white, align: 'right' });
+    p.text(r.site, b.x, y, { size: 8.4, font: 'HB', color: C.white, maxW: 27 });
+    cell(r.devices, b.x + 58, y, null); cell(r.util, b.x + 84, y, null, '%'); cell(r.openIssues, b.x + 110, y, false); cell(r.peak, b.x + 140, y, null);
+    p.text(String(r.inward[1]), b.x + 162, y, { size: 8, font: 'HB', color: C.white, align: 'right' }); p.text(String(r.outward[1]), b.x + 180, y, { size: 8, font: 'HB', color: C.white, align: 'right' });
   });
   L.y += h + 5;
 }

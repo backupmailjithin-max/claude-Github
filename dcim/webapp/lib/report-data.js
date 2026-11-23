@@ -428,8 +428,7 @@ async function buildReport(pool, { sites, month, scopeLabel, now = new Date() })
   add('ops', 'Servers online', st((s) => (s.servers.known ? pctOf(s.servers.online, s.servers.known) : null)), { kind: 'stock', unit: '%', good: true });
   add('ops', 'Servers unreachable', st((s) => (s.servers.total ? s.servers.unreachable : null)), { kind: 'stock', good: false, watch: true });
   add('ops', 'Firmware compliant', st((s) => (s.fw.checked ? pctOf(s.fw.ok, s.fw.checked) : null)), { kind: 'stock', unit: '%', good: true });
-  add('ops', 'Visits approved', (e) => e.visits);
-  add('ops', 'Material movements awaiting approval', st((s) => (s._estimated ? null : s.pendingTransfers)), { kind: 'stock', good: false });
+  add('ops', 'Visits (visitor access)', (e) => e.visits);
 
   add('issues', 'Reported', (e) => e.reported);
   add('issues', 'Resolved / closed', (e) => e.resolved, { good: true });
@@ -444,14 +443,15 @@ async function buildReport(pool, { sites, month, scopeLabel, now = new Date() })
     const names = new Set([...cur[type].keys(), ...prv[type].keys()]);
     return [...names].map((n) => ({ item: n, cur: cur[type].get(n) || 0, prev: prv[type].get(n) || 0 })).sort((a, b) => b.cur - a.cur || b.prev - a.prev || a.item.localeCompare(b.item));
   };
-  const actNames = new Set([...cur.acts.keys(), ...prv.acts.keys()]);
-  const activities = [...actNames].map((n) => ({ type: n, cur: cur.acts.get(n) || 0, prev: prv.acts.get(n) || 0 })).sort((a, b) => b.cur - a.cur || a.type.localeCompare(b.type));
+  const key2 = keys.length > 2 ? keys[keys.length - 3] : null, prv2 = key2 ? E[key2] : null, sPrv2 = key2 ? S[key2] : null;
+  const actNames = new Set([...cur.acts.keys(), ...prv.acts.keys(), ...(prv2 ? prv2.acts.keys() : [])]);
+  const activities = [...actNames].map((n) => ({ type: n, cur: cur.acts.get(n) || 0, prev: prv.acts.get(n) || 0, prev2: prv2 ? (prv2.acts.get(n) || 0) : null })).sort((a, b) => b.cur - a.cur || a.type.localeCompare(b.type));
 
-  const zoneNames = new Set([...Object.keys((sCur || {}).zones || {}), ...Object.keys((sPrv || {}).zones || {})]);
+  const zoneNames = new Set([...Object.keys((sCur || {}).zones || {}), ...Object.keys((sPrv || {}).zones || {}), ...Object.keys((sPrv2 || {}).zones || {})]);
   const zones = [...zoneNames].sort().map((z) => {
-    const c = sCur && sCur.zones[z], p = sPrv && sPrv.zones[z];
+    const c = sCur && sCur.zones[z], p = sPrv && sPrv.zones[z], p2 = sPrv2 && sPrv2.zones[z];
     const hot = sCur ? sCur.racksHot.filter((r) => (multi ? `${r.site} · ${r.zone}` : r.zone) === z).map((r) => `${r.rack} (${r.pct}%)`) : [];
-    return { zone: z, racks: c ? c.racks : (p ? p.racks : null), cur: c ? pctOf(c.used, c.total) : null, prev: p ? pctOf(p.used, p.total) : null, usedU: c ? c.used : null, hot, approx };
+    return { zone: z, racks: c ? c.racks : (p ? p.racks : null), cur: c ? pctOf(c.used, c.total) : null, prev: p ? pctOf(p.used, p.total) : null, prev2: p2 ? pctOf(p2.used, p2.total) : null, usedU: c ? c.used : null, hot, approx };
   });
 
   let locations = null;
@@ -471,13 +471,13 @@ async function buildReport(pool, { sites, month, scopeLabel, now = new Date() })
       month, prevMonth: prevKey, label: monthLabel(month), prevLabel: monthLabel(prevKey), shortLabel: monthShort(month), prevShort: monthShort(prevKey), prev2Short: monthShort(addMonths(month, -2)),
       scope: scopeLabel || (multi ? 'All locations' : sites[0]), sites, multi, isCurrent, generatedAt: now.toISOString(), monthsShown: keys.map(monthShort),
       firstRecord: stockKnown && !sPrv && !(sCur && sCur._estimated) ? { asOf: approx ? sCur.takenAt : (isCurrent ? dstr(now) : (sCur.takenAt || '')), approx } : null,
-      stockMissing: !stockKnown, prevEstimated: prevEst, curEstimated: !!(sCur && sCur._estimated),
+      stockMissing: !stockKnown, prevEstimated: prevEst, prev2Estimated: !!(sPrv2 && sPrv2._estimated), curEstimated: !!(sCur && sCur._estimated),
     },
     assets: { rows: rows.assets, note: `${cur.added} installed and ${cur.removed} moved out during ${monthLabel(month).split(' ')[0]}` },
     hardwareMix,
     zones,
     materials: { inward: itemList('inward'), outward: itemList('outward'), inwardTotals: { cur: cur.inwardCount, prev: prv.inwardCount }, outwardTotals: { cur: cur.outwardCount, prev: prv.outwardCount } },
-    activities: { rows: activities, total: { cur: cur.actTotal, prev: prv.actTotal } },
+    activities: { rows: activities, total: { cur: cur.actTotal, prev: prv.actTotal, prev2: prv2 ? prv2.actTotal : null } },
     issues: { rows: rows.issues, oldestCritical: cur.oldestCritical },
     power: { rows: rows.power, configured: !!pw || rows.power.some((r) => r.cur != null), feedsHot: cur.feedsHot, highest: pw && pw.highest },
     ops: { rows: rows.ops },
