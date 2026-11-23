@@ -2447,6 +2447,17 @@ function LoginBackground({ variant }) {
             : React.createElement("canvas", { ref: canvasRef, "aria-hidden": "true", style: { ...layer, display: "block" } }),
         React.createElement("div", { "aria-hidden": "true", style: { ...layer, pointerEvents: "none", background: "radial-gradient(ellipse at center, rgba(4,10,22,.62) 0%, rgba(4,10,22,.30) 62%, rgba(4,10,22,.48) 100%)" } }));
 }
+/* ===== HEADER LOGO: 3D tilt that follows the pointer + glass glare (CSS in index.html #logo-motion-v1) ===== */
+function logoTiltMove(e) {
+    const el = e.currentTarget, r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    const x = (e.clientX - r.left) / r.width - 0.5, y = (e.clientY - r.top) / r.height - 0.5;
+    el.style.setProperty("--ry", (x * 30).toFixed(1) + "deg");
+    el.style.setProperty("--rx", (-y * 20).toFixed(1) + "deg");
+    el.style.setProperty("--gp", Math.max(0, Math.min(100, 100 - (x + 0.5) * 100)).toFixed(0) + "%");
+    el.classList.add("is-hover");
+}
+function logoTiltLeave(e) { e.currentTarget.classList.remove("is-hover"); }
 /* ===== LOGIN ===== */
 function LoginScreen({ onLogin, error, loading, orgBrand }) {
     const [u, setU] = useState("");
@@ -2458,7 +2469,9 @@ function LoginScreen({ onLogin, error, loading, orgBrand }) {
         React.createElement("div", { className: "neu-card anim-in d1", style: { width: 420, maxWidth: "90vw", padding: 44, position: "relative", zIndex: 1, boxShadow: "0 24px 60px rgba(0,0,0,.45), 0 2px 0 rgba(255,255,255,.6) inset" } },
             React.createElement("div", { style: { textAlign: "center", marginBottom: 36 } },
                 brand.logoUrl
-                    ? React.createElement("img", { src: brand.logoUrl, alt: brand.companyName || "Logo", style: { maxWidth: 160, maxHeight: 64, margin: "0 auto 18px", display: "block" } })
+                    ? React.createElement("div", { className: "login-logo-wipe" },
+                        React.createElement("img", { src: brand.logoUrl, alt: brand.companyName || "Logo", style: { maxWidth: 160, maxHeight: 64, margin: 0, display: "block" } }),
+                        React.createElement("span", { className: "login-logo-edge", "aria-hidden": "true" }))
                     : React.createElement("div", { className: "floating-icon indigo", style: { width: 64, height: 64, borderRadius: 20, margin: "0 auto 18px" } },
                         React.createElement(Shield, { s: 28, c: "#6366F1" })),
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 26, fontWeight: 700, color: "#020617" } }, brand.appName || "DCIM Dashboard"),
@@ -18211,9 +18224,10 @@ function DataCenterDashboard() {
             React.createElement("div", { className: "dcim-brand-area" },
                 orgBrand.logoUrl
                     ? React.createElement("div", { className: "brand-logo-wrap", title: orgBrand.companyName },
-                        React.createElement("div", { className: "brand-logo-stage brand-reference-logo", "aria-label": orgBrand.companyName },
-                            React.createElement("img", { className: "brand-reference-logo-img", alt: orgBrand.companyName, src: orgBrand.logoUrl }),
-                            React.createElement("span", { className: "brand-reference-sheen", "aria-hidden": "true" })))
+                        React.createElement("div", { className: "brand-logo-stage brand-reference-logo", "aria-label": orgBrand.companyName, onMouseMove: logoTiltMove, onMouseLeave: logoTiltLeave },
+                            React.createElement("span", { className: "brand-logo-inner" },
+                                React.createElement("img", { className: "brand-reference-logo-img", alt: orgBrand.companyName, src: orgBrand.logoUrl }),
+                                React.createElement("span", { className: "brand-logo-glare", "aria-hidden": "true", style: { WebkitMaskImage: 'url("' + orgBrand.logoUrl + '")', maskImage: 'url("' + orgBrand.logoUrl + '")' } }))))
                     : React.createElement("div", { className: "floating-icon indigo", style: { width: 56, height: 56, borderRadius: 18 } },
                         React.createElement(Shield, { s: 24, c: "#6366F1" })),
                 React.createElement("div", { className: "dcim-brand-copy" },
