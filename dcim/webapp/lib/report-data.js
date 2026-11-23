@@ -398,41 +398,50 @@ async function buildReport(pool, { sites, month, scopeLabel, now = new Date() })
     const m = est ? mergeState(est, sites) : null;
     if (m) { sCur = m; approx = true; S[month] = null; }
   }
+  // Stock figures that cannot be rebuilt from dated records (store, power, servers, firmware): when the month has only an estimate,
+  // show the first position actually saved after it, clearly marked "as on <date>", instead of leaving a blank.
+  let lateState = null;
+  if (!isCurrent && sCur && sCur._estimated) { const nx = mergeState(snaps[nextKey], sites); if (nx && !nx._estimated && nx.takenAt) lateState = nx; }
+  let lateUsed = null;
   const sPrv = S[prevKey];
   const prevEst = !!(sPrv && sPrv._estimated);
   const multi = sites.length > 1;
 
   const rows = {};
   const add = (mod, label, fn, o = {}) => {
-    const series = keys.map((k, i) => { try { const v = fn(E[k], i === keys.length - 1 ? sCur : S[k], k); return v == null || Number.isNaN(v) ? null : v; } catch (e) { return null; } });
-    const exactSeries = series.slice(0, -1).concat([o.kind === 'stock' && approx ? null : series[series.length - 1]]);
+    let usedLate = false;
+    const series = keys.map((k, i) => { try { const last = i === keys.length - 1; let v = fn(E[k], last ? sCur : S[k], k);
+      if ((v == null || Number.isNaN(v)) && last && o.late && lateState) { v = fn(E[k], lateState, k); if (v != null && !Number.isNaN(v)) usedLate = true; }
+      return v == null || Number.isNaN(v) ? null : v; } catch (e) { return null; } });
+    if (usedLate) lateUsed = lateState.takenAt;
+    const exactSeries = series.slice(0, -1).concat([(o.kind === 'stock' && approx) || usedLate ? null : series[series.length - 1]]);
     const prev = series[series.length - 2], curV = series[series.length - 1], prev2 = series.length > 2 ? series[series.length - 3] : null;
-    const delta = chg(curV, prev, o.dec || 0);
+    const delta = usedLate ? null : chg(curV, prev, o.dec || 0);
     const good = o.good == null ? null : o.good;
     const watch = !!o.watch && curV != null && curV > 0 && (prev == null || curV > prev);
     (rows[mod] || (rows[mod] = [])).push({ label: typeof label === 'function' ? label(sCur) : label, prev2, prev, cur: curV, delta, unit: o.unit || '', dec: o.dec || 0, good, kind: o.kind || 'event',
-      series: exactSeries, trend: series, first: o.kind === 'stock' && prev == null && curV != null, approx: o.kind === 'stock' && approx && curV != null, prevEst: o.kind === 'stock' && prevEst && prev != null, watch });
+      series: exactSeries, trend: series, asOf: usedLate ? lateState.takenAt : null, first: o.kind === 'stock' && prev == null && curV != null && !usedLate, approx: o.kind === 'stock' && approx && curV != null && !usedLate, prevEst: o.kind === 'stock' && prevEst && prev != null, watch });
   };
   const st = (fn) => (e, s) => (s ? fn(s) : null);
 
   add('assets', 'Installed devices', st((s) => s.devices), { kind: 'stock', good: 'up' });
   add('assets', 'Total racks', st((s) => s.racks), { kind: 'stock', good: 'up' });
   add('assets', 'DC utilization (rack U used)', st((s) => pctOf(s.usedU, s.totalU)), { kind: 'stock', unit: '%' });
-  add('assets', 'Assets in store', st((s) => (s._estimated ? null : s.inStore)), { kind: 'stock' });
+  add('assets', 'Assets in store', st((s) => (s._estimated ? null : s.inStore)), { kind: 'stock', late: true });
 
   const pw = sCur && sCur.hasPower ? sCur.power : null;
-  add('power', pw ? `Total load (kW) of ${pw.ratedKw} kW rated` : 'Total load (kW)', st((s) => (s.hasPower ? s.power.totalKw : null)), { kind: 'stock', dec: 1 });
-  add('power', 'Capacity used', st((s) => (s.hasPower && s.power.ratedKw ? pctOf(s.power.totalKw, s.power.ratedKw) : null)), { kind: 'stock', unit: '%' });
-  add('power', pw ? `Online PDUs (of ${pw.pdus})` : 'Online PDUs', st((s) => (s.hasPower ? s.power.online : null)), { kind: 'stock', good: true });
-  add('power', 'Racks monitored', st((s) => (s.hasPower ? s.power.racks : null)), { kind: 'stock' });
-  add('power', 'Highest rack load', st((s) => (s.hasPower && s.power.highest ? s.power.highest.pct : null)), { kind: 'stock', unit: '%', good: false });
-  add('power', 'Racks fully redundant (A+B)', st((s) => (s.hasPower ? s.power.redundant : null)), { kind: 'stock', good: true });
+  add('power', pw ? `Total load (kW) of ${pw.ratedKw} kW rated` : 'Total load (kW)', st((s) => (s.hasPower ? s.power.totalKw : null)), { kind: 'stock', late: true, dec: 1 });
+  add('power', 'Capacity used', st((s) => (s.hasPower && s.power.ratedKw ? pctOf(s.power.totalKw, s.power.ratedKw) : null)), { kind: 'stock', late: true, unit: '%' });
+  add('power', pw ? `Online PDUs (of ${pw.pdus})` : 'Online PDUs', st((s) => (s.hasPower ? s.power.online : null)), { kind: 'stock', late: true, good: true });
+  add('power', 'Racks monitored', st((s) => (s.hasPower ? s.power.racks : null)), { kind: 'stock', late: true });
+  add('power', 'Highest rack load', st((s) => (s.hasPower && s.power.highest ? s.power.highest.pct : null)), { kind: 'stock', late: true, unit: '%', good: false });
+  add('power', 'Racks fully redundant (A+B)', st((s) => (s.hasPower ? s.power.redundant : null)), { kind: 'stock', late: true, good: true });
   add('power', 'Peak daily load in the month (kW)', (e) => e.peakKw, { dec: 1 });
   add('power', 'Power feeds at 80% of rating or more', (e) => (e.peakKw == null ? null : e.feedsHot.length), { good: false, watch: true });
 
-  add('ops', 'Servers online', st((s) => (s.servers.known ? pctOf(s.servers.online, s.servers.known) : null)), { kind: 'stock', unit: '%', good: true });
-  add('ops', 'Servers unreachable', st((s) => (s.servers.total ? s.servers.unreachable : null)), { kind: 'stock', good: false, watch: true });
-  add('ops', 'Firmware compliant', st((s) => (s.fw.checked ? pctOf(s.fw.ok, s.fw.checked) : null)), { kind: 'stock', unit: '%', good: true });
+  add('ops', 'Servers online', st((s) => (s.servers.known ? pctOf(s.servers.online, s.servers.known) : null)), { kind: 'stock', late: true, unit: '%', good: true });
+  add('ops', 'Servers unreachable', st((s) => (s.servers.total ? s.servers.unreachable : null)), { kind: 'stock', late: true, good: false, watch: true });
+  add('ops', 'Firmware compliant', st((s) => (s.fw.checked ? pctOf(s.fw.ok, s.fw.checked) : null)), { kind: 'stock', late: true, unit: '%', good: true });
   if (visitorOn) add('ops', 'Visits (visitor access)', (e) => e.visits);
 
   add('issues', 'Reported', (e) => e.reported);
@@ -476,7 +485,7 @@ async function buildReport(pool, { sites, month, scopeLabel, now = new Date() })
       month, prevMonth: prevKey, label: monthLabel(month), prevLabel: monthLabel(prevKey), shortLabel: monthShort(month), prevShort: monthShort(prevKey), prev2Short: monthShort(addMonths(month, -2)),
       scope: scopeLabel || (multi ? 'All locations' : sites[0]), sites, multi, isCurrent, generatedAt: now.toISOString(), monthsShown: keys.map(monthShort),
       firstRecord: stockKnown && !sPrv && !(sCur && sCur._estimated) ? { asOf: approx ? sCur.takenAt : (isCurrent ? dstr(now) : (sCur.takenAt || '')), approx } : null,
-      stockMissing: !stockKnown, visitorAccess: visitorOn, firstSnapshot: firstSnap, prevEstimated: prevEst, prev2Estimated: !!(sPrv2 && sPrv2._estimated), curEstimated: !!(sCur && sCur._estimated),
+      stockMissing: !stockKnown, lateAsOf: lateUsed, visitorAccess: visitorOn, firstSnapshot: firstSnap, prevEstimated: prevEst, prev2Estimated: !!(sPrv2 && sPrv2._estimated), curEstimated: !!(sCur && sCur._estimated),
     },
     assets: { rows: rows.assets, note: `${cur.added} installed and ${cur.removed} moved out during ${monthLabel(month).split(' ')[0]}` },
     hardwareMix,
@@ -485,7 +494,7 @@ async function buildReport(pool, { sites, month, scopeLabel, now = new Date() })
     activities: { rows: activities, total: { cur: cur.actTotal, prev: prv.actTotal, prev2: prv2 ? prv2.actTotal : null } },
     issues: { rows: rows.issues, oldestCritical: cur.oldestCritical },
     power: { rows: rows.power, configured: !!pw || rows.power.some((r) => r.cur != null), feedsHot: cur.feedsHot, highest: pw && pw.highest },
-    ops: { rows: rows.ops, note: rows.ops.some((r) => r.kind === 'stock' && r.cur == null) ? `Server and firmware figures are saved every day${firstSnap ? ' from ' + firstSnap : ''}; earlier months cannot be rebuilt, so they stay blank.` : '' },
+    ops: { rows: rows.ops, note: rows.ops.some((r) => r.kind === 'stock' && r.cur == null) ? `Server and firmware figures are saved every day${firstSnap ? ' from ' + firstSnap : ''}; earlier months cannot be rebuilt, so they are shown as not recorded.` : '' },
     locations,
   };
 }

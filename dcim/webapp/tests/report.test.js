@@ -50,7 +50,7 @@ function fakePool(over = {}) {
     stored,
     async query(sql, params = []) {
       if (/^\s*CREATE TABLE/i.test(sql)) return [[]];
-      if (/INSERT INTO report_snapshots/.test(sql)) { const i = stored.findIndex((s) => s.site === params[0] && s.month === params[1]); const row = { site: params[0], month: params[1], data: params[2] }; if (i >= 0) stored[i] = row; else stored.push(row); return [{}]; }
+      if (/INSERT INTO report_snapshots/.test(sql)) { const i = stored.findIndex((s) => s.site === params[0] && s.month === params[1]); const row = { site: params[0], month: params[1], data: params[2], taken_at: '2026-11-23' }; if (i >= 0) stored[i] = row; else stored.push(row); return [{}]; }
       if (/FROM report_snapshots/.test(sql)) { const months = params.filter((p) => /^\d{4}-\d{2}$/.test(p)); return [stored.filter((s) => months.includes(s.month))]; }
       if (/FROM issues/.test(sql)) return [t.issues];
       if (/FROM material_movements WHERE status/.test(sql)) return [[{ site: 'Chennai', c: 1 }]];
@@ -122,8 +122,9 @@ test('event figures for a past month are rebuilt from dated records', async () =
   assert.strictEqual(rep.meta.stockMissing, false);
   const dev = rep.assets.rows.find((r) => r.label === 'Installed devices');
   assert.ok(dev.cur != null && dev.prev != null && dev.approx && dev.prevEst);
-  // what cannot be rebuilt stays unknown
-  assert.strictEqual(rep.assets.rows.find((r) => r.label === 'Assets in store').cur, null);
+  // what cannot be rebuilt shows the first saved reading, marked with its date (never a blank when one exists)
+  const store = rep.assets.rows.find((r) => r.label === 'Assets in store');
+  assert.ok(store.cur != null && store.asOf && store.delta === null);
 });
 
 test('stock figures come from snapshots and changes are computed against last month', async () => {
@@ -153,6 +154,18 @@ test('current month is captured live into a snapshot (rack U, make, firmware, se
   assert.deepStrictEqual(snap.servers, { total: 2, known: 2, online: 1, unreachable: 1 });
   assert.strictEqual(snap.racksHot.length, 1); assert.strictEqual(snap.racksHot[0].pct, 95);
   assert.strictEqual(snap.pendingTransfers, 1);
+});
+
+test('a month with only an estimate shows the first saved server/firmware/store reading, marked "as on", never a blank', async () => {
+  const pool = fakePool({});
+  const rep = await data.buildReport(pool, { sites: ['Chennai'], month: '2026-10', now: new Date(2026, 10, 23) });
+  const o = (l) => rep.ops.rows.find((r) => r.label === l);
+  assert.strictEqual(o('Servers online').cur, 50); assert.ok(o('Servers online').asOf, 'marked with the date it was read');
+  assert.strictEqual(o('Servers unreachable').cur, 1); assert.strictEqual(o('Firmware compliant').cur, 50);
+  assert.strictEqual(o('Servers online').delta, null, 'no change is computed against a different date');
+  assert.strictEqual(rep.assets.rows.find((r) => r.label === 'Assets in store').cur, 1);
+  assert.ok(rep.meta.lateAsOf, 'report footnote date present');
+  const pdf = render(rep, {}); assert.ok(pdf.length > 1000);
 });
 
 test('multi-location totals and a location table; one missing snapshot hides the combined stock total', async () => {

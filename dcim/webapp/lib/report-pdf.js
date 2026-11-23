@@ -100,8 +100,9 @@ function measureCard(L, title, sub, rows, color, extraLine) {
     p.text(fmtNum(r.prev2, r.unit, r.dec), b.x + 74, y, { size: 8.2, color: C.dim, align: 'right' });
     p.text(fmtNum(r.prev, r.unit, r.dec), b.x + 92 - (r.prevEst ? 1.6 : 0), y, { size: 8.4, color: C.dim, align: 'right' });
     if (r.prevEst) p.text('*', b.x + 92 + 0.2, y - 0.8, { size: 8, font: 'HB', color: C.amber });
-    p.text(fmtNum(r.cur, r.unit, r.dec), b.x + 110 - (r.approx ? 1.6 : 0), y, { size: 8.6, font: 'HB', color: C.white, align: 'right' });
+    p.text(fmtNum(r.cur, r.unit, r.dec), b.x + 110 - (r.approx || r.asOf ? 1.6 : 0), y, { size: 8.6, font: 'HB', color: C.white, align: 'right' });
     if (r.approx) p.text('*', b.x + 110 + 0.2, y - 0.8, { size: 8, font: 'HB', color: C.amber });
+    if (r.asOf) p.text('#', b.x + 110 + 0.2, y - 0.8, { size: 8, font: 'HB', color: C.amber });
     if (r.first || r.prev == null || r.cur == null) {
       p.text('\u2014', b.x + 136, y, { size: 8.4, color: C.dim, align: 'right' });
       if (r.first) p.text('first record', b.x + 168, y, { size: 6.8, color: C.dim, align: 'center' });
@@ -295,7 +296,11 @@ function render(rep, opts = {}) {
   L.newPage(`${m.scope} · every module compared with ${m.prevLabel}${m.isCurrent ? ' · month to date' : ''}`);
   if (m.prevEstimated || m.curEstimated) {
     const which = m.prevEstimated && m.curEstimated ? `${m.prevLabel} and ${m.label}` : (m.prevEstimated ? m.prevLabel : m.label);
-    const n = L.page.paragraph(`* ${which}: no month-end snapshot was saved, so device, rack, utilization and hardware-mix figures are estimated from installation and registration dates (devices moved out or removed since then are not counted). Store stock, server, firmware and power totals cannot be rebuilt and show a dash. From now on DCIM saves a snapshot every day, so later reports use exact figures.`, ML, L.y + 1, W, { size: 7.6, color: C.amber, lineH: 3.8, maxLines: 4 });
+    const n = L.page.paragraph(`* ${which}: no month-end snapshot was saved, so device, rack, utilization and hardware-mix figures are estimated from installation and registration dates (devices moved out or removed since then are not counted). Store stock, server, firmware and power totals cannot be rebuilt: the first saved reading is shown marked #, or "not recorded" where none exists. From now on DCIM saves a snapshot every day, so later reports use exact figures.`, ML, L.y + 1, W, { size: 7.6, color: C.amber, lineH: 3.8, maxLines: 4 });
+    L.y += n * 3.8 + 3.5;
+  }
+  if (m.lateAsOf) {
+    const n = L.page.paragraph(`# ${m.label}: the month-end position of store stock, power, servers and firmware was not saved, so the first reading saved afterwards (as on ${m.lateAsOf}) is shown. These figures are not a month-end value and no change is calculated for them; from now on DCIM saves them every day.`, ML, L.y + 1, W, { size: 7.6, color: C.amber, lineH: 3.8, maxLines: 3 });
     L.y += n * 3.8 + 3.5;
   }
   if (m.firstRecord || m.stockMissing) {
