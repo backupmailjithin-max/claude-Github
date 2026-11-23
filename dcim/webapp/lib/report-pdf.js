@@ -29,6 +29,7 @@ function fmtDelta(d, unit = '', dec = 0) {
 }
 function deltaColor(d, good) {
   if (d == null || d === 0 || good === null || good === undefined) return C.mute;
+  if (good === 'up') return d > 0 ? C.good : C.mute; // growth is good news; a fall is shown neutral (devices may be moved out on purpose)
   return (d > 0) === !!good ? C.good : C.bad;
 }
 function pctChange(prev, cur) { if (prev == null || cur == null || !prev) return ''; const p = Math.round((cur - prev) / Math.abs(prev) * 100); return (p > 0 ? '+' : p < 0 ? MINUS : '') + Math.abs(p) + '%'; }
@@ -76,8 +77,8 @@ function spark(p, x, y, w, h, vals, col) {
   if (pts.length < 2) return false;
   const mn = Math.min(...pts.map((o) => o.v)), mx = Math.max(...pts.map((o) => o.v)), r = (mx - mn) || 1, n = vals.length - 1;
   const xy = pts.map((o) => [x + (o.i / n) * w, y + h - ((o.v - mn) / r) * h]);
-  p.poly(xy, { stroke: col, lw: 0.35 });
-  const last = xy[xy.length - 1]; p.circle(last[0], last[1], 0.75, { fill: col });
+  p.poly(xy, { stroke: col, lw: 0.3 });
+  const last = xy[xy.length - 1]; p.circle(last[0], last[1], 0.6, { fill: col });
   return true;
 }
 
@@ -108,7 +109,7 @@ function measureCard(L, title, sub, rows, color, extraLine) {
     } else {
       L.deltaAt(b.x + 136, y, r.delta, r.good, r.unit === '%' ? '%' : '', r.dec || 0, 8);
       p.text(r.unit === '%' ? '' : pctChange(r.prev, r.cur), b.x + 152, y, { size: 7.4, color: C.dim, align: 'right' });
-      if (!spark(p, b.x + 156, y - 4.2, 24, 5, r.series, color)) p.text('\u2014', b.x + 168, y, { size: 7, color: C.dim, align: 'center' });
+      if (!spark(p, b.x + 160, y - 3.9, 16, 3.6, r.trend || r.series, color)) p.text('\u2014', b.x + 168, y, { size: 7, color: C.dim, align: 'center' });
     }
   });
   if (extraLine) p.text(extraLine, b.x, b.y + 5.6 + rows.length * RH - 1, { size: 7.2, color: C.mute, maxW: b.w });
@@ -253,7 +254,7 @@ function power(L) {
   measureCard(L, 'Power Capacity Monitoring', `From the PDU Capacity page · ${rep.meta.shortLabel} compared with ${rep.meta.prevShort}`, pw.rows, SPARK.power, note);
 }
 
-function ops(L) { measureCard(L, 'Operations Snapshot', 'Server monitoring and visitor access', L.rep.ops.rows, SPARK.ops); }
+function ops(L) { measureCard(L, 'Operations Snapshot', L.rep.meta.visitorAccess ? 'Server monitoring and visitor access' : 'Server monitoring and firmware compliance', L.rep.ops.rows, SPARK.ops, L.rep.ops.note); }
 
 function locations(L) {
   const { rep } = L; if (!rep.locations || !rep.locations.length) return;

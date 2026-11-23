@@ -3531,6 +3531,8 @@ function MaterialMovements({ onUploadDocs, onApproveNamed, defaultApprover, move
                 activeColumnFilterCount,
                 ")"),
             canEdit && React.createElement(FileActions, { onExportExcel: onExportExcel, onExportCSV: onExportCSV, onImport: onImport, importError: importError, progress: importProgress, errorDetails: importErrorDetails })),
+        (!APPROVAL_ACCESS && (movements || []).some((m) => m.status === "Pending Approval")) && React.createElement("div", { "data-legacy-pending": "1", className: "neu-card", style: { padding: "10px 16px", marginBottom: 12, fontFamily: "Inter", fontSize: 12, color: "#92400E", background: "#FFFBEB", borderRadius: 14 } },
+            (movements || []).filter((m) => m.status === "Pending Approval").length + " older request(s) are still marked \"Pending Approval\" from when the approval flow was on. The approval flow is off, so they cannot be approved here; a Global Administrator can switch it on in Settings \u2192 Features to review them."),
         selectedIds.size > 0 && React.createElement("div", { className: "neu-card", style: { display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", marginBottom: 10 } },
             React.createElement("strong", { style: { fontFamily: "Inter", fontSize: 12, color: "#4F46E5" } },
                 selectedIds.size,
@@ -12069,7 +12071,7 @@ function NotificationSettingsPanel() {
         note && React.createElement("div", { style: { color: note.ok ? "#065F46" : "#B91C1C", fontSize: 12.5, background: note.ok ? "#ECFDF5" : "#FEF2F2", border: `1px solid ${note.ok ? "#A7F3D0" : "#FECACA"}`, padding: "9px 12px", borderRadius: 10 } }, note.text),
         React.createElement("div", { className: "neu-card anim-in d1", style: { padding: 24 } },
             React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 700, color: "#020617", marginBottom: 4 } }, "Email (SMTP) server"),
-            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#020617", marginBottom: 16 } }, "Used to send all automated notifications - ticket creation, approvals/rejections, monthly reports, and manual report emails."),
+            React.createElement("div", { style: { fontFamily: "Inter", fontSize: 12, color: "#020617", marginBottom: 16 } }, "Used to send all automated notifications - ticket creation, " + (APPROVAL_ACCESS ? "approvals/rejections, " : "") + "monthly reports, and manual report emails."),
             React.createElement("div", { style: { display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14, marginBottom: 14 } },
                 React.createElement(Field, { label: "SMTP host" },
                     React.createElement("input", { value: smtp.host, onChange: (e) => setS("host", e.target.value), className: "neu-input", placeholder: "smtp.example.com" })),
@@ -12215,7 +12217,7 @@ function ActivityLogsPanel({ isAdmin }) {
             React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800, color: "#020617" } }, "Activity Logs"),
             React.createElement("span", { style: { fontSize: 11, color: "#94A3B8" } }, `${total} record${total === 1 ? "" : "s"}`)),
         React.createElement("div", { style: { fontSize: 11.5, color: "#020617", marginBottom: 16, lineHeight: 1.5 } },
-            "Every create, update, approval and deletion across the app, with who did it and when. Kept for 6 months, then automatically cleared. ",
+            "Every create, update, " + (APPROVAL_ACCESS ? "approval " : "") + "and deletion across the app, with who did it and when. Kept for 6 months, then automatically cleared. ",
             isAdmin ? "Deleted records with a saved snapshot can be restored." : "Only an Admin can restore a deleted record."),
         React.createElement("div", { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16, alignItems: "center" } },
             React.createElement("div", { className: "neu-pressed", style: { display: "flex", alignItems: "center", gap: 8, padding: "9px 14px", borderRadius: 12, flex: "1 1 220px", minWidth: 0 } },
@@ -16769,6 +16771,17 @@ function DataCenterDashboard() {
     useEffect(() => {
         fetch('/api/setup/status').then(r => r.ok ? r.json() : null).then(s => { if (s)
             { setOrgBrand({ companyName: s.companyName || "DCIM Dashboard", appName: s.appName || "DCIM Dashboard", logoUrl: s.logoUrl || "", footerText: s.footerText || "" }); setApprovalAccess(!!s.approvalAccessEnabled); setMultiVendor(!!s.multiVendorEnabled); } }).catch(() => { });
+    }, []);
+    // Pop-up helpers (additive): Esc closes the top-most pop-up through its own close button, and icon-only
+    // close buttons get a screen-reader name. Pop-ups without a close button (forced password change) are left alone.
+    useEffect(() => {
+        const topModal = () => { const ms = [...document.querySelectorAll("div")].filter((d) => { const c = getComputedStyle(d); return c.position === "fixed" && d.offsetWidth >= innerWidth * 0.9 && d.offsetHeight >= innerHeight * 0.9 && d.querySelector("button"); }); return ms.length ? ms[ms.length - 1] : null; };
+        const closeBtn = (m) => { const bs = [...m.querySelectorAll("button")].filter((x) => !(x.innerText || "").trim() && x.offsetWidth > 0 && x.offsetWidth <= 48 && !/delete|remove|trash|clear/i.test((x.getAttribute("title") || "") + (x.getAttribute("aria-label") || ""))); bs.sort((a, c) => a.getBoundingClientRect().top - c.getBoundingClientRect().top || c.getBoundingClientRect().left - a.getBoundingClientRect().left); return bs[0] || null; };
+        const onKey = (e) => { if (e.key !== "Escape" || e.defaultPrevented) return; const m = topModal(); if (!m) return; const b = closeBtn(m); if (b) { e.preventDefault(); b.click(); } };
+        const label = () => { const m = topModal(); if (!m) return; const b = closeBtn(m); if (b && !b.getAttribute("aria-label") && !b.getAttribute("title")) { b.setAttribute("aria-label", "Close"); b.setAttribute("title", "Close (Esc)"); } };
+        document.addEventListener("keydown", onKey);
+        const mo = new MutationObserver(label); mo.observe(document.body, { childList: true, subtree: true });
+        return () => { document.removeEventListener("keydown", onKey); mo.disconnect(); };
     }, []);
     // Approval flow + Visitor Access are optional modules (Settings -> Features). Off by default:
     // while off they are removed from the UI entirely, not greyed out.

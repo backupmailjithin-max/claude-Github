@@ -56,6 +56,8 @@ function fakePool(over = {}) {
       if (/FROM material_movements WHERE status/.test(sql)) return [[{ site: 'Chennai', c: 1 }]];
       if (/FROM material_movements/.test(sql)) return [t.mm];
       if (/FROM dc_activities/.test(sql)) return [t.acts];
+      if (/features\.approvalAccess/.test(sql)) return [over.visitorOn ? [{ v: '1' }] : []];
+      if (/MIN\(taken_at\)/.test(sql)) return [[{ t: over.firstSnap || null }]];
       if (/FROM visitor_requests/.test(sql)) return [t.visits];
       if (/COALESCE\(installation_date/.test(sql)) return [t.added];
       if (/FROM asset_movements/.test(sql)) return [t.removed];
@@ -109,7 +111,8 @@ test('event figures for a past month are rebuilt from dated records', async () =
   assert.deepStrictEqual(rep.materials.inwardTotals, { cur: 2, prev: 1 });
   assert.deepStrictEqual(rep.activities.rows, [{ type: 'Cabling', cur: 1, prev: 1, prev2: 0 }]);
   assert.deepStrictEqual(rep.activities.total, { cur: 1, prev: 1, prev2: 0 });
-  assert.strictEqual(rep.ops.rows.find((r) => r.label === 'Visits (visitor access)').cur, 1);
+  assert.ok(!rep.ops.rows.some((r) => /visit/i.test(r.label)), 'Visitor Access is off in the Internal build, so no visits row');
+  assert.strictEqual(rep.meta.visitorAccess, false);
   assert.strictEqual(rep.power.rows.find((r) => /^Peak daily load/.test(r.label)).cur, 8.4);
   assert.strictEqual(rep.power.rows.find((r) => /80% of rating/.test(r.label)).cur, 1);
   assert.strictEqual(rep.power.feedsHot[0].pct, 84);
@@ -223,4 +226,18 @@ test('report: DC activity rows carry the month before last; operations has no ap
   assert.ok(rep.zones.every((z) => 'prev2' in z));
   assert.ok(!rep.ops.rows.some((r) => /awaiting approval/i.test(r.label)));
   assert.ok(rep.meta.prev2Short);
+});
+
+test('visits row appears only when the Visitor Access feature is switched on', async () => {
+  const on = await data.buildReport(fakePool({ visitorOn: true }), { sites: ['Chennai'], month: '2026-10', now: new Date('2026-11-23T10:00:00Z') });
+  assert.ok(on.ops.rows.some((r) => r.label === 'Visits (visitor access)'));
+  assert.strictEqual(on.meta.visitorAccess, true);
+  const off = await data.buildReport(fakePool(), { sites: ['Chennai'], month: '2026-10', now: new Date('2026-11-23T10:00:00Z') });
+  assert.ok(!off.ops.rows.some((r) => /visit/i.test(r.label)));
+});
+
+test('growth in devices and racks is flagged good only when it goes up; every row carries a full trend series', async () => {
+  const rep = await data.buildReport(fakePool(), { sites: ['Chennai'], month: '2026-10', now: new Date('2026-11-23T10:00:00Z') });
+  for (const l of ['Installed devices', 'Total racks']) assert.strictEqual(rep.assets.rows.find((r) => r.label === l).good, 'up');
+  assert.ok(rep.assets.rows.every((r) => Array.isArray(r.trend) && r.trend.length === 6));
 });

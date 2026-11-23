@@ -363,6 +363,11 @@ const FALLBACK_DAYS = 15; // a month-end position may be taken from the first sn
 async function buildReport(pool, { sites, month, scopeLabel, now = new Date() }) {
   if (!isMonthKey(month)) throw Object.assign(new Error('month must look like 2026-10'), { statusCode: 400 });
   if (!Array.isArray(sites) || !sites.length) throw Object.assign(new Error('No location available for this report'), { statusCode: 403 });
+  // Visitor Access (and the approval flow) are optional modules, OFF in the Internal build. When off, nothing about them is reported.
+  let visitorOn = false;
+  try { const [fr] = await pool.query("SELECT v FROM app_settings WHERE k = 'features.approvalAccess' LIMIT 1"); visitorOn = !!(fr && fr[0] && String(fr[0].v) === '1'); } catch (e) { visitorOn = false; }
+  let firstSnap = null;
+  try { const [sr] = await pool.query(`SELECT MIN(taken_at) AS t FROM ${SNAP_TABLE} WHERE site IN (${qs(sites)})`, sites); if (sr && sr[0] && sr[0].t) firstSnap = dstr(sr[0].t); } catch (e) { firstSnap = null; }
   const curKey = monthKeyOf(now);
   if (month > curKey) throw Object.assign(new Error('That month has not started yet'), { statusCode: 400 });
   const isCurrent = month === curKey;
@@ -406,12 +411,12 @@ async function buildReport(pool, { sites, month, scopeLabel, now = new Date() })
     const good = o.good == null ? null : o.good;
     const watch = !!o.watch && curV != null && curV > 0 && (prev == null || curV > prev);
     (rows[mod] || (rows[mod] = [])).push({ label: typeof label === 'function' ? label(sCur) : label, prev2, prev, cur: curV, delta, unit: o.unit || '', dec: o.dec || 0, good, kind: o.kind || 'event',
-      series: exactSeries, first: o.kind === 'stock' && prev == null && curV != null, approx: o.kind === 'stock' && approx && curV != null, prevEst: o.kind === 'stock' && prevEst && prev != null, watch });
+      series: exactSeries, trend: series, first: o.kind === 'stock' && prev == null && curV != null, approx: o.kind === 'stock' && approx && curV != null, prevEst: o.kind === 'stock' && prevEst && prev != null, watch });
   };
   const st = (fn) => (e, s) => (s ? fn(s) : null);
 
-  add('assets', 'Installed devices', st((s) => s.devices), { kind: 'stock' });
-  add('assets', 'Total racks', st((s) => s.racks), { kind: 'stock' });
+  add('assets', 'Installed devices', st((s) => s.devices), { kind: 'stock', good: 'up' });
+  add('assets', 'Total racks', st((s) => s.racks), { kind: 'stock', good: 'up' });
   add('assets', 'DC utilization (rack U used)', st((s) => pctOf(s.usedU, s.totalU)), { kind: 'stock', unit: '%' });
   add('assets', 'Assets in store', st((s) => (s._estimated ? null : s.inStore)), { kind: 'stock' });
 
@@ -428,7 +433,7 @@ async function buildReport(pool, { sites, month, scopeLabel, now = new Date() })
   add('ops', 'Servers online', st((s) => (s.servers.known ? pctOf(s.servers.online, s.servers.known) : null)), { kind: 'stock', unit: '%', good: true });
   add('ops', 'Servers unreachable', st((s) => (s.servers.total ? s.servers.unreachable : null)), { kind: 'stock', good: false, watch: true });
   add('ops', 'Firmware compliant', st((s) => (s.fw.checked ? pctOf(s.fw.ok, s.fw.checked) : null)), { kind: 'stock', unit: '%', good: true });
-  add('ops', 'Visits (visitor access)', (e) => e.visits);
+  if (visitorOn) add('ops', 'Visits (visitor access)', (e) => e.visits);
 
   add('issues', 'Reported', (e) => e.reported);
   add('issues', 'Resolved / closed', (e) => e.resolved, { good: true });
@@ -471,7 +476,7 @@ async function buildReport(pool, { sites, month, scopeLabel, now = new Date() })
       month, prevMonth: prevKey, label: monthLabel(month), prevLabel: monthLabel(prevKey), shortLabel: monthShort(month), prevShort: monthShort(prevKey), prev2Short: monthShort(addMonths(month, -2)),
       scope: scopeLabel || (multi ? 'All locations' : sites[0]), sites, multi, isCurrent, generatedAt: now.toISOString(), monthsShown: keys.map(monthShort),
       firstRecord: stockKnown && !sPrv && !(sCur && sCur._estimated) ? { asOf: approx ? sCur.takenAt : (isCurrent ? dstr(now) : (sCur.takenAt || '')), approx } : null,
-      stockMissing: !stockKnown, prevEstimated: prevEst, prev2Estimated: !!(sPrv2 && sPrv2._estimated), curEstimated: !!(sCur && sCur._estimated),
+      stockMissing: !stockKnown, visitorAccess: visitorOn, firstSnapshot: firstSnap, prevEstimated: prevEst, prev2Estimated: !!(sPrv2 && sPrv2._estimated), curEstimated: !!(sCur && sCur._estimated),
     },
     assets: { rows: rows.assets, note: `${cur.added} installed and ${cur.removed} moved out during ${monthLabel(month).split(' ')[0]}` },
     hardwareMix,
@@ -480,7 +485,7 @@ async function buildReport(pool, { sites, month, scopeLabel, now = new Date() })
     activities: { rows: activities, total: { cur: cur.actTotal, prev: prv.actTotal, prev2: prv2 ? prv2.actTotal : null } },
     issues: { rows: rows.issues, oldestCritical: cur.oldestCritical },
     power: { rows: rows.power, configured: !!pw || rows.power.some((r) => r.cur != null), feedsHot: cur.feedsHot, highest: pw && pw.highest },
-    ops: { rows: rows.ops },
+    ops: { rows: rows.ops, note: rows.ops.some((r) => r.kind === 'stock' && r.cur == null) ? `Server and firmware figures are saved every day${firstSnap ? ' from ' + firstSnap : ''}; earlier months cannot be rebuilt, so they stay blank.` : '' },
     locations,
   };
 }
