@@ -1,4 +1,5 @@
 'use strict';
+const { parseGatePass } = require('./gate-pass');
 // =====================================================================================================
 // Document understanding for the Material Movement OCR assistant.
 //   * Input : an array of text lines  [{ text, conf, words:[{text,conf}] }]  (conf 0-100, text-layer PDFs use 100)
@@ -340,6 +341,51 @@ function parseDocument(lines, meta = {}) {
     if (names.length) { const v = names.join('; ').slice(0, 300); fields.itemDescription = mkVal(v, 0.85, tbl.conf, v.length > 160 ? 0.8 : 1, 'table'); }
     const qty = tbl.rows.reduce((a, r) => a + r.qty, 0); if (qty >= 1) fields.quantity = mkVal(String(qty), 0.85, tbl.conf, 1, 'table');
     if (tbl.unit) fields.unit = mkVal(tbl.unit, 0.8, tbl.conf, 1, 'table');
+  }
+  // Material Movement Gate Pass: two-column "Sender Details / Receiver Details" blocks, pass type, tracking id (read by position)
+  if (documentType.id === 'gate-pass' || /receiver\s+details/i.test(full)) {
+    let gp = null; try { gp = parseGatePass(lines); } catch (e) { gp = null; }
+    if (gp) {
+      const lvl = (c) => (typeof c === 'number' ? c : 85);
+      const put = (key, value, conf, strength = 0.95, fmt = 1) => { const v = clean(value); if (!v) return; fields[key] = mkVal(v, strength, lvl(conf), fmt, 'label'); };
+      if (gp.passType) put('movementType', gp.passType, 92, 1);
+      if (gp.trackingId && !fields.dcNumber) put('dcNumber', gp.trackingId, 93, 1, idFormat(gp.trackingId));
+      const r = gp.receiver || {}, sd = gp.sender || {}, rc = r._conf || {}, sc = sd._conf || {};
+      const phoneOk = (v) => /^\+?\d[\d\s-]{8,13}$/.test(String(v || '')) ;
+      if (gp.passType === 'Inward') {
+        // material arrives: the sender block is the vendor, the receiver block is the person at site
+        if (sd.company || sd.name) put('sender', sd.company || sd.name, sc.company || sc.name);
+        if (phoneOk(sd.phone)) put('contactMobile', sd.phone.replace(/\s+/g, ' '), sc.phone, 0.95, 1);
+        if (sd.address) put('partyAddress', sd.address, sc.address);
+        if (r.contact || r.name || r.company) put('receiver', r.contact || r.name || r.company, rc.contact || rc.name || rc.company);
+      } else {
+        // material leaves: the receiver block is the outside party (company, person, phone, destination address)
+        if (r.company) put('sender', r.company, rc.company);
+        if (r.contact || r.name) put('receiver', r.contact || r.name, rc.contact || rc.name);
+        else if (r.company) put('receiver', r.company, rc.company, 0.7);
+        if (phoneOk(r.phone)) put('contactMobile', r.phone.replace(/\s+/g, ' '), rc.phone, 0.95, 1);
+        if (r.address) put('partyAddress', r.address, rc.address, 0.95, /\b\d{6}\b/.test(r.address) ? 1 : 0.85);
+      }
+      if (fields.sender) delete fields.vendor;
+      // serial numbers on a gate pass come only from its material table (not from "Security", stamps or "Checked By")
+      serialNumbers = serialNumbers.filter((x) => x.source === 'table');
+      // item row when the ruled table could not be split into columns: first readable line under the table heading
+      if (!fields.itemDescription) {
+        const hi = lines.findIndex((l) => /material\s+name/i.test(l.text) || (/\bserial\b/i.test(l.text) && /asset|quantity|unit/i.test(l.text)));
+        const ti = lines.findIndex((l, i) => i > hi && /total\s+entr/i.test(l.text));
+        if (hi >= 0) for (let i = hi + 1; i < (ti > 0 ? ti : Math.min(lines.length, hi + 14)); i++) {
+          const t = stripPunct(lines[i].text); if (lines[i].conf < 70 || !/^[A-Za-z][A-Za-z0-9 ,.\-\/()&]{4,70}$/.test(t) || (t.match(/[A-Za-z]{3,}/g) || []).length < 1 || /nxtra|data\s+ltd|material|serial|quantity|tracking|unit|asset|outward|signature|approved/i.test(t)) continue;
+          fields.itemDescription = mkVal(t, 0.8, lines[i].conf, 1, 'table');
+          const qm = /(\d{1,4})(?:\.0+)?\s*(?:Nos|Pcs|Units?|Sets?)\b/i.exec(lines[i].text);
+          if (qm && +qm[1] >= 1 && !fields.quantity) fields.quantity = mkVal(String(+qm[1]), 0.8, lines[i].conf, 1, 'table');
+          break;
+        }
+      }
+      if (!fields.quantity) {
+        const te = /Total\s*Entry\s*[:;]?\s*(\d{1,3})\b/i.exec(full);
+        if (te && +te[1] === 1 && fields.itemDescription) { fields.quantity = mkVal('1', 0.4, 70, 1, 'heuristic'); warnings.push('Quantity was not readable in the material table; 1 was taken from "Total Entry : 1". Please check it.'); }
+      }
+    }
   }
   // Repair look-alike letters inside a serial when at least two same-length siblings agree on a digit at that position.
   const repaired = [];

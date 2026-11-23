@@ -2974,6 +2974,9 @@ const OCR_ROWS = [
     { key: "sender", label: "Sender", fills: "Sender / Vendor" }, { key: "receiver", label: "Receiver", fills: "Receiver Name" },
     { key: "itemDescription", label: "Item Description", fills: "Item name" }, { key: "quantity", label: "Quantity", fills: "Quantity", type: "number" },
     { key: "unit", label: "Unit", fills: "Unit", onlyIfFound: true }, { key: "courierTracking", label: "Courier Tracking Number", fills: "Remarks" }, { key: "remarks", label: "Remarks", fills: "Remarks" },
+    { key: "movementType", label: "Movement Type", fills: "Movement type", onlyIfFound: true },
+    { key: "contactMobile", label: "Mobile No", fills: "Mobile No", onlyIfFound: true },
+    { key: "partyAddress", label: "Address", fills: "Source / Destination Address", onlyIfFound: true },
 ];
 const ocrLevelStyle = (lv) => lv === "High" ? { color: "#047857", background: "#D1FAE5" } : lv === "Medium" ? { color: "#B45309", background: "#FEF3C7" } : { color: "#B91C1C", background: "#FEE2E2" };
 // Look the detected identifiers up in the inventory already loaded in the app (site-scoped like every other list).
@@ -3000,8 +3003,8 @@ function ocrMatchInventory(values, assets) {
     return out;
 }
 const OCR_MAX_FILES = 5;
-const OCR_WIDE_KEYS = ["vendor", "sender", "receiver", "itemDescription", "remarks"];
-const OCR_MONO_KEYS = ["dcNumber", "invoiceNumber", "grnNumber", "podNumber", "courierTracking"];
+const OCR_WIDE_KEYS = ["vendor", "sender", "receiver", "itemDescription", "remarks", "partyAddress"];
+const OCR_MONO_KEYS = ["dcNumber", "invoiceNumber", "grnNumber", "podNumber", "courierTracking", "contactMobile"];
 // Combines the results of several documents (e.g. DC + invoice + POD) into ONE reviewable result. Single document => returned unchanged.
 function mergeOcrResults(items) {
     const ok = items.filter((i) => i.r && i.r.ok);
@@ -3045,8 +3048,8 @@ function OcrValidationModal({ result, fileName, assets, currentForm, formSite, o
     // Candidate identifiers are only worth showing if they hit the inventory; the rest stay hidden noise.
     const extraShown = extra.filter((x) => matches.some((m) => m.detected === x.value));
     const cur = (k) => String(currentForm[k] == null ? "" : currentForm[k]).trim();
-    const targetField = { dcNumber: "dcInvoiceNo", invoiceNumber: "dcInvoiceNo", grnNumber: "dcInvoiceNo", podNumber: "dcInvoiceNo", documentDate: "movementDate", vendor: "senderName", sender: "senderName", receiver: "receiverName", itemDescription: "itemName", quantity: "quantity", unit: "unit", courierTracking: "remarks", remarks: "remarks" };
-    const conflicts = (k) => { const t = targetField[k]; const c = cur(t); return !!c && !(t === "quantity" && c === "1") && !(t === "unit" && c === "Nos"); };
+    const targetField = { dcNumber: "dcInvoiceNo", invoiceNumber: "dcInvoiceNo", grnNumber: "dcInvoiceNo", podNumber: "dcInvoiceNo", documentDate: "movementDate", vendor: "senderName", sender: "senderName", receiver: "receiverName", itemDescription: "itemName", quantity: "quantity", unit: "unit", courierTracking: "remarks", remarks: "remarks", movementType: "movementType", contactMobile: "contactMobile", partyAddress: "partyAddress" };
+    const conflicts = (k) => { const t = targetField[k]; const c = cur(t); return !!c && !(t === "quantity" && c === "1") && !(t === "unit" && c === "Nos") && t !== "movementType"; };
     const counts = () => { let edited = 0, removed = 0, added = 0; const all = [...Object.values(rows), ...serials, ...tags]; all.forEach((x) => { const v = x.value.trim(), o = (x.original || "").trim(); if (o && !v) removed++; else if (!o && v) added++; else if (o && v && o !== v) edited++; }); return { edited, removed, added }; };
     const apply = () => {
         const g = (k) => (use[k] && rows[k].value.trim()) ? rows[k].value.trim() : "";
@@ -3055,6 +3058,9 @@ function OcrValidationModal({ result, fileName, assets, currentForm, formSite, o
         if (g("documentDate")) patch.movementDate = g("documentDate");
         const party = g("vendor") || g("sender"); if (party) patch.senderName = party;
         if (g("receiver")) patch.receiverName = g("receiver");
+        if (g("movementType") === "Inward" || g("movementType") === "Outward") patch.movementType = g("movementType");
+        if (g("contactMobile")) patch.contactMobile = g("contactMobile").replace(/[^0-9+()\- ]/g, "").slice(0, 20);
+        if (g("partyAddress")) patch.partyAddress = g("partyAddress").slice(0, 500);
         if (g("itemDescription")) patch.itemName = g("itemDescription").slice(0, 150);
         if (g("quantity") && Number(g("quantity")) >= 1) patch.quantity = String(parseInt(g("quantity"), 10));
         if (g("unit") && MOVEMENT_UNITS.includes(g("unit"))) patch.unit = g("unit");

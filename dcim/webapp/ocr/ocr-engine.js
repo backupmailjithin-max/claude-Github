@@ -150,6 +150,7 @@ async function recognizeImageInner(worker, buf, ext) {
   // ruled tables (gate passes, challans): re-read the table body as one block - the full-page passes often miss pale cells
   if (cur) { try { out = await tableRescue(worker, { ...cur, src: buf, ext }, out, t0); } catch (e) { /* keep the page reading */ } }
   if (cur) { try { await refineIds(worker, { ...cur, src: buf, ext }, out, t0); } catch (e) { /* keep the page reading */ } }
+  if (cur) { try { await refineNumbers(worker, { ...cur, src: buf, ext }, out, t0); } catch (e) { /* keep the page reading */ } }
   if (med0 && med0 < 12) out.meta = { lowRes: true, textHeight: Math.round(med0) };
   return out;
 }
@@ -242,6 +243,36 @@ async function refineIds(worker, base, lines, t0) {
       const cands = [{ t: txt.toUpperCase(), conf: w.conf }];
       for (const up of [1, 2, 3]) { const png = prep.cropCell(base.src, base.ext, base.scale, rect, up); if (!png) continue; const r = await worker.recognize(png, {}, {}); const tt = String(r.data.text || '').trim().replace(/[^A-Za-z0-9\-\/]/g, '').toUpperCase(); if (tt.length >= 6) cands.push({ t: tt, conf: r.data.confidence || 0 }); }
       if (cands.length > 1) { const v = voteTokens(cands, true); if (v && v !== txt.toUpperCase()) { w.text = w.text.replace(txt, v); l.text = l.words.map((x) => x.text).join(' '); } }
+    }
+  }
+}
+// phone numbers and PIN codes: a single wrong digit makes the value useless. A digit-only word that was read with low
+// confidence (a neighbouring heading or stamp touching it is the usual cause) is read again from enlarged crops - one
+// aligned with the word, one shifted up, because touching text pulls the word box off the digits - and a different
+// value replaces the page reading only when at least two of the re-reads agree on it.
+async function refineNumbers(worker, base, lines, t0) {
+  if (!prep || !base.ext || !base.src) return;
+  let n = 0;
+  for (const l of lines) {
+    for (const w of l.words || []) {
+      if (n >= 6 || Date.now() - t0 > OCR_TIMEOUT_MS * 0.9) return;
+      if (typeof w.x0 !== 'number') continue;
+      const txt = String(w.text).replace(/[^0-9]/g, '');
+      if (!/^\d{6}$|^\d{10}$/.test(txt) || String(w.text).replace(/[0-9+\-\s().:,]/g, '') || w.conf >= 85) continue;
+      n++;
+      const h = w.y1 - w.y0, wd = w.x1 - w.x0;
+      const rects = [{ x: w.x0 - 6, y: w.y0 - 6, w: wd + 12, h: h + 12 }, { x: w.x0 - 3, y: w.y0 - Math.round(h * 0.42), w: wd + 8, h: Math.round(h * 1.03) }];
+      try {
+        await worker.setParameters({ tessedit_pageseg_mode: '7', thresholding_method: '0' });
+        const tally = new Map();
+        for (const rect of rects) for (const up of [2, 3]) {
+          const png = prep.cropCell(base.src, base.ext, base.scale, rect, up); if (!png) continue;
+          const r = await worker.recognize(png, {}, {}); const tt = String(r.data.text || '').replace(/[^0-9]/g, '');
+          if (tt.length === txt.length) tally.set(tt, (tally.get(tt) || 0) + 1);
+        }
+        const best = [...tally.entries()].sort((a, b) => b[1] - a[1])[0];
+        if (best && best[1] >= 2 && best[0] !== txt) { w.text = String(w.text).replace(txt, best[0]); l.text = l.words.map((x) => x.text).join(' '); w.conf = Math.max(w.conf, 80); }
+      } catch (e) { /* keep the page reading */ }
     }
   }
 }
