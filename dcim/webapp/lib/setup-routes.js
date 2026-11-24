@@ -13,6 +13,7 @@ const { execFile } = require('child_process');
 const mysql = require('mysql2/promise');
 const { testSmtp, sendMail } = require('./smtp-client');
 const { buildZip } = require('./zip-writer');
+const { checkImageUpload } = require('./image-check');
 
 const ORG_KEYS = ['companyName', 'appName', 'department', 'orgUnit', 'footerText', 'supportEmail', 'supportContact', 'logoPath', 'faviconPath'];
 const ORG_EDITABLE_KEYS = ['companyName', 'appName', 'department', 'orgUnit', 'footerText', 'supportEmail', 'supportContact'];
@@ -274,7 +275,11 @@ module.exports = function registerSetupRoutes(app, deps) {
 
   const brandingDir = path.join(webappDir, 'uploads', 'branding');
   fs.mkdirSync(brandingDir, { recursive: true });
-  app.use('/branding', require('express').static(brandingDir, { dotfiles: 'deny', index: false, maxAge: '1h' }));
+  // Uploaded branding files are only ever drawn as pictures: never let a browser run or sniff them as anything else.
+  app.use('/branding', require('express').static(brandingDir, {
+    dotfiles: 'deny', index: false, maxAge: '1h',
+    setHeaders: (res) => { res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox"); },
+  }));
   const logoUpload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 2 * 1024 * 1024 },
@@ -283,7 +288,9 @@ module.exports = function registerSetupRoutes(app, deps) {
   app.post('/api/setup/logo', authenticateToken, requireGlobalAdmin, logoUpload.single('logo'), async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ error: 'Upload a PNG, JPEG, or SVG logo (max 2MB).' });
-      const ext = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/svg+xml': 'svg', 'image/x-icon': 'ico' }[req.file.mimetype] || 'png';
+      const chk = checkImageUpload(req.file.buffer, ['png', 'jpg', 'svg', 'ico'], req.file.mimetype);
+      if (chk.error) return res.status(400).json({ error: chk.error });
+      const ext = chk.ext;
       for (const old of fs.readdirSync(brandingDir)) { if (/^logo\./.test(old)) fs.unlinkSync(path.join(brandingDir, old)); }
       const fname = `logo.${ext}`;
       fs.writeFileSync(path.join(brandingDir, fname), req.file.buffer);
@@ -301,7 +308,9 @@ module.exports = function registerSetupRoutes(app, deps) {
   app.post('/api/setup/favicon', authenticateToken, requireGlobalAdmin, faviconUpload.single('favicon'), async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ error: 'Upload a .ico or .png favicon (max 512KB).' });
-      const ext = /png/.test(req.file.mimetype) ? 'png' : 'ico';
+      const chk = checkImageUpload(req.file.buffer, ['png', 'ico'], req.file.mimetype);
+      if (chk.error) return res.status(400).json({ error: chk.error });
+      const ext = chk.ext;
       for (const old of fs.readdirSync(brandingDir)) { if (/^favicon\./.test(old)) fs.unlinkSync(path.join(brandingDir, old)); }
       const fname = `favicon.${ext}`;
       fs.writeFileSync(path.join(brandingDir, fname), req.file.buffer);
@@ -856,3 +865,6 @@ module.exports = function registerSetupRoutes(app, deps) {
   // The caller invokes applyIntegrationEnv() once the database is up.
   return { applyIntegrationEnv, sendNotification, isApprovalAccessEnabled };
 };
+// Shared with other modules that must protect a stored credential the same way (Redfish BMC passwords).
+module.exports.encryptSecret = encryptSecret;
+module.exports.decryptSecret = decryptSecret;

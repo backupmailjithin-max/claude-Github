@@ -26,6 +26,17 @@ This release brings the licensing, packaging and operations work into one produc
 
 - A 10-day trial starts on first run. The trial start is kept in two places and signed; deleting one does not restart it. Winding the clock back does not add days.
 
+### Reliability and security fixes (2026-11-24 remediation)
+
+- **Serial number correction** now keeps the asset's cable connectivity and hardware details attached; issues were already followed.
+- **Deleting an asset** also removes its linked connectivity and hardware-detail rows in one step, and **Restore** from the audit log brings them back with the asset.
+- **Report e-mail** (`POST /api/reports/email`) is now available and reports mail-server problems with a readable message.
+- **Redfish BMC passwords** are stored encrypted (same method as the OME, OneView and SMTP secrets) and are encrypted in backups. Existing plain values are converted automatically at start-up.
+- **Visitor documents** are included in backups and restored with them. Older backups still restore, and new backups can still be read by older builds.
+- **Redfish background jobs** can only be read by the user who started them, or an Admin whose sites cover the job.
+- **Logo and favicon uploads** must be real images; SVG files containing scripts or external references are refused.
+- Housekeeping: an unused opening-stock route and a duplicate database index were removed, and `schema.sql` now matches the running database (a test keeps them in step).
+
 ### Visitor access
 
 - Visitor requests with access documents and a visitor lifecycle, included in backups.

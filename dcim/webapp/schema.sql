@@ -1,5 +1,5 @@
 -- Data Center Dashboard - MySQL / MariaDB schema
--- Mirrors what server.js -> initDB() creates and migrates to. Safe to re-run:
+-- Mirrors what server.js -> initDB() creates and migrates to (kept in step with the running schema; checked by tests/schema-sync.test.js). Safe to re-run:
 -- every table is CREATE TABLE IF NOT EXISTS and indexes are declared inline.
 -- (server.js creates all of this automatically on startup; run this only if you
 --  want to prepare the database by hand.)
@@ -17,7 +17,13 @@ CREATE TABLE IF NOT EXISTS users (
   role ENUM('Admin','Operator','Viewer') DEFAULT 'Viewer',
   location_access VARCHAR(50) DEFAULT 'All',
   status ENUM('Active','Inactive') DEFAULT 'Active',
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  is_approver tinyint(1) NOT NULL DEFAULT 0,
+  last_seen_at timestamp NULL,
+  last_login_at timestamp NULL,
+  session_id varchar(64),
+  must_change_password tinyint(1) NOT NULL DEFAULT 0,
+  password_changed_at datetime
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Locations (DCs) - seeded with Chennai and Manesar by server.js
@@ -25,7 +31,11 @@ CREATE TABLE IF NOT EXISTS locations (
   id VARCHAR(50) PRIMARY KEY,
   name VARCHAR(50) NOT NULL UNIQUE,
   created_by VARCHAR(100),
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  status varchar(20) NOT NULL DEFAULT 'Active',
+  archived_at datetime,
+  archived_by varchar(100),
+  KEY idx_locations_name (name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Catalogs shared by dropdowns and filters
@@ -33,7 +43,8 @@ CREATE TABLE IF NOT EXISTS rack_types (
   id VARCHAR(50) PRIMARY KEY,
   name VARCHAR(50) NOT NULL UNIQUE,
   created_by VARCHAR(100),
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_rack_types_name (name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS hardware_types (
@@ -47,7 +58,8 @@ CREATE TABLE IF NOT EXISTS hardware_types (
   -- Prefills the Add Asset form's Height field for this type; not enforced.
   default_height VARCHAR(10) DEFAULT NULL,
   created_by VARCHAR(100),
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_hardware_types_name (name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Zones: planned availability zones per site (DC Capacity -> "Add Zone")
@@ -111,8 +123,52 @@ CREATE TABLE IF NOT EXISTS assets (
   device_name VARCHAR(150),
   remarks TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  lifecycle_status varchar(30) NOT NULL DEFAULT 'Active',
+  custody_location varchar(100),
+  last_known_site varchar(50),
+  last_known_zone varchar(50),
+  last_known_rack varchar(50),
+  last_known_position varchar(50),
+  last_movement_at datetime,
+  last_movement_reason varchar(255),
+  redfish_username varchar(100),
+  redfish_password varchar(255),
+  redfish_port int DEFAULT 443,
+  redfish_version varchar(20),
+  bmc_firmware varchar(100),
+  bios_version varchar(100),
+  health_status varchar(20),
+  power_state varchar(20),
+  last_redfish_sync_at datetime,
+  last_redfish_error varchar(255),
+  redfish_alert_count int,
+  redfish_power_watts int,
+  redfish_psu_max_watts int,
+  hw_psu_rating_watts int,
+  hw_power_watts int,
+  hw_psu_max_watts int,
+  hw_power_source varchar(12),
+  hw_power_synced_at datetime,
+  redfish_monitor_ignored tinyint(1) NOT NULL DEFAULT 0,
+  redfish_serial_number varchar(150),
+  redfish_hw_summary varchar(255),
+  redfish_cpu varchar(255),
+  redfish_mem varchar(255),
+  redfish_disk varchar(255),
+  redfish_nic varchar(255),
+  redfish_hw_json mediumtext,
+  redfish_hw_at datetime,
+  firmware_source varchar(10) DEFAULT 'manual',
+  updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
+  updated_by varchar(100),
+  created_by varchar(100),
+  changed_fields varchar(255),
+  opening_stock tinyint(1) NOT NULL DEFAULT 0,
   INDEX idx_assets_site (site),
-  INDEX idx_assets_hardware (hardware_type)
+  INDEX idx_assets_hardware (hardware_type),
+  KEY idx_assets_lifecycle (lifecycle_status),
+  KEY idx_assets_rack (site, zone, rack_no),
+  KEY idx_assets_site_zone_hw (site, zone, hardware_type)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Issue tracker. Issues are linked to an asset by SERIAL NUMBER (asset_id). There is intentionally
@@ -147,7 +203,9 @@ CREATE TABLE IF NOT EXISTS issues (
   INDEX idx_issues_site (site),
   INDEX idx_issues_asset (asset_id),
   INDEX idx_issues_severity (severity),
-  INDEX idx_issues_status (completed_date)
+  INDEX idx_issues_status (completed_date),
+  KEY idx_issues_reported (reported_date),
+  KEY idx_issues_site_status (site, completed_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- DC activity log: Rack/Stacking, Cabling, Firmware Update, UPS Drill, ...
@@ -161,7 +219,11 @@ CREATE TABLE IF NOT EXISTS dc_activities (
   start_date DATE,
   completion_date DATE,
   created_by VARCHAR(100),
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_activities_dates (start_date, created_at),
+  KEY idx_activities_site (site),
+  KEY idx_activities_site_zone (site, zone),
+  KEY idx_activities_type (activity_type)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Material movements: Inward / Outward log with an optional DC/Invoice document per record
@@ -184,9 +246,15 @@ CREATE TABLE IF NOT EXISTS material_movements (
   remarks TEXT,
   created_by VARCHAR(100),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  ticket_no varchar(50),
+  status enum('Pending Approval','Approved','Rejected','Ticket Issued','Received at Site','Not Received','Outward Complete','Cancelled') NOT NULL DEFAULT 'Pending Approval',
+  approver_name varchar(150),
+  approved_at datetime,
+  reject_reason varchar(255),
   INDEX idx_movements_site (site),
   INDEX idx_movements_type (movement_type),
-  INDEX idx_movements_date (movement_date)
+  INDEX idx_movements_date (movement_date),
+  KEY idx_movements_site_date (site, movement_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Admin settings (backup on/off, backup folder, last backup result). Created automatically by server.js; not part of backups.
@@ -253,8 +321,266 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   ip_address VARCHAR(64),
   user_agent VARCHAR(255),
   details TEXT,
+  snapshot_data mediumtext,
   KEY idx_audit_created (created_at),
   KEY idx_audit_user (username, created_at),
   KEY idx_audit_action (action, created_at),
   KEY idx_audit_entity (entity_type, entity_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Lifecycle history of an asset (receive, install, move, transfer, decommission). Linked to assets by asset_id. Created automatically by server.js.
+CREATE TABLE IF NOT EXISTS asset_movements (
+  id varchar(50) NOT NULL,
+  asset_id varchar(50) NOT NULL,
+  serial_number varchar(150),
+  movement_type varchar(40) NOT NULL,
+  from_site varchar(50),
+  from_zone varchar(50),
+  from_rack_no varchar(50),
+  from_position varchar(50),
+  to_site varchar(50),
+  to_zone varchar(50),
+  to_rack_no varchar(50),
+  to_position varchar(50),
+  movement_date datetime NOT NULL,
+  reason varchar(255),
+  reference_no varchar(100),
+  performed_by varchar(100),
+  remarks text,
+  created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_asset_movements_asset (asset_id),
+  KEY idx_asset_movements_asset_date (asset_id, movement_date),
+  KEY idx_asset_movements_date (movement_date),
+  KEY idx_asset_movements_from_site (from_site),
+  KEY idx_asset_movements_serial (serial_number),
+  KEY idx_asset_movements_to_site (to_site)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Non-server rack items (patch panels, PDUs strips, cable managers...). Created automatically by server.js.
+CREATE TABLE IF NOT EXISTS rack_components (
+  id varchar(50) NOT NULL,
+  component_code varchar(64) NOT NULL,
+  site varchar(50) NOT NULL,
+  zone varchar(20) DEFAULT 'AZ-1',
+  rack_type varchar(50),
+  rack_no varchar(20) NOT NULL,
+  position varchar(20),
+  hardware_type varchar(50) NOT NULL,
+  height varchar(10),
+  manufacturer varchar(50),
+  model varchar(150),
+  asset_tag varchar(100),
+  installation_date date,
+  remarks text,
+  created_by varchar(100),
+  created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+  updated_by varchar(100),
+  updated_at timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  changed_fields text,
+  PRIMARY KEY (id),
+  KEY idx_rack_components_rack (site, zone, rack_no),
+  UNIQUE KEY uniq_component_code_per_rack (site, zone, rack_no, component_code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Cached firmware compliance results.
+CREATE TABLE IF NOT EXISTS firmware_compliance_cache (
+  k varchar(255) NOT NULL,
+  v longtext,
+  fetched_at bigint,
+  PRIMARY KEY (k)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Firmware update jobs and their progress (Dell OME / HPE OneView / Redfish).
+CREATE TABLE IF NOT EXISTS firmware_jobs (
+  id bigint NOT NULL AUTO_INCREMENT,
+  vendor varchar(20) NOT NULL,
+  site varchar(50) NOT NULL,
+  zone varchar(50) NOT NULL,
+  device_id varchar(255) NOT NULL,
+  device_name varchar(255),
+  serial varchar(100),
+  job_ref text,
+  task_uri varchar(255),
+  baseline_id varchar(500),
+  baseline_label varchar(500),
+  started_by varchar(100),
+  started_at bigint NOT NULL,
+  state varchar(20) NOT NULL DEFAULT 'Running',
+  percent int,
+  step text,
+  error text,
+  updated_at bigint,
+  finished_at bigint,
+  source varchar(20) NOT NULL DEFAULT 'dcim',
+  job_name varchar(255),
+  PRIMARY KEY (id),
+  KEY idx_fwjobs_device (vendor, site, zone, device_id),
+  KEY idx_fwjobs_lookup (vendor, site, zone, state)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Firmware compliance targets per model.
+CREATE TABLE IF NOT EXISTS firmware_model_targets (
+  vendor varchar(20) NOT NULL,
+  model_key varchar(200) NOT NULL,
+  model_name varchar(200) NOT NULL,
+  target_version varchar(255) NOT NULL,
+  updated_by varchar(100),
+  updated_at timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (vendor, model_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Firmware compliance targets per device.
+CREATE TABLE IF NOT EXISTS firmware_targets (
+  vendor varchar(20) NOT NULL,
+  target_version varchar(255),
+  updated_by varchar(100),
+  updated_at timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (vendor)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Edit locks of the floor plan editor.
+CREATE TABLE IF NOT EXISTS floor_plan_locks (
+  site varchar(50) NOT NULL,
+  zone varchar(50) NOT NULL,
+  lock_token varchar(120) NOT NULL,
+  user_id varchar(50) NOT NULL,
+  username varchar(100) NOT NULL,
+  user_name varchar(150) NOT NULL,
+  acquired_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  heartbeat_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at datetime NOT NULL,
+  PRIMARY KEY (site, zone),
+  KEY idx_floor_lock_expiry (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Documents attached to a material movement (files live in uploads/movements).
+CREATE TABLE IF NOT EXISTS material_movement_documents (
+  id varchar(50) NOT NULL,
+  movement_id varchar(50) NOT NULL,
+  file_name varchar(255) NOT NULL,
+  original_name varchar(255) NOT NULL,
+  uploaded_by varchar(100),
+  uploaded_at timestamp DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Power distribution units polled over SNMP (lib/pdu-routes.js).
+CREATE TABLE IF NOT EXISTS pdus (
+  id varchar(50) NOT NULL,
+  site varchar(50) NOT NULL,
+  zone varchar(20) DEFAULT 'AZ-1',
+  rack_type varchar(50),
+  rack_no varchar(20) NOT NULL,
+  feed_label varchar(20) NOT NULL DEFAULT 'Feed A',
+  ip_address varchar(100) NOT NULL,
+  chain_unit tinyint NOT NULL DEFAULT 0,
+  vendor varchar(50),
+  model varchar(150),
+  serial_number varchar(150),
+  firmware varchar(100),
+  phase enum('Single-Phase','3-Phase') NOT NULL DEFAULT 'Single-Phase',
+  max_load_kw decimal(6,2),
+  snmp_community varchar(100) DEFAULT 'public',
+  power_oid varchar(100),
+  power_scale decimal(10,4) NOT NULL DEFAULT 1.0000,
+  poll_interval_sec int NOT NULL DEFAULT 900,
+  status enum('online','offline','warning','unknown') NOT NULL DEFAULT 'unknown',
+  last_power_kw decimal(7,3),
+  last_reading_at datetime,
+  last_error varchar(255),
+  created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_site_zone_rack (site, zone, rack_no),
+  UNIQUE KEY uniq_pdu_ip_unit (ip_address, chain_unit)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Copies of monthly management reports that were generated or e-mailed (lib/report-routes.js creates it the first time a report is made).
+CREATE TABLE IF NOT EXISTS report_history (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  month CHAR(7) NOT NULL,
+  scope VARCHAR(120) NOT NULL,
+  sites TEXT,
+  source VARCHAR(10) NOT NULL,
+  created_by VARCHAR(100),
+  created_at DATETIME NOT NULL,
+  delivered_to TEXT,
+  delivery VARCHAR(20),
+  size_bytes INT,
+  pdf LONGBLOB,
+  KEY idx_report_history_month (month),
+  KEY idx_report_history_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Month-end figures saved for the monthly management report (lib/report-data.js).
+CREATE TABLE IF NOT EXISTS report_snapshots (
+  site varchar(50) NOT NULL,
+  month char(7) NOT NULL,
+  data longtext,
+  taken_at datetime NOT NULL,
+  PRIMARY KEY (site, month)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Documents attached to a visitor request (files live in uploads/visitors).
+CREATE TABLE IF NOT EXISTS visitor_access_documents (
+  id varchar(50) NOT NULL,
+  request_id varchar(50) NOT NULL,
+  file_name varchar(255) NOT NULL,
+  original_name varchar(255) NOT NULL,
+  uploaded_by varchar(100),
+  uploaded_at timestamp DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_visitor_doc_request (request_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Visitor access requests (feature "Visitor Access", off in the internal edition).
+CREATE TABLE IF NOT EXISTS visitor_requests (
+  id varchar(50) NOT NULL,
+  ticket_no varchar(50),
+  site varchar(50) NOT NULL,
+  zone varchar(20) DEFAULT 'AZ-1',
+  visitor_name varchar(150) NOT NULL,
+  company varchar(150),
+  phone varchar(30),
+  purpose text,
+  host_employee varchar(150),
+  visit_date date,
+  visit_date_to date,
+  expected_checkin datetime,
+  expected_checkout datetime,
+  actual_checkin datetime,
+  actual_checkout datetime,
+  id_proof_type varchar(50),
+  id_proof_number varchar(100),
+  status enum('Pending Approval','Approved','Rejected','Ticket Issued','In Progress','On Hold','Closed') NOT NULL DEFAULT 'Pending Approval',
+  approver_name varchar(150),
+  approved_at datetime,
+  reject_reason varchar(255),
+  remarks text,
+  created_by varchar(100),
+  created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_visitor_site (site),
+  KEY idx_visitor_status (status),
+  KEY idx_visitor_visit_date (visit_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Power history of each PDU (lib/pdu-routes.js).
+CREATE TABLE IF NOT EXISTS power_readings (
+  id bigint NOT NULL AUTO_INCREMENT,
+  pdu_id varchar(50) NOT NULL,
+  site varchar(50) NOT NULL,
+  zone varchar(20) NOT NULL,
+  reading_date date NOT NULL,
+  avg_kw decimal(7,3),
+  peak_kw decimal(7,3),
+  energy_kwh decimal(9,2),
+  sample_count int NOT NULL DEFAULT 0,
+  updated_at timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_site_zone_date (site, zone, reading_date),
+  UNIQUE KEY uniq_pdu_date (pdu_id, reading_date),
+  CONSTRAINT fk_power_readings_pdu FOREIGN KEY (pdu_id) REFERENCES pdus(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

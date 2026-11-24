@@ -11,6 +11,9 @@ const multer = require('multer');
 const oneviewPsu = require('./lib/oneview-psu');
 const psuModel = require('./lib/psu-model');
 const license = require('./lib/license');
+const redfishSecret = require('./lib/redfish-secret');
+const assetLinks = require('./lib/asset-links');
+const { moveSerialLinks, captureSerialLinks, removeSerialLinks, restoreSerialLinks } = assetLinks;
 const { canonicalModel, canonicalModelKey, canonicalModelFor } = require('./lib/model-names');
 const zlib = require('zlib'); // also used by BACKUP & RESTORE further down
 
@@ -458,7 +461,6 @@ const AUDIT_RULES = [
   { m: 'PATCH',  re: /^\/api\/assets\/([^/]+)$/, action: 'ASSET_UPDATE', entity: 'asset' },
   { m: 'DELETE', re: /^\/api\/assets\/([^/]+)$/, action: 'ASSET_DELETE', entity: 'asset' },
   { m: 'POST',   re: /^\/api\/assets\/bulk-upsert$/, action: 'ASSET_IMPORT', entity: 'asset' },
-  { m: 'POST',   re: /^\/api\/asset-lifecycle\/opening-stock$/, action: 'STORE_OPENING_STOCK_IMPORT', entity: 'asset' },
   { m: 'POST',   re: /^\/api\/asset-lifecycle\/store-import$/, action: 'STORE_BULK_IMPORT', entity: 'asset' },
   { m: 'POST',   re: /^\/api\/assets\/validate-import$/, action: 'ASSET_IMPORT_VALIDATE', entity: 'asset', log: true },
   { m: 'POST',   re: /^\/api\/assets\/([^/]+)\/lifecycle$/, action: 'ASSET_LIFECYCLE', entity: 'asset' },
@@ -1230,6 +1232,8 @@ async function initDB() {
     // auto-fill in this app and are never silently overwritten).
     try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_username VARCHAR(100)'); } catch (e) { /* already exists */ }
     try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_password VARCHAR(255)'); } catch (e) { /* already exists */ }
+    // BMC passwords are kept encrypted like the OME / OneView / SMTP passwords; this encrypts any value still stored as plain text (repeatable, idempotent)
+    try { await redfishSecret.sealLegacyPasswords(conn, JWT_SECRET, log); } catch (e) { log.warn('[redfish] could not encrypt stored BMC passwords yet:', e.message); }
     try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_port INT DEFAULT 443'); } catch (e) { /* already exists */ }
     try { await conn.query('ALTER TABLE assets ADD COLUMN redfish_version VARCHAR(20)'); } catch (e) { /* already exists */ }
     try { await conn.query('ALTER TABLE assets ADD COLUMN bmc_firmware VARCHAR(100)'); } catch (e) { /* already exists */ }
@@ -1572,7 +1576,9 @@ async function initDB() {
     await createIndexIfNotExists(conn, 'idx_assets_rack', 'assets', 'site, zone, rack_no');
     await createIndexIfNotExists(conn, 'idx_activities_site', 'dc_activities', 'site');
     await createIndexIfNotExists(conn, 'idx_activities_dates', 'dc_activities', 'start_date, created_at');
-    await createIndexIfNotExists(conn, 'idx_movements_site_alt', 'material_movements', 'site');
+    // idx_movements_site_alt was an exact copy of idx_movements_site (same table, same column) and the optimizer never picked it:
+    // it only added write cost. Removed (audit finding L2); older builds simply recreate it if the app is rolled back.
+    try { await conn.query('DROP INDEX idx_movements_site_alt ON material_movements'); } catch (e) { /* already gone */ }
     // PHASE-1: additional composite indexes (idempotent; a failure here only skips that index and never blocks startup)
     for (const [ix, tbl, cols] of [
       ['idx_assets_site_zone_hw', 'assets', 'site, zone, hardware_type'],   // dashboard / monitoring / power-summary filters
@@ -6093,12 +6099,27 @@ app.patch('/api/assets/:id', authenticateToken, requireRole(['Admin','Operator']
     if (cmp(deviceName) !== cmp(oldRow.device_name)) diffs.push('Device Name');
     if (cmp(remarks) !== cmp(oldRow.remarks)) diffs.push('Remarks');
     const changedFieldsStr = diffs.length ? diffs.join(', ') : null;
-    await pool.query(
+    // The asset row, its serial-keyed rows (connectivity, hardware details) and its issues are updated together:
+    // either all of them follow a corrected serial number or none do.
+    const editConn = await pool.getConnection();
+    try {
+    await editConn.beginTransaction();
+    await editConn.query(
       `UPDATE assets SET site=?, zone=?, rack_type=?, rack_no=?, position=?, hardware_type=?, height=?, manufacturer=?, model=?, serial_number=?, installation_date=?, asset_tag=?, mgmt_ip=?, firmware=?, device_name=?, remarks=?, updated_at=CURRENT_TIMESTAMP, updated_by=?, changed_fields=?${firmwareChanged ? ", firmware_source='manual'" : ''} WHERE id=?`,
       [a.site, a.zone || 'AZ-1', a.rackType, a.rackNo, a.position, hwType, a.height, a.manufacturer, a.model, serialNumber, installDate, assetTag, mgmtIp, firmware, deviceName, remarks, req.user.name || req.user.username, changedFieldsStr, id]
     );
+    if (serialNumber && existingRows[0].serial_number && serialNumber !== existingRows[0].serial_number) {
+      await moveSerialLinks(editConn, existingRows[0].serial_number, serialNumber);
+    }
     // keep linked issues in step with the asset (serial edit / move to another rack, zone or site)
-    await syncIssuesForAsset(pool, existingRows[0].serial_number, { serial: serialNumber, site: a.site, zone: a.zone, rackNo: a.rackNo, position: a.position });
+    await syncIssuesForAsset(editConn, existingRows[0].serial_number, { serial: serialNumber, site: a.site, zone: a.zone, rackNo: a.rackNo, position: a.position });
+    await editConn.commit();
+    } catch (txErr) {
+      try { await editConn.rollback(); } catch (e) { /* connection already gone */ }
+      throw txErr;
+    } finally {
+      editConn.release();
+    }
     res.json({ id, ...a, installationDate: installDate ? installDate.slice(0, 10) : null });
   } catch (e) {
     sendErr(res, e);
@@ -6116,8 +6137,29 @@ app.delete('/api/assets/:id', authenticateToken, requireRole(['Admin','Operator'
       const [[{ cnt }]] = await pool.query('SELECT COUNT(*) AS cnt FROM issues WHERE asset_id = ? AND completed_date IS NULL AND cancelled_date IS NULL', [rows[0].serial_number]);
       if (cnt > 0) return res.status(409).json({ error: `This asset still has ${cnt} open issue(s). Close or delete them in the Issue Tracker first.` });
     }
-    await pool.query('DELETE FROM assets WHERE id = ?', [req.params.id]);
-    await auditLogDeleteWithSnapshot(req, 'ASSET_DELETE', 'asset', req.params.id, rows[0].site, rows[0]);
+    // The asset and the rows that hang off its serial number (cable connectivity, cached hardware details) are removed
+    // together in one transaction, so nothing is left behind pointing at a device that no longer exists. Their content
+    // is kept in the delete snapshot, so "Restore" in the activity log brings the asset back complete. Closed issues
+    // stay: they are ticket history and the Issue Tracker also holds tickets for devices that are not in inventory.
+    const delConn = await pool.getConnection();
+    let snapshotRow = rows[0];
+    try {
+      await delConn.beginTransaction();
+      const links = rows[0].serial_number ? await captureSerialLinks(delConn, rows[0].serial_number) : { connectivity: null, hwDetails: null };
+      await delConn.query('DELETE FROM assets WHERE id = ?', [req.params.id]);
+      if (rows[0].serial_number) await removeSerialLinks(delConn, rows[0].serial_number, req.params.id);
+      await delConn.commit();
+      if (links.connectivity || links.hwDetails) {
+        const safe = (r) => (r ? Object.fromEntries(Object.entries(r).map(([k, v]) => [k, snapshotSafeValue(v)])) : null);
+        snapshotRow = { ...rows[0], __links: { connectivity: safe(links.connectivity), hwDetails: safe(links.hwDetails) } };
+      }
+    } catch (txErr) {
+      try { await delConn.rollback(); } catch (e) { /* connection already gone */ }
+      throw txErr;
+    } finally {
+      delConn.release();
+    }
+    await auditLogDeleteWithSnapshot(req, 'ASSET_DELETE', 'asset', req.params.id, rows[0].site, snapshotRow);
     res.json({ success: true });
   } catch (e) {
     sendErr(res, e);
@@ -6510,6 +6552,8 @@ app.post('/api/assets/bulk-upsert', authenticateToken, requireRole(['Admin','Ope
         [...issueRenames.flatMap((r) => [r.fromSerial, r.toSerial]), issueRenames.map((r) => r.fromSerial)]
       );
     }
+    // connectivity / hardware-detail rows are keyed by serial too: they follow a serial that was changed by the import
+    for (const r of issueRenames) { await moveSerialLinks(conn, r.fromSerial, r.toSerial); }
     if (openIssueRefresh.length) {
       // One statement refreshing site/zone/rack/position on every OPEN issue linked to any updated asset in this
       // chunk, instead of one UPDATE per updated row.
@@ -7115,117 +7159,8 @@ app.get('/api/asset-lifecycle', authenticateToken, async (req, res) => {
   } catch (e) { sendErr(res, e); }
 });
 
-// Bulk "received date" for devices that were already In Store before receipts were recorded.
-//  - Serial Number is mandatory; Received Date is optional. With a real date a 'Received to Store' record is added
-//    (marked as imported). Without a date the device is only tagged Opening stock - NO date is ever invented.
-//  - Only In Store assets that have no received / moved-to-store record are touched; anything else is reported and left as it is.
-//  - dryRun=true validates and reports, writes nothing.
-app.post('/api/asset-lifecycle/opening-stock', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
-  let conn;
-  try {
-    const body = req.body || {};
-    const input = Array.isArray(body.rows) ? body.rows : null;
-    const dryRun = body.dryRun !== false;
-    if (!input || !input.length) return res.status(400).json({ error: 'No rows to import.' });
-    if (input.length > 5000) return res.status(400).json({ error: 'Too many rows (maximum 5000 per import).' });
-    const allowed = await getAllowedSitesForUser(req.user);
-    const today = localTodayStr();
-    const out = [];
-    const seen = new Map();
-    const work = [];
-    input.forEach((r, i) => {
-      const rowNo = Number(r && r.row) || i + 2;
-      const serial = String((r && r.serialNumber) != null ? r.serialNumber : '').trim();
-      const item = { row: rowNo, serialNumber: serial, status: 'error', action: null, message: '', site: null, deviceName: null };
-      out.push(item);
-      if (!serial) { item.message = 'Serial Number is required.'; return; }
-      if (serial.length > 150) { item.message = 'Serial Number is too long.'; return; }
-      const key = serial.toLowerCase();
-      if (seen.has(key)) { item.message = `Duplicate serial - already on row ${seen.get(key)} of this file.`; return; }
-      seen.set(key, rowNo);
-      const rawDate = r.receivedDate;
-      let date = null;
-      if (rawDate !== undefined && rawDate !== null && String(rawDate).trim() !== '') {
-        date = normalizeDateInput(typeof rawDate === 'number' ? rawDate : String(rawDate).trim());
-        if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date) || isNaN(new Date(date + 'T00:00:00Z').getTime())) { item.message = `Received Date "${String(rawDate).slice(0, 30)}" is not a valid date. Use YYYY-MM-DD, DD-MMM-YYYY (05-Nov-2026) or a real Excel date.`; return; }
-        if (date > today) { item.message = `Received Date ${date} is in the future.`; return; }
-        if (date < '2000-01-01') { item.message = `Received Date ${date} is too old (before 2000).`; return; }
-      }
-      const custody = String(r.custodyLocation || '').trim();
-      if (custody.length > 100) { item.message = 'Store / Custody Location is too long (maximum 100 characters).'; return; }
-      const remarks = String(r.remarks || '').trim();
-      if (remarks.length > 255) { item.message = 'Remarks is too long (maximum 255 characters).'; return; }
-      work.push({ item, key, date, custody: custody || null, remarks: remarks || null });
-    });
-
-    // Look the serials up (only inside the user's own locations).
-    const byKey = new Map();
-    if (work.length && allowed.length) {
-      for (let i = 0; i < work.length; i += 500) {
-        const keys = work.slice(i, i + 500).map((w) => w.key);
-        const [rows] = await pool.query(
-          'SELECT id, site, serial_number, device_name, model, lifecycle_status, custody_location, opening_stock FROM assets WHERE site IN (?) AND LOWER(TRIM(serial_number)) IN (?)', [allowed, keys]);
-        rows.forEach((a) => { const k = String(a.serial_number).trim().toLowerCase(); (byKey.get(k) || byKey.set(k, []).get(k)).push(a); });
-      }
-    }
-    const ids = [].concat(...[...byKey.values()]).map((a) => a.id);
-    const hasMove = new Set();
-    for (let i = 0; i < ids.length; i += 500) {
-      const [mv] = await pool.query("SELECT DISTINCT asset_id FROM asset_movements WHERE asset_id IN (?) AND movement_type IN ('Received to Store','Store')", [ids.slice(i, i + 500)]);
-      mv.forEach((m) => hasMove.add(m.asset_id));
-    }
-    const todo = [];
-    for (const w of work) {
-      const list = byKey.get(w.key) || [];
-      const it = w.item;
-      if (!list.length) { it.message = 'Serial not found in your locations.'; continue; }
-      if (list.length > 1) { it.message = `Serial matches ${list.length} assets (${list.map((a) => a.site).join(', ')}) - cannot tell which one. Fix the duplicate in Asset Inventory first.`; continue; }
-      const a = list[0];
-      it.site = a.site; it.deviceName = a.device_name || a.model || null;
-      if ((a.lifecycle_status || 'Active') !== 'In Store') { it.message = `Not In Store (current status: ${a.lifecycle_status || 'Active'}).`; continue; }
-      if (hasMove.has(a.id)) { it.status = 'skipped'; it.message = 'Already has a received / moved-to-store date on record. Not changed.'; continue; }
-      if (a.opening_stock && !w.date) { it.status = 'skipped'; it.message = 'Already marked as Opening stock. Not changed.'; continue; }
-      it.status = 'ready'; it.action = w.date ? 'date' : 'opening';
-      it.message = w.date ? `Will record Received to Store on ${w.date}.` : 'Will be marked Opening stock (date not recorded).';
-      todo.push({ w, a });
-    }
-
-    if (!dryRun && todo.length) {
-      conn = await pool.getConnection();
-      await conn.beginTransaction();
-      const who = req.user.name || req.user.username;
-      for (const { w, a } of todo) {
-        const custody = w.custody || a.custody_location || `${a.site} Store`;
-        if (w.date) {
-          const when = `${w.date} 00:00:00`;
-          const reason = 'Received date imported (opening stock)';
-          await conn.query(`INSERT INTO asset_movements (id, asset_id, serial_number, movement_type, from_site, from_zone, from_rack_no, from_position, to_site, to_zone, to_rack_no, to_position, movement_date, reason, reference_no, performed_by, remarks) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-            [genId('AMV'), a.id, a.serial_number, 'Received to Store', null, null, null, null, a.site, null, null, null, when, reason, 'OPENING-STOCK-IMPORT', who, w.remarks]);
-          await conn.query('UPDATE assets SET opening_stock = 0, custody_location = ?, last_movement_at = ?, last_movement_reason = ?, changed_fields = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [custody, when, reason, 'Lifecycle: Received date imported', a.id]);
-        } else {
-          await conn.query('UPDATE assets SET opening_stock = 1, custody_location = ?, changed_fields = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [custody, 'Lifecycle: Marked Opening stock', a.id]);
-        }
-        w.item.status = 'applied';
-        w.item.message = w.date ? `Received to Store recorded for ${w.date}.` : 'Marked Opening stock (date not recorded).';
-      }
-      await conn.commit();
-    }
-    const count = (f) => out.filter(f).length;
-    const summary = {
-      total: out.length,
-      withDate: count((x) => (x.status === 'ready' || x.status === 'applied') && x.action === 'date'),
-      openingStock: count((x) => (x.status === 'ready' || x.status === 'applied') && x.action === 'opening'),
-      skipped: count((x) => x.status === 'skipped'),
-      errors: count((x) => x.status === 'error'),
-    };
-    res.locals.auditExtra = { dryRun, ...summary };
-    if (dryRun) res.locals.skipAudit = true;
-    res.json({ dryRun, summary, rows: out });
-  } catch (e) {
-    if (conn) { try { await conn.rollback(); } catch (_) { /* ignore */ } }
-    sendErr(res, e);
-  } finally { if (conn) conn.release(); }
-});
+// (Removed 2026-11-24, audit finding L1) POST /api/asset-lifecycle/opening-stock: the Store screen has used
+// POST /api/asset-lifecycle/store-import since 2026-11-06 and nothing called this older route any more.
 
 // Bulk-add OLD devices that are physically in the store but not yet in Asset Inventory.
 //  - Mandatory: Serial Number, Site, Hardware Type, Make, Model. Optional: Received Date, Asset Tag, Device Name, Store / Custody Location, Remarks.
@@ -9149,6 +9084,9 @@ app.post('/api/audit-logs/:id/restore', authenticateToken, requireRole(['Admin']
     if (logRow.site) await assertSiteAccess(req.user, logRow.site);
     let snapshot;
     try { snapshot = JSON.parse(logRow.snapshot_data); } catch (e) { return res.status(500).json({ error: 'The saved snapshot is corrupted and cannot be restored.' }); }
+    // A deleted asset's snapshot may carry the rows that hung off its serial number (connectivity, hardware details).
+    const linkedRows = snapshot && typeof snapshot === 'object' ? snapshot.__links : null;
+    if (snapshot && typeof snapshot === 'object') delete snapshot.__links;
     const cols = Object.keys(snapshot);
     if (!cols.length) return res.status(500).json({ error: 'The saved snapshot is empty and cannot be restored.' });
     try {
@@ -9156,6 +9094,9 @@ app.post('/api/audit-logs/:id/restore', authenticateToken, requireRole(['Admin']
     } catch (e) {
       if (e && e.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'This record already exists - it looks like it was already restored.' });
       throw e;
+    }
+    if (linkedRows && logRow.entity_type === 'asset') {
+      try { await restoreSerialLinks(pool, linkedRows); } catch (e) { log.warn('[restore] could not restore connectivity/hardware rows:', e.message); }
     }
     auditLog(req, `${logRow.entity_type.toUpperCase()}_RESTORE`, { entity: logRow.entity_type, entityId: logRow.entity_id, site: logRow.site, details: { restoredFromLogId: logRow.id } });
     res.json({ success: true });
@@ -9190,6 +9131,9 @@ const BACKUP_NAME_RE = /^dc-backup-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-(
 const BACKUP_SAFE_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
 const MAX_BACKUP_UPLOAD = 300 * 1024 * 1024;
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+// Visitor request documents live in their own folder (lib/visitor-routes.js). They travel in an extra section of the backup file
+// (visitorFiles, with its own checksum) that older versions simply ignore, so the backup format stays compatible both ways.
+const VISITOR_UPLOAD_DIR = path.join(__dirname, 'uploads', 'visitors');
 let backupBusy = false, backupTimer = null;
 const restoreUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_BACKUP_UPLOAD } });
 
@@ -9243,9 +9187,19 @@ async function buildBackup(kind, by) {
       files[f] = fs.readFileSync(fp).toString('base64');
     }
   } catch (e) { /* no uploads folder yet */ }
+  const visitorFiles = {}, skippedVisitorFiles = [];
+  try {
+    for (const f of fs.readdirSync(VISITOR_UPLOAD_DIR)) {
+      const fp = path.join(VISITOR_UPLOAD_DIR, path.basename(f)); const st = fs.statSync(fp);
+      if (!st.isFile() || !BACKUP_SAFE_FILE_RE.test(f)) continue;
+      if (st.size > MAX_ATTACHMENT_BYTES) { skippedVisitorFiles.push(f); continue; }
+      visitorFiles[f] = fs.readFileSync(fp).toString('base64');
+    }
+  } catch (e) { /* no visitor uploads folder yet */ }
   const sha256 = crypto.createHash('sha256').update(JSON.stringify({ tables, files })).digest('hex');
+  const visitorSha256 = crypto.createHash('sha256').update(JSON.stringify(visitorFiles)).digest('hex');
   const counts = {}; BACKUP_TABLES.forEach((t) => { if (tables[t]) counts[t] = tables[t].length; });
-  const manifest = { format: BACKUP_FORMAT, version: BACKUP_VERSION, appVersion: APP_VERSION, createdAt: new Date().toISOString(), createdBy: by || 'system', kind, counts, fileCount: Object.keys(files).length, skippedFiles, sha256, tables, files };
+  const manifest = { format: BACKUP_FORMAT, version: BACKUP_VERSION, appVersion: APP_VERSION, createdAt: new Date().toISOString(), createdBy: by || 'system', kind, counts, fileCount: Object.keys(files).length, skippedFiles, sha256, visitorFileCount: Object.keys(visitorFiles).length, skippedVisitorFiles, visitorSha256, tables, files, visitorFiles };
   return { buffer: zlib.gzipSync(Buffer.from(JSON.stringify(manifest)), { level: 6 }), manifest };
 }
 
@@ -9401,6 +9355,14 @@ function parseBackupBuffer(buf) {
     if (m.counts && typeof m.counts[t] === 'number' && m.counts[t] !== rows.length) throw httpErr(400, `Table "${t}" in the backup is incomplete (expected ${m.counts[t]} rows, found ${rows.length}). Nothing was changed.`);
   }
   if (m.fileCount != null && Number(m.fileCount) !== Object.keys(files).length) throw httpErr(400, 'The backup file list is incomplete (attachment count mismatch). Nothing was changed.');
+  // visitor documents (added later; a backup made by an older version has none and is restored exactly as before)
+  if (m.visitorFiles !== undefined) {
+    const vf = m.visitorFiles && typeof m.visitorFiles === 'object' && !Array.isArray(m.visitorFiles) ? m.visitorFiles : null;
+    if (!vf) throw httpErr(400, 'The visitor document section of the backup is damaged. Nothing was changed.');
+    if (m.visitorSha256 && crypto.createHash('sha256').update(JSON.stringify(vf)).digest('hex') !== m.visitorSha256) throw httpErr(400, 'The visitor documents in the backup are damaged or were modified (checksum mismatch). Nothing was changed.');
+    for (const f of Object.keys(vf)) if (!BACKUP_SAFE_FILE_RE.test(f) || typeof vf[f] !== 'string') throw httpErr(400, `The backup contains an unsafe visitor file name "${String(f).slice(0, 40)}".`);
+    if (m.visitorFileCount != null && Number(m.visitorFileCount) !== Object.keys(vf).length) throw httpErr(400, 'The visitor document list is incomplete (count mismatch). Nothing was changed.');
+  }
   return m;
 }
 async function currentCounts() { const out = {}; for (const t of BACKUP_TABLES) { try { const [[r]] = await pool.query(`SELECT COUNT(*) AS c FROM \`${t}\``); out[t] = r.c; } catch (e) { if (BACKUP_OPTIONAL_TABLES.has(t) && isNoSuchTable(e)) continue; throw e; } } return out; }
@@ -9436,8 +9398,13 @@ async function restoreManifest(m, by) {
   // uploaded DC / Invoice documents
   let filesRestored = 0; fs.mkdirSync(MOVEMENTS_UPLOAD_DIR, { recursive: true });
   for (const [name, b64] of Object.entries(m.files || {})) { try { fs.writeFileSync(safeUploadPath(name), Buffer.from(b64, 'base64')); filesRestored++; } catch (e) { log.warn('[restore] could not write file', name, e.message); } }
+  let visitorFilesRestored = 0;
+  if (m.visitorFiles && typeof m.visitorFiles === 'object') {
+    try { fs.mkdirSync(VISITOR_UPLOAD_DIR, { recursive: true }); } catch (e) { log.warn('[restore] could not create the visitor uploads folder:', e.message); }
+    for (const [name, b64] of Object.entries(m.visitorFiles)) { try { fs.writeFileSync(path.join(VISITOR_UPLOAD_DIR, path.basename(name)), Buffer.from(b64, 'base64')); visitorFilesRestored++; } catch (e) { log.warn('[restore] could not write visitor file', name, e.message); } }
+  }
   // Nothing is edited after the restore: what comes back is exactly what was in the backup file.
-  return { restored, untouched, filesRestored };
+  return { restored, untouched, filesRestored, visitorFilesRestored };
 }
 function backupSummary(m) { return { createdAt: m.createdAt, createdBy: m.createdBy, kind: m.kind, counts: m.counts || Object.fromEntries(Object.entries(m.tables).map(([t, r]) => [t, r.length])), fileCount: Object.keys(m.files || {}).length, tablesIncluded: Object.keys(m.tables) }; }
 
@@ -10268,6 +10235,8 @@ app.post('/api/backup/restore', authenticateToken, requireGlobalAdmin, restoreUp
       let safety; try { safety = await writeBackupFile('prerestore', req.user.name || req.user.username); } catch (e) { throw httpErr(500, `Could not take the safety backup of the current data, so nothing was restored. (${e.message})`); }
       const r = await restoreManifest(m, req.user.username);
       authUserCache.clear(); await flagDefaultPasswordAccounts();
+      // a backup made before BMC passwords were encrypted brings plain values back: encrypt them again
+      try { await redfishSecret.sealLegacyPasswords(pool, JWT_SECRET, log); } catch (e) { log.warn('[restore] could not re-encrypt BMC passwords:', e.message); }
       log.info(`[restore] done. Safety backup of the previous data: ${safety.name}`);
       auditLog(req, 'RESTORE', { entity: 'backup', entityId: source, details: { backupCreatedAt: m.createdAt, safetyBackup: safety.name, sha256: fileSha256 } });
       res.json({ ok: true, ...r, backup: info, safetyBackup: safety.name });
@@ -10304,7 +10273,7 @@ const PDU_POLL_INTERVAL_MS = Math.max(60000, Number(process.env.PDU_POLL_INTERVA
 const redfishRoutesModule = require('./lib/redfish-routes')(app, {
   pool: livePool, log, httpErr, sendErr,
   authenticateToken, requireRole, getAllowedSitesForUser, applySiteScope, assertSiteAccess,
-  genId, auditLog, monitorFetch,
+  genId, auditLog, monitorFetch, JWT_SECRET,
 });
 const REDFISH_SYNC_INTERVAL_MS = Math.max(60000, Number(process.env.REDFISH_SYNC_INTERVAL_MS) || 15 * 60 * 1000); // 15 min default, same cadence as PDU polling
 const visitorRoutesModule = require('./lib/visitor-routes')(app, {

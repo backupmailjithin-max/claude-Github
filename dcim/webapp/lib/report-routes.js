@@ -3,6 +3,7 @@
 //   GET  /api/reports/monthly/options              months, locations the user may report on, what the user may do, schedule (admin)
 //   POST /api/reports/monthly/pdf                  { month, site, notes }  -> application/pdf (download / on-screen preview)
 //   POST /api/reports/monthly/email                { month, site, notes, to:[...] } -> mails the PDF (Admin / Operator)
+//   POST /api/reports/email                        { to, subject, html } -> mails the Data Center Report window content (Admin / Operator)
 //   GET  /api/reports/monthly/schedule             saved schedule (Global Admin)
 //   PUT  /api/reports/monthly/schedule             save schedule (Global Admin)
 //   POST /api/reports/monthly/schedule/test        { email } sends the last full month's report to one address (Global Admin)
@@ -17,6 +18,7 @@ const LAST_KEY = 'report.monthly.last';
 const SNAP_DAY_KEY = 'report.snapshot.day';
 const HISTORY_MONTHS = 24;
 const MAX_ATTEMPTS = 3;
+const emailHtml = require('./email-html');
 const EMAIL_RE = /^[^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]+$/;
 const ALL = '__all__';
 
@@ -143,6 +145,25 @@ module.exports = function registerReportRoutes(app, deps) {
     auditLog(req, 'REPORT_EMAIL', { entity: 'monthly_report', entityId: month, status: r.sent ? 'success' : 'failure', details: { scope: sc.label, to, reason: r.reason } });
     if (!r.sent) throw bad(502, `The e-mail could not be sent: ${r.reason || 'unknown error'}`);
     res.json({ ok: true, sentTo: to, month, scope: sc.label });
+  }));
+
+  // "Email this report" in the Data Center Report window: mails the on-screen report (HTML) the browser sends.
+  // Same rules as the monthly report e-mail: Admin / Operator only, valid recipients (max 10), SMTP must be set up.
+  app.post('/api/reports/email', authenticateToken, wrap(async (req, res) => {
+    if (!canEmail(req.user)) throw bad(403, 'Only Admin and Operator users can e-mail reports');
+    const b = req.body || {};
+    const rcpt = emailHtml.parseRecipients(b.to);
+    if (rcpt.error) throw bad(400, rcpt.error);
+    if (typeof b.html !== 'string' || !b.html.trim()) throw bad(400, 'The report content is missing');
+    const html = emailHtml.withSenderBanner(emailHtml.sanitizeReportHtml(b.html), req.user.name || req.user.username);
+    if (Buffer.byteLength(html, 'utf8') > emailHtml.MAX_HTML_BYTES) throw bad(413, 'The report is too large to e-mail. Use Download Report instead.');
+    if (!(await smtpConfigured())) throw bad(409, 'E-mail is not set up yet. An administrator can configure it in Setup → E-mail (SMTP).');
+    const subject = emailHtml.cleanSubject(b.subject, `Data Center Report - ${today()}`);
+    const r = await sendNotification({ subject, html, to: rcpt.to });
+    auditLog(req, 'REPORT_EMAIL', { entity: 'dc_report', status: r.sent ? 'success' : 'failure', details: { to: rcpt.to, reason: r.reason } });
+    // 424 (not 5xx): the API wrapper hides the text of 5xx errors, and the person pressing the button needs to read why it failed.
+    if (!r.sent) throw bad(424, `The e-mail could not be sent: ${r.reason || 'unknown error'}`);
+    res.json({ ok: true, sentTo: rcpt.to });
   }));
 
   function normalizeSchedule(s) {

@@ -28,6 +28,7 @@ Each risk below is understood, accepted for this release and has a mitigation.
 | A7 | Real hardware dependency for OME, OneView and PDU | These features need a reachable appliance or device; there is no simulation mode. | Run the Setup Wizard's **Test Connection** against your own environment during acceptance, and follow the vendor UAT scenarios before relying on them. |
 | A8 | Audit log is not in backups | `audit_logs` is not backed up and is not restored. | Keep the audit retention setting suitable for your policy and export audit data separately if you must keep it past a restore. |
 | A9 | Rollback can restore an older licence file | A rollback restores the files captured at snapshot time, which can include an older `license.lic`. | After a rollback, check **Settings → License** and re-activate the current licence if needed. |
+| A10 | Rolling back below this release | Redfish BMC passwords are now stored encrypted; an older build cannot read them. | Before rolling back to an older build run `node lib/redfish-password-tool.js unseal` in the application folder, then roll back. |
 
 ## Deviations from the originally requested validation scope
 

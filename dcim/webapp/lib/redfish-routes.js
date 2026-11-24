@@ -15,6 +15,7 @@ function psuRatingFromPower(power) {
   return best > 0 ? Math.round(best) : null;
 }
 const { canonicalModelFor } = require('./model-names');
+const redfishSecret = require('./redfish-secret');
 // Vendor-agnostic hardware monitoring via DMTF Redfish - talks directly to
 // any server's BMC (Dell iDRAC, HPE iLO, Lenovo XCC, Cisco standalone IMC,
 // NVIDIA DGX BMC, or any other Redfish-conformant management controller),
@@ -629,7 +630,22 @@ async function detectRedfishAnyCredential(monitorFetch, ip, port, candidates) {
 }
 
 module.exports = function registerRedfishRoutes(app, deps) {
-  const { pool, log, httpErr, sendErr, authenticateToken, requireRole, getAllowedSitesForUser, applySiteScope, assertSiteAccess, genId, auditLog, monitorFetch } = deps;
+  const { pool, log, httpErr, sendErr, authenticateToken, requireRole, getAllowedSitesForUser, applySiteScope, assertSiteAccess, genId, auditLog, monitorFetch, JWT_SECRET } = deps;
+  // BMC passwords are stored encrypted (lib/redfish-secret.js); every read below goes through bmcPass(), every write through sealPw().
+  const bmcPass = (a) => redfishSecret.open(JWT_SECRET, a && a.redfish_password);
+  const sealPw = (p) => redfishSecret.seal(JWT_SECRET, p);
+  // Background job results (sync / discover / apply) are only shown to the person who started the job, or to an Admin whose
+  // sites cover every site the job touched. The owner and sites are kept on the job as hidden (non-enumerable) fields so the
+  // JSON the screens already read is unchanged. Anyone else gets the same "not found" answer as for a job that does not exist.
+  function tagJob(job, req, sites) { Object.defineProperty(job, '_acl', { value: { user: req.user && req.user.username, sites: [...new Set(sites || [])] }, enumerable: false }); return job; }
+  async function jobVisibleTo(req, job) {
+    const acl = job && job._acl;
+    if (!acl) return true;
+    if (req.user && acl.user === req.user.username) return true;
+    if (!req.user || req.user.role !== 'Admin') return false;
+    const allowed = await getAllowedSitesForUser(req.user);
+    return acl.sites.every((x) => allowed.includes(x));
+  }
 
   // Asset ids currently mid-sync (via either a manual "Sync Now" click or the background
   // auto-sync sweep). Shared between both paths so the same device's BMC is never hit by two
@@ -749,7 +765,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
       const { username, password, port } = req.body;
       if (!username) return res.status(400).json({ error: 'Username is required' });
       await pool.query('UPDATE assets SET redfish_username = ?, redfish_password = ?, redfish_port = ? WHERE id = ?',
-        [username, password || '', Number(port) > 0 ? Number(port) : 443, asset.id]);
+        [username, sealPw(password), Number(port) > 0 ? Number(port) : 443, asset.id]);
       auditLog(req, 'REDFISH_CREDENTIALS_SET', { entity: 'asset', entityId: asset.id, site: asset.site, status: 'success' });
       res.json({ success: true });
     } catch (e) { sendErr(res, e); }
@@ -764,7 +780,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
   // Reads the full hardware inventory from the BMC and stores it (summary columns + the detail JSON shown in "Hardware details").
   // Shared by the Hardware details "Read from BMC now" button and by every Sync path, so a Sync refreshes the hardware too.
   async function collectAndStoreHardware(asset) {
-    const hw = await collectHardware(monitorFetch, asset.mgmt_ip, asset.redfish_port, asset.redfish_username, asset.redfish_password, null);
+    const hw = await collectHardware(monitorFetch, asset.mgmt_ip, asset.redfish_port, asset.redfish_username, bmcPass(asset), null);
     const detail = { cpu: hw.cpu, memory: hw.memory, disks: hw.disks, nics: hw.nics, notes: hw.notes, totals: hw.totals };
     await pool.query('UPDATE assets SET redfish_cpu = ?, redfish_mem = ?, redfish_disk = ?, redfish_nic = ?, redfish_hw_json = ?, redfish_hw_at = NOW() WHERE id = ?',
       [hw.summary.cpu, hw.summary.memory, hw.summary.disk, hw.summary.nic, JSON.stringify(detail).slice(0, 4000000), asset.id]);
@@ -776,7 +792,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
   async function syncOneAsset(asset) {
     if (!asset.mgmt_ip) { const e = new Error('This asset has no management IP set'); e.statusCode = 400; throw e; }
     if (!asset.redfish_username) { const e = new Error('No Redfish credentials saved for this asset yet - use Test & Detect first'); e.statusCode = 400; throw e; }
-    const r = await detectRedfish(monitorFetch, asset.mgmt_ip, asset.redfish_port, asset.redfish_username, asset.redfish_password);
+    const r = await detectRedfish(monitorFetch, asset.mgmt_ip, asset.redfish_port, asset.redfish_username, bmcPass(asset));
     if (!r.reachable) {
       await pool.query('UPDATE assets SET last_redfish_error = ?, last_redfish_sync_at = NOW() WHERE id = ?', [String(r.error || 'Unreachable').slice(0, 255), asset.id]);
       return { reachable: false, error: r.error };
@@ -845,6 +861,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
       const [rows] = await pool.query(`SELECT * FROM assets WHERE ${conditions.join(' AND ')}`, params);
       const jobId = genId ? genId('RFS') : 'RFS-' + Date.now();
       const job = { jobId, status: 'running', total: rows.length, processed: 0, reachable: 0, unreachable: 0, skipped: 0, hwCollected: 0, hwFailed: 0, startedAt: Date.now(), finishedAt: null };
+      tagJob(job, req, rows.map((r) => r.site));
       syncJobs.set(jobId, job);
       scheduleJobCleanup(syncJobs, jobId);
       auditLog(req, 'REDFISH_SYNC', { entity: 'asset', status: 'success' }, { count: rows.length });
@@ -868,6 +885,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
   });
   app.get('/api/monitoring/redfish/sync/:jobId', authenticateToken, async (req, res) => {
     const job = syncJobs.get(req.params.jobId);
+    if (job && !(await jobVisibleTo(req, job))) return res.status(404).json({ error: 'Sync job not found (it may have expired)' });
     if (!job) return res.status(404).json({ error: 'Sync job not found (it may have expired)' });
     res.json(job);
   });
@@ -946,6 +964,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
 
       const jobId = genId('rfdisc');
       const job = { status: 'running', total: rows.length, scanned: 0, reachable: 0, autoIgnored: 0, results: [], credentialsTried: candidates.length, error: null };
+      tagJob(job, req, rows.map((r) => r.site));
       discoverJobs.set(jobId, job);
       // discoverRunning was already set true synchronously at the top of this handler.
       let idx = 0;
@@ -988,6 +1007,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
   // finished job's response exactly like the old one-shot response.
   app.get('/api/monitoring/redfish/discover/:jobId', authenticateToken, async (req, res) => {
     const job = discoverJobs.get(req.params.jobId);
+    if (job && !(await jobVisibleTo(req, job))) return res.status(404).json({ error: 'This scan has finished and its results have been cleared, or the job id is wrong. Start a new scan.' });
     if (!job) return res.status(404).json({ error: 'This scan has finished and its results have been cleared, or the job id is wrong. Start a new scan.' });
     res.json({ status: job.status, total: job.total, scanned: job.scanned, reachable: job.reachable, autoIgnored: job.autoIgnored, results: job.results, credentialsTried: job.credentialsTried, error: job.error });
   });
@@ -1016,6 +1036,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
       const ids = assetIds;
       const jobId = genId('rfapply');
       const job = { status: 'running', total: ids.length, processed: 0, applied: 0, skippedNotFound: 0, skippedNoMatch: 0, error: null };
+      tagJob(job, req, allowed);
       applyJobs.set(jobId, job);
       // applyRunning was already set true synchronously at the top of this handler.
       let idx = 0;
@@ -1062,7 +1083,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
                  bmc_firmware = ?, bios_version = COALESCE(?, bios_version), redfish_version = ?, health_status = ?, power_state = ?, redfish_alert_count = ?,
                  redfish_power_watts = ?, last_redfish_sync_at = NOW(), last_redfish_error = NULL
                WHERE id = ?`,
-              [r.credential.username, r.credential.password || '', r.vendor, canonicalModelFor(r.vendor, r.model), r.serialNumber, r.biosVersion, r.biosVersion, r.serialNumber, r.bmcFirmware, r.biosVersion, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
+              [r.credential.username, sealPw(r.credential.password), r.vendor, canonicalModelFor(r.vendor, r.model), r.serialNumber, r.biosVersion, r.biosVersion, r.serialNumber, r.bmcFirmware, r.biosVersion, r.redfishVersion, r.healthStatus, r.powerState, r.alertCount, r.powerWatts, asset.id]
             );
             if (r.psuMaxWatts) { try { await pool.query('UPDATE assets SET redfish_psu_max_watts = ? WHERE id = ?', [r.psuMaxWatts, asset.id]); } catch (e) { /* column added by migration */ } }
     try { await pool.query('UPDATE assets SET redfish_hw_summary = ?, redfish_cpu = IF(redfish_hw_at IS NULL, ?, redfish_cpu), redfish_mem = IF(redfish_hw_at IS NULL, ?, redfish_mem) WHERE id = ?', [r.hwSummary || null, r.cpuQuick || null, r.memQuick || null, asset.id]); } catch (e) { /* cosmetic column */ }
@@ -1084,6 +1105,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
   // Poll endpoint for the background apply started above.
   app.get('/api/monitoring/redfish/discover/apply/:jobId', authenticateToken, async (req, res) => {
     const job = applyJobs.get(req.params.jobId);
+    if (job && !(await jobVisibleTo(req, job))) return res.status(404).json({ error: 'This apply has finished and its results have been cleared, or the job id is wrong.' });
     if (!job) return res.status(404).json({ error: 'This apply has finished and its results have been cleared, or the job id is wrong.' });
     res.json({ status: job.status, total: job.total, processed: job.processed, applied: job.applied, requested: job.total, skippedNotFound: job.skippedNotFound, skippedNoMatch: job.skippedNoMatch, error: job.error });
   });
@@ -1119,7 +1141,7 @@ module.exports = function registerRedfishRoutes(app, deps) {
       const asset = await loadAssetForUser(req, res, req.params.assetId);
       if (!asset) return;
       if (!asset.redfish_username) return res.status(400).json({ error: 'No Redfish credentials saved for this asset yet' });
-      const inv = await getFirmwareInventory(monitorFetch, asset.mgmt_ip, asset.redfish_port, asset.redfish_username, asset.redfish_password, null);
+      const inv = await getFirmwareInventory(monitorFetch, asset.mgmt_ip, asset.redfish_port, asset.redfish_username, bmcPass(asset), null);
       res.json(inv);
     } catch (e) { sendErr(res, e); }
   });
@@ -1138,11 +1160,11 @@ module.exports = function registerRedfishRoutes(app, deps) {
       if (!asset.redfish_username) return res.status(400).json({ error: 'No Redfish credentials saved for this asset yet' });
       const { imageUri } = req.body;
       if (!imageUri || !/^https?:\/\//i.test(imageUri)) return res.status(400).json({ error: 'A valid firmware image URL (http/https) is required - the BMC fetches it directly from that address' });
-      const svc = await redfishGet(monitorFetch, asset.mgmt_ip, asset.redfish_port, asset.redfish_username, asset.redfish_password, '/redfish/v1/UpdateService');
+      const svc = await redfishGet(monitorFetch, asset.mgmt_ip, asset.redfish_port, asset.redfish_username, bmcPass(asset), '/redfish/v1/UpdateService');
       const action = svc.Actions && svc.Actions['#UpdateService.SimpleUpdate'];
       if (!action) return res.status(400).json({ error: 'This BMC does not support the standard Redfish SimpleUpdate action - firmware push isn’t available for this device via Redfish.' });
       const target = action.target || '/redfish/v1/UpdateService/Actions/UpdateService.SimpleUpdate';
-      const result = await redfishPost(monitorFetch, asset.mgmt_ip, asset.redfish_port, asset.redfish_username, asset.redfish_password, target, { ImageURI: imageUri });
+      const result = await redfishPost(monitorFetch, asset.mgmt_ip, asset.redfish_port, asset.redfish_username, bmcPass(asset), target, { ImageURI: imageUri });
       const taskPath = result.location || (result.body && result.body['@odata.id']) || null;
       if (!taskPath) return res.status(502).json({ error: 'The BMC accepted the update request but did not return a Task to track it' });
       const [ins] = await pool.query(
@@ -1184,16 +1206,16 @@ module.exports = function registerRedfishRoutes(app, deps) {
   }
 
   return {
-    getRedfishTaskStatus: (deviceId, taskUri) => getRedfishTaskStatusForDevice(pool, monitorFetch, deviceId, taskUri),
+    getRedfishTaskStatus: (deviceId, taskUri) => getRedfishTaskStatusForDevice(pool, monitorFetch, deviceId, taskUri, bmcPass),
     pollAllRedfish,
   };
 };
 
-async function getRedfishTaskStatusForDevice(pool, monitorFetch, deviceId, taskUri) {
+async function getRedfishTaskStatusForDevice(pool, monitorFetch, deviceId, taskUri, bmcPass) {
   const [rows] = await pool.query('SELECT mgmt_ip, redfish_port, redfish_username, redfish_password FROM assets WHERE id = ?', [deviceId]);
   if (!rows.length || !rows[0].mgmt_ip || !rows[0].redfish_username) return { status: 'Failed', percent: null, step: null, error: 'Device credentials no longer available' };
   const a = rows[0];
-  return getRedfishTaskStatus(monitorFetch, a.mgmt_ip, a.redfish_port, a.redfish_username, a.redfish_password, taskUri);
+  return getRedfishTaskStatus(monitorFetch, a.mgmt_ip, a.redfish_port, a.redfish_username, bmcPass(a), taskUri);
 }
 module.exports.pickSerial = pickSerial;
 module.exports.psuRatingFromPower = psuRatingFromPower;
