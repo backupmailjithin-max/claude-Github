@@ -415,9 +415,10 @@ const api = {
     getPdus: (site) => apiFetch('/pdus' + (site && site !== 'all' ? '?site=' + encodeURIComponent(site) : '')),
     getPduSummary: () => apiFetch('/pdus/summary'),
     createPdu: (body) => apiFetch('/pdus', { method: 'POST', body: JSON.stringify(body) }),
+    createPduChain: (body) => apiFetch('/pdus/chain', { method: 'POST', body: JSON.stringify(body), timeoutMs: 40000 }),
     updatePdu: (id, body) => apiFetch('/pdus/' + encodeURIComponent(id), { method: 'PUT', body: JSON.stringify(body) }),
     deletePdu: (id) => apiFetch('/pdus/' + encodeURIComponent(id), { method: 'DELETE' }),
-    detectPdu: (body) => apiFetch('/pdus/detect', { method: 'POST', body: JSON.stringify(body), timeoutMs: 8000 }),
+    detectPdu: (body) => apiFetch('/pdus/detect', { method: 'POST', body: JSON.stringify(body), timeoutMs: body && body.scanChain ? 30000 : 8000 }),
     syncAllPdus: () => apiFetch('/pdus/sync-all', { method: 'POST', timeoutMs: 60000 }),
     getPduTrend: (params = {}) => { const q = new URLSearchParams(); if (params.site && params.site !== 'all')
         q.set('site', params.site); if (params.zone && params.zone !== 'all')
@@ -16464,6 +16465,7 @@ function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
         rackType: (pdu && pdu.rackType) || "", rackNo: (pdu && pdu.rackNo) || "",
         feedLabel: (pdu && pdu.feedLabel) || "Feed A", ipAddress: (pdu && pdu.ipAddress) || "",
         chainUnit: pdu && pdu.chainUnit ? String(pdu.chainUnit) : "",
+        autoChain: false, hostUnit: "1",
         snmpCommunity: (pdu && pdu.snmpCommunity) || "public", vendor: (pdu && pdu.vendor) || "",
         model: (pdu && pdu.model) || "", serialNumber: (pdu && pdu.serialNumber) || "",
         firmware: (pdu && pdu.firmware) || "", phase: (pdu && pdu.phase) || "Single-Phase",
@@ -16522,7 +16524,7 @@ function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
         if (!form.ipAddress) { setDetectMsg({ type: "error", text: "Enter an IP address first." }); return; }
         setDetecting(true); setDetectMsg(null); setConflicts({});
         try {
-            const r = await api.detectPdu({ ipAddress: form.ipAddress, snmpCommunity: form.snmpCommunity, chainUnit: form.chainUnit === "" ? 0 : Number(form.chainUnit) });
+            const r = await api.detectPdu({ ipAddress: form.ipAddress, snmpCommunity: form.snmpCommunity, chainUnit: form.autoChain ? Number(form.hostUnit) || 1 : (form.chainUnit === "" ? 0 : Number(form.chainUnit)), scanChain: !!form.autoChain });
             if (r.reachable) {
                 const detectedVals = {
                     vendor: r.vendor || "", model: r.model || "", serialNumber: r.serialNumber || "",
@@ -16566,7 +16568,12 @@ function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
                     const hit = fam ? presets.find((x) => /apc/i.test(x.vendor || "") && String(x.model || "").toLowerCase().includes(fam[1] + "xx") && x.oid) : null;
                     if (hit) { applyPreset(hit.id); presetLine = ` Vendor preset "${hit.vendor} - ${hit.model}" was selected, so Power OID and scale are filled in.`; }
                 }
-                setDetectMsg({ type: "success", text: "Device reachable - blank fields were auto-filled from SNMP, which varies by vendor." + hintLine + presetLine + conflictLine + maxLoadLine });
+                let chainLine = "";
+                if (form.autoChain) {
+                    if (r.chain && r.chain.length) chainLine = ` Chain found: ${r.chain.length} PDU${r.chain.length === 1 ? "" : "s"} behind this IP (${r.chain.map((u) => "#" + u.unit + (u.name ? " " + u.name : "")).join(", ")}). Save adds all of them.`;
+                    else chainLine = " No chained PDUs were listed by this device - Save will not be able to add a chain (only APC Rack PDU 2G units publish one).";
+                }
+                setDetectMsg({ type: "success", text: "Device reachable - blank fields were auto-filled from SNMP, which varies by vendor." + hintLine + presetLine + conflictLine + maxLoadLine + chainLine });
             }
             else {
                 setDetectMsg({ type: "error", text: r.error || "Could not reach the device." });
@@ -16587,7 +16594,13 @@ function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
         setSaving(true); setErr(null);
         try {
             const body = { ...form, chainUnit: form.chainUnit === "" ? 0 : Number(form.chainUnit), maxLoadKw: form.maxLoadKw === "" ? null : Number(form.maxLoadKw), powerScale: form.powerScale === "" ? 1 : Number(form.powerScale) };
-            if (isNew)
+            if (isNew && form.autoChain) {
+                const r = await api.createPduChain({ ...body, hostUnit: Number(form.hostUnit) || 1 });
+                onSaved(`Chain added: ${r.created} new PDU${r.created === 1 ? "" : "s"} (${r.found} in the chain${r.skipped ? ", " + r.skipped + " already existed" : ""}).`);
+                setSaving(false);
+                return;
+            }
+            else if (isNew)
                 await api.createPdu(body);
             else
                 await api.updatePdu(pdu.id, body);
@@ -16652,7 +16665,13 @@ function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
             React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 6 } },
                 React.createElement("div", { style: { flex: 1 } }, field("IP Address", "ipAddress")),
                 React.createElement("button", { className: "neu-btn-secondary", disabled: detecting, onClick: runDetect, style: { whiteSpace: "nowrap" } }, detecting ? "Detecting…" : "🔍 Test & Auto-Detect")),
-            React.createElement("div", { style: { display: "flex", gap: 12, alignItems: "flex-end", marginBottom: 12 } },
+            isNew && React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, margin: "2px 0 10px", fontFamily: "Inter", fontSize: 12, fontWeight: 700, color: "#17345d", cursor: "pointer" } },
+                React.createElement("input", { type: "checkbox", checked: !!form.autoChain, onChange: (e) => set("autoChain", e.target.checked) }),
+                "This IP is the host of a daisy chain - read and add every chained PDU automatically"),
+            form.autoChain && React.createElement("div", { style: { display: "flex", gap: 12, alignItems: "flex-end", marginBottom: 12 } },
+                React.createElement("div", { style: { flex: "0 0 190px" } }, field("Host PDU Display ID", "hostUnit", { type: "number", min: 1, max: 100, placeholder: "1" })),
+                React.createElement("div", { style: { flex: 1, fontFamily: "Inter", fontSize: 10.5, color: "#64748B", lineHeight: 1.45, paddingBottom: 6 } }, "Enter the host's IP above and the Display ID shown on the host PDU. Test & Auto-Detect lists every PDU behind this IP, and Save adds all of them as one group. Each PDU's rack comes from its own name (e.g. Rack-K21-PDU-A), otherwise the rack chosen here.")),
+            !form.autoChain && React.createElement("div", { style: { display: "flex", gap: 12, alignItems: "flex-end", marginBottom: 12 } },
                 React.createElement("div", { style: { flex: "0 0 190px" } }, field("Chain unit (PDU no.)", "chainUnit", { type: "number", min: 1, max: 100, placeholder: "empty = single PDU" })),
                 React.createElement("div", { style: { flex: 1, fontFamily: "Inter", fontSize: 10.5, color: "#64748B", lineHeight: 1.45, paddingBottom: 6 } }, "Daisy-chained PDUs (e.g. APC AP8886: up to 4 behind one IP) share the host IP. Give each PDU its own number - the Display ID shown on the PDU - and the app reads that PDU's power. Leave empty for a normal PDU.")),
             detectMsg && React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, margin: "4px 0 14px", padding: "9px 12px", borderRadius: 11, fontFamily: "Inter", fontSize: 12, fontWeight: 700, background: detectMsg.type === "success" ? "rgba(5,150,105,.1)" : "rgba(220,38,38,.1)", color: detectMsg.type === "success" ? "#059669" : "#DC2626" } }, detectMsg.text),
@@ -16765,6 +16784,7 @@ function PduPage({ allowedSites = [], canEdit = false }) {
     const [groupFilters, setGroupFilters] = useState(() => makeEmptyListColumnFilters(PDU_GROUP_COLUMNS));
     const groupSort = useListSort();
     const [editing, setEditing] = useState(null);
+    const [chainNote, setChainNote] = useState("");
     const [trendOpen, setTrendOpen] = useState(false);
     const [importOpen, setImportOpen] = useState(false);
     const [discoveryOpen, setDiscoveryOpen] = useState(false);
@@ -16818,6 +16838,7 @@ function PduPage({ allowedSites = [], canEdit = false }) {
     const degradedCount = racks.filter((r) => pduRedundancy(r) === "Degraded").length;
     const redundantCount = racks.filter((r) => pduRedundancy(r) === "Redundant A+B").length;
     return React.createElement(React.Fragment, null,
+        chainNote && React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, margin: "0 0 12px", padding: "10px 14px", borderRadius: 12, background: "rgba(5,150,105,.1)", color: "#047857", fontFamily: "Inter", fontSize: 12.5, fontWeight: 700 } }, React.createElement("span", null, "✓ " + chainNote), React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 10.5, padding: "4px 10px" }, onClick: () => setChainNote("") }, "Dismiss")),
         React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 12 } },
             React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
                 React.createElement("span", { className: "module-title-icon", style: { background: "linear-gradient(145deg,#DDD6FE,#A78BFA)", color: "#5B21B6" } }, React.createElement(Zap, { s: 18, c: "#5B21B6" })),
@@ -16921,7 +16942,7 @@ function PduPage({ allowedSites = [], canEdit = false }) {
                                             React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 11, padding: "6px 12px" }, onClick: (e) => { e.stopPropagation(); setEditing(f); } }, "✎ Edit"),
                                             React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 11, padding: "6px 12px", color: "#DC2626" }, onClick: (e) => { e.stopPropagation(); setDeleteConfirm(f); } }, React.createElement(Trash2, { s: 11, c: "#DC2626" }), " Delete"))))))));
                         })))))),
-        editing && React.createElement(PduEditModal, { pdu: editing.id ? editing : null, allowedSites: allowedSites, onClose: () => setEditing(null), onSaved: () => { setEditing(null); load(); } }),
+        editing && React.createElement(PduEditModal, { pdu: editing.id ? editing : null, allowedSites: allowedSites, onClose: () => setEditing(null), onSaved: (msg) => { setEditing(null); load(); if (msg) setChainNote(msg); } }),
         trendOpen && React.createElement(PduTrendModal, { site: "all", zone: "all", allowedSites: allowedSites, zonesForSite: zonesForSite, onClose: () => setTrendOpen(false) }),
         importOpen && React.createElement(PduImportModal, { onClose: () => setImportOpen(false), onDone: load }),
         discoveryOpen && React.createElement(PduDiscoveryModal, { onClose: () => setDiscoveryOpen(false), onDone: load }),

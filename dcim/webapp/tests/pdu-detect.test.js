@@ -33,3 +33,14 @@ test('phase count from the device: 1 = Single-Phase, 3 = 3-Phase, anything else 
   assert.strictEqual(f(2), null);
   assert.strictEqual(f(undefined), null);
 });
+
+test('daisy chain: one entry per PDU row from the host\'s ident + properties tables', () => {
+  const I = '1.3.6.1.4.1.318.1.1.26.2.1', P = '1.3.6.1.4.1.318.1.1.26.4.2.1';
+  const ident = { [I + '.8.1']: Buffer.from('AP8886'), [I + '.9.1']: Buffer.from('ZA1'), [I + '.6.1']: Buffer.from('v1.2.0.4'), [I + '.8.2']: Buffer.from('AP8886'), [I + '.9.2']: Buffer.from('ZA2'), [I + '.3.2']: Buffer.from('ident-name-2') };
+  const props = { [P + '.3.1']: Buffer.from('Rack-K20-PDU-A'), [P + '.7.1']: 3, [P + '.13.1']: 220, [P + '.3.2']: Buffer.from('Rack-K21-PDU-B'), [P + '.7.2']: 1 };
+  const units = require('../lib/pdu-routes')._parseChainTables(ident, props);
+  assert.strictEqual(units.length, 2);
+  assert.deepStrictEqual([units[0].unit, units[0].name, units[0].serialNumber, units[0].phase, units[0].maxLoadKw, units[0].rackHint], [1, 'Rack-K20-PDU-A', 'ZA1', '3-Phase', 22, 'K20']);
+  assert.deepStrictEqual([units[1].unit, units[1].name, units[1].phase, units[1].rackHint, units[1].feedHint], [2, 'Rack-K21-PDU-B', 'Single-Phase', 'K21', 'Feed B']);
+  assert.deepStrictEqual(require('../lib/pdu-routes')._parseChainTables({}, {}), []);
+});

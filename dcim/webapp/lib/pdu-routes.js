@@ -167,6 +167,48 @@ async function detectPhase(vendor, ip, community, unit) {
   }
   return null;
 }
+// ---- Daisy chain discovery (APC Rack PDU 2G "Network Port Sharing") -------------------------------------------------
+// The host PDU answers for every PDU in its chain: the identification table (.26.2.1) and the properties table (.26.4.2.1)
+// have one row per PDU, row number = the PDU's Display ID. One walk of both tables lists the whole chain.
+const APC_IDENT_TABLE = '1.3.6.1.4.1.318.1.1.26.2.1';
+const APC_PROPS_TABLE = '1.3.6.1.4.1.318.1.1.26.4.2.1';
+const snmpStr = (v) => (Buffer.isBuffer(v) ? v.toString('utf8') : String(v == null ? '' : v)).replace(/\0/g, '').trim();
+function snmpSubtree(ip, community, oid, timeout) {
+  return new Promise((resolve, reject) => {
+    let session;
+    try { session = snmp.createSession(ip, community || 'public', { timeout: timeout || SNMP_TIMEOUT_MS, retries: 0 }); }
+    catch (e) { return reject(e); }
+    const out = {};
+    const done = (err) => { try { session.close(); } catch (e) { /* ignore */ } err ? reject(err) : resolve(out); };
+    session.on('error', (err) => done(err));
+    session.subtree(oid, 20, (vbs) => { vbs.forEach((vb) => { if (!snmp.isVarbindError(vb)) out[vb.oid] = vb.value; }); }, (err) => done(err));
+  });
+}
+// Pure: turn the two walked tables into one entry per PDU (exported for tests).
+function parseChainTables(ident, props) {
+  const rows = {};
+  const take = (map, prefix, key) => Object.keys(map || {}).forEach((oid) => {
+    if (oid.indexOf(prefix + '.') !== 0) return;
+    const m = /^(\d+)\.(\d+)$/.exec(oid.slice(prefix.length + 1));
+    if (!m) return;
+    const row = Number(m[2]); if (!(row >= 1 && row <= CHAIN_MAX)) return;
+    ((rows[row] = rows[row] || { unit: row })[key] = (rows[row][key] || {}))[Number(m[1])] = map[oid];
+  });
+  take(ident, APC_IDENT_TABLE, 'i'); take(props, APC_PROPS_TABLE, 'p');
+  return Object.keys(rows).map(Number).sort((a, b) => a - b).map((n) => {
+    const i = rows[n].i || {}, p = rows[n].p || {};
+    const name = snmpStr(p[3] != null ? p[3] : i[3]);
+    const dd = describeDevice('', name);
+    const rating = Number(p[13]);
+    return { unit: n, name: name || null, model: snmpStr(i[8]) || null, serialNumber: snmpStr(i[9]) || null, firmware: snmpStr(i[6]) || null,
+      phase: phaseFromCount(p[7]), maxLoadKw: rating > 0 ? Math.round(rating) / 10 : null, rackHint: dd.rackHint, feedHint: dd.feedHint };
+  });
+}
+async function discoverChain(ip, community) {
+  const [ident, props] = await Promise.all([snmpSubtree(ip, community, APC_IDENT_TABLE, 5000), snmpSubtree(ip, community, APC_PROPS_TABLE, 5000)]);
+  return parseChainTables(ident, props);
+}
+
 const clip = (v, n) => (v == null ? v : String(v).slice(0, n));
 
 // Rated/Max Load capacity. Unlike power_oid (polled every cycle, since the live
@@ -501,6 +543,49 @@ module.exports = function registerPduRoutes(app, deps) {
   });
 
   // ---- auto-detect: probe a not-yet-saved IP via SNMP, return best-effort identity fields ----
+  // One step for a whole daisy chain: the person gives the HOST's IP and the host's Display ID; every PDU behind that IP is read
+  // from the host and added (grouped by the shared IP). PDUs already present for this IP are left alone.
+  app.post('/api/pdus/chain', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
+    try {
+      const b = req.body || {};
+      for (const k of ['site', 'zone', 'rackNo', 'feedLabel', 'ipAddress']) if (typeof b[k] === 'string') b[k] = b[k].replace(/\s+/g, ' ').trim();
+      for (const f of ['site', 'rackNo', 'feedLabel', 'ipAddress']) if (!b[f] || !String(b[f]).trim()) return res.status(400).json({ error: `"${f}" is required.` });
+      await assertSiteAccess(req.user, b.site);
+      const hostUnit = b.hostUnit === '' || b.hostUnit == null ? 1 : Number(b.hostUnit);
+      if (!Number.isInteger(hostUnit) || hostUnit < 1 || hostUnit > CHAIN_MAX) return res.status(400).json({ error: `"Host Display ID" must be 1 to ${CHAIN_MAX}.` });
+      let units;
+      try { units = await discoverChain(b.ipAddress, b.snmpCommunity || 'public'); }
+      catch (e) { return res.status(400).json({ error: `Could not read the chain from ${b.ipAddress} (${e.message}). Check the IP and the SNMP community.` }); }
+      if (!units.length) return res.status(400).json({ error: 'This device did not list any chained PDUs (only APC Rack PDU 2G units publish a chain list). Add it as a single PDU instead.' });
+      if (!units.some((u) => u.unit === hostUnit)) return res.status(400).json({ error: `Display ID ${hostUnit} is not in this chain. The chain has PDUs numbered: ${units.map((u) => u.unit).join(', ')}.` });
+      const num = (v) => (v != null && v !== '' ? Number(v) : null);
+      const created = [], skipped = [];
+      for (const u of units) {
+        const host = u.unit === hostUnit;
+        const [dup] = await pool.query('SELECT id FROM pdus WHERE ip_address = ? AND chain_unit = ?', [b.ipAddress, u.unit]);
+        if (dup.length) { skipped.push(u.unit); continue; }
+        if (host) { // a host saved earlier as a single PDU (empty chain unit) becomes this chain's host instead of being duplicated
+          const [single] = await pool.query('SELECT id FROM pdus WHERE ip_address = ? AND chain_unit = 0 LIMIT 1', [b.ipAddress]);
+          if (single.length) { await pool.query('UPDATE pdus SET chain_unit = ? WHERE id = ?', [u.unit, single[0].id]); skipped.push(u.unit); continue; }
+        }
+        const id = genId('PDU');
+        const rackNo = host ? b.rackNo : (u.rackHint || b.rackNo);
+        const feed = host ? b.feedLabel : (u.feedHint || b.feedLabel);
+        await pool.query(
+          `INSERT INTO pdus (id, site, zone, rack_type, rack_no, feed_label, ip_address, chain_unit, vendor, model, serial_number, firmware, phase, max_load_kw, snmp_community, power_oid, power_scale)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [id, b.site, clip(b.zone || 'AZ-1', 20), clip(b.rackType || null, 50), clip(rackNo, 20), clip(feed, 20), b.ipAddress, u.unit, clip(b.vendor || 'APC / Schneider Electric', 50),
+            clip((host && b.model) || u.model || b.model || null, 150), clip((host && b.serialNumber) || u.serialNumber || null, 150), clip((host && b.firmware) || u.firmware || b.firmware || null, 100),
+            (host && b.phase) ? (b.phase === '3-Phase' ? '3-Phase' : 'Single-Phase') : (u.phase || (b.phase === '3-Phase' ? '3-Phase' : 'Single-Phase')),
+            host ? (num(b.maxLoadKw) != null ? num(b.maxLoadKw) : u.maxLoadKw) : (u.maxLoadKw != null ? u.maxLoadKw : num(b.maxLoadKw)),
+            clip(b.snmpCommunity || 'public', 100), clip(b.powerOid || null, 100), b.powerScale != null && b.powerScale !== '' ? Number(b.powerScale) : 1]);
+        created.push({ unit: u.unit, name: u.name, rackNo, serialNumber: u.serialNumber });
+      }
+      auditLog(req, 'PDU_CHAIN_CREATE', { entity: 'pdu', site: b.site, details: { ip: b.ipAddress, found: units.length, created: created.length } });
+      res.status(201).json({ ok: true, found: units.length, created: created.length, skipped: skipped.length, units: created });
+    } catch (e) { sendErr(res, e); }
+  });
+
   app.post('/api/pdus/detect', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
     const { ipAddress, snmpCommunity, chainUnit } = req.body || {};
     if (!ipAddress) return res.status(400).json({ error: '"ipAddress" is required.' });
@@ -511,11 +596,13 @@ module.exports = function registerPduRoutes(app, deps) {
       const vendor = guessVendor(descr);
       const dd = describeDevice(descr, name);
       const phase = await detectPhase(vendor, ipAddress, snmpCommunity || 'public', chainUnit);
+      let chain = null;
+      if (req.body && req.body.scanChain && vendor && /apc/i.test(vendor)) { try { chain = await discoverChain(ipAddress, snmpCommunity || 'public'); } catch (e) { chain = null; } }
       const maxLoadCfg = vendor && MAX_LOAD_BY_VENDOR[vendor];
       const maxLoadKw = maxLoadCfg ? await detectMaxLoadKw(vendor, ipAddress, snmpCommunity || 'public') : null;
       res.json({
         reachable: true,
-        vendor, model: dd.model, serialNumber: dd.serialNumber, firmware: dd.firmware, pduName: dd.pduName, rackHint: dd.rackHint, feedHint: dd.feedHint, phase,
+        vendor, model: dd.model, serialNumber: dd.serialNumber, firmware: dd.firmware, pduName: dd.pduName, rackHint: dd.rackHint, feedHint: dd.feedHint, phase, chain,
         maxLoadKw,
         maxLoadNote: maxLoadCfg ? (maxLoadKw != null ? `Max Load detected via ${maxLoadCfg.confidence} confidence source: ${maxLoadCfg.note}` : `Could not read a rated-capacity value from this device right now - ${maxLoadCfg.note}`) : null,
         note: 'Vendor/Model/Firmware are parsed from the device\'s generic SNMP sysDescr/sysName, which varies by vendor and is not always reliable - review and correct every field before saving. Max Load is only auto-filled for a handful of vendors with a confirmed SNMP capacity value (see maxLoadNote); for everything else it stays manual. Live wattage polling additionally needs a Power OID from this model\'s vendor MIB/datasheet (set it in the Power OID field); without one, this PDU is still monitored for online/offline reachability only.',
@@ -777,3 +864,4 @@ module.exports = function registerPduRoutes(app, deps) {
 module.exports._effectiveOid = effectiveOid; // exposed for tests only
 module.exports._describeDevice = describeDevice; // exposed for tests only
 module.exports._phaseFromCount = phaseFromCount; // exposed for tests only
+module.exports._parseChainTables = parseChainTables; // exposed for tests only
