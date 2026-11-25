@@ -16480,6 +16480,31 @@ function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
     const [presetId, setPresetId] = useState("");
     const [presetNote, setPresetNote] = useState(null);
     useEffect(() => { api.getPduVendorPresets().then(setPresets).catch(() => setPresets([])); }, []);
+    // Zones and racks of the chosen site, so Zone / Rack Type / Rack No are pick-lists (racks come from the rack list plus the racks that hold assets).
+    const [cat, setCat] = useState({ zones: [], racks: [] });
+    useEffect(() => {
+        let dead = false;
+        if (!form.site) return undefined;
+        Promise.all([api.getZones().catch(() => []), api.getRacks().catch(() => []), api.getAssets(form.site).catch(() => [])]).then(([zs, rs, as]) => {
+            if (dead) return;
+            const zones = new Set(), map = new Map();
+            (zs || []).filter((z) => z.site === form.site && z.zoneName).forEach((z) => zones.add(z.zoneName));
+            const addRack = (zone, rackNo, rackType) => {
+                if (!zone || !rackNo || String(rackNo).trim() === "" || rackNo === "(blank)") return;
+                zones.add(zone);
+                const k = zone + "|" + String(rackNo).toUpperCase();
+                const old = map.get(k);
+                if (!old) map.set(k, { zone, rackNo: String(rackNo), rackType: rackType || "" });
+                else if (!old.rackType && rackType) old.rackType = rackType;
+            };
+            (rs || []).filter((r) => r.site === form.site).forEach((r) => addRack(r.zone, r.rackNo, r.rackType));
+            (as || []).filter((a) => a.site === form.site && !/store|decom|transfer/i.test(String(a.lifecycleStatus || ""))).forEach((a) => addRack(a.zone, a.rackNo, a.rackType));
+            const zl = Array.from(zones).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+            setCat({ zones: zl, racks: Array.from(map.values()) });
+            setForm((f) => (f.zone && zones.has(f.zone)) || !zl.length || f.zone ? f : { ...f, zone: zl[0] });
+        });
+        return () => { dead = true; };
+    }, [form.site]);
     const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
     const applyPreset = (id) => {
         setPresetId(id);
@@ -16511,13 +16536,35 @@ function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
                     if (!current) filled[key] = detectedVal;
                     else if (current !== detectedVal) newConflicts[key] = detectedVal;
                 });
+                // The PDU's own name often says where it is (e.g. "Rack-K20-PDU-A" = rack K20, Feed A): use it to pick the rack and the feed.
+                let hintLine = "";
+                if (r.pduName) {
+                    const hint = r.rackHint ? String(r.rackHint).toUpperCase() : "";
+                    const inZone = cat.racks.filter((x) => String(x.rackNo).toUpperCase() === hint && x.zone === form.zone);
+                    const inSite = cat.racks.filter((x) => String(x.rackNo).toUpperCase() === hint);
+                    const hit = hint ? (inZone[0] || (inSite.length === 1 ? inSite[0] : null)) : null;
+                    if (hit && !String(form.rackNo || "").trim()) {
+                        Object.assign(filled, { zone: hit.zone, rackType: hit.rackType, rackNo: hit.rackNo });
+                        hintLine = ` The PDU's name "${r.pduName}" points to rack ${hit.rackNo} (${hit.zone}).`;
+                    }
+                    else if (hint && !hit && !String(form.rackNo || "").trim()) hintLine = ` The PDU's name "${r.pduName}" points to rack ${hint}, which is not in this location's rack list - pick the rack yourself.`;
+                    else hintLine = ` PDU name: "${r.pduName}".`;
+                    if (r.feedHint && isNew && form.feedLabel !== r.feedHint) { filled.feedLabel = r.feedHint; hintLine += ` Feed set to ${r.feedHint}.`; }
+                }
                 if (Object.keys(filled).length) setForm((f) => ({ ...f, ...filled }));
                 setDetectedFields(filled);
                 setConflicts(newConflicts);
                 const conflictCount = Object.keys(newConflicts).length;
                 const conflictLine = conflictCount ? ` ${conflictCount} field${conflictCount === 1 ? "" : "s"} already had a different manually-entered value - review the amber-highlighted field${conflictCount === 1 ? "" : "s"} below and choose "Keep manual" or "Use detected".` : "";
                 const maxLoadLine = filled.maxLoadKw ? ` Max Load was also auto-filled (${r.maxLoadNote || "from this vendor's SNMP capacity value"}) - double-check it against the nameplate.` : (r.maxLoadNote && !newConflicts.maxLoadKw ? ` Max Load: ${r.maxLoadNote}` : "");
-                setDetectMsg({ type: "success", text: "Device reachable - blank fields were auto-filled from SNMP (sysDescr/sysName), which varies by vendor." + conflictLine + maxLoadLine });
+                // A known APC family (e.g. AP8886 = Rack PDU 2G AP88xx) also selects the matching vendor preset, which fills the Power OID and scale.
+                let presetLine = "";
+                if (!presetId) {
+                    const fam = String(r.model || "").match(/^AP(\d\d)/i);
+                    const hit = fam ? presets.find((x) => /apc/i.test(x.vendor || "") && String(x.model || "").toLowerCase().includes(fam[1] + "xx") && x.oid) : null;
+                    if (hit) { applyPreset(hit.id); presetLine = ` Vendor preset "${hit.vendor} - ${hit.model}" was selected, so Power OID and scale are filled in.`; }
+                }
+                setDetectMsg({ type: "success", text: "Device reachable - blank fields were auto-filled from SNMP, which varies by vendor." + hintLine + presetLine + conflictLine + maxLoadLine });
             }
             else {
                 setDetectMsg({ type: "error", text: r.error || "Could not reach the device." });
@@ -16564,6 +16611,24 @@ function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
                 ]),
             ]));
     };
+    const autoBadge = React.createElement("span", { style: { marginLeft: 6, fontSize: 9, fontWeight: 800, color: "#059669", background: "rgba(5,150,105,.1)", padding: "2px 7px", borderRadius: 7 } }, "✓ auto");
+    const natural = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true });
+    const zoneRacks = cat.racks.filter((r) => r.zone === form.zone);
+    const rackTypeOpts = Array.from(new Set(zoneRacks.map((r) => r.rackType).filter(Boolean))).sort(natural);
+    const rackOpts = zoneRacks.filter((r) => !form.rackType || r.rackType === form.rackType).map((r) => r.rackNo).sort(natural);
+    const pickList = !!zoneRacks.length;
+    const rackTypeField = pickList
+        ? React.createElement("div", { style: { flex: 1, minWidth: 140 } },
+            React.createElement("label", { style: PDU_LABEL_STYLE }, "Rack Type", detectedFields.rackType && autoBadge),
+            React.createElement(ThemedSelect, { value: form.rackType, onChange: (e) => setForm((f) => ({ ...f, rackType: e.target.value, rackNo: zoneRacks.some((r) => r.rackNo === f.rackNo && (!e.target.value || r.rackType === e.target.value)) ? f.rackNo : "" })), className: "neu-input", style: { width: "100%" } },
+                [React.createElement("option", { key: "", value: "" }, "All rack types"), ...(form.rackType && !rackTypeOpts.includes(form.rackType) ? [form.rackType] : []).concat(rackTypeOpts).map((t) => React.createElement("option", { key: t, value: t }, t))]))
+        : field("Rack Type", "rackType");
+    const rackNoField = pickList
+        ? React.createElement("div", { style: { flex: 1, minWidth: 140 } },
+            React.createElement("label", { style: PDU_LABEL_STYLE }, "Rack No", detectedFields.rackNo && autoBadge),
+            React.createElement(ThemedSelect, { value: form.rackNo, onChange: (e) => { const hit = zoneRacks.find((r) => r.rackNo === e.target.value); setForm((f) => ({ ...f, rackNo: e.target.value, rackType: hit && hit.rackType ? hit.rackType : f.rackType })); }, className: "neu-input", style: { width: "100%" } },
+                [React.createElement("option", { key: "", value: "" }, "Select rack"), ...(form.rackNo && !rackOpts.includes(form.rackNo) ? [form.rackNo] : []).concat(rackOpts).map((n) => React.createElement("option", { key: n, value: n }, n))]))
+        : field("Rack No", "rackNo");
     return React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(14,18,28,.45)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, zIndex: 400 }, onClick: onClose },
         React.createElement("div", { className: "neu-card anim-in d1", style: { width: 640, maxWidth: "94vw", maxHeight: "90vh", overflowY: "auto", padding: 28, position: "relative" }, onClick: (e) => e.stopPropagation() },
             React.createElement("button", { onClick: onClose, style: { position: "absolute", top: 18, right: 20, background: "none", border: "none", fontSize: 20, color: "#94A3B8", cursor: "pointer" } }, "×"),
@@ -16572,11 +16637,13 @@ function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
             React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 12 } },
                 React.createElement("div", { style: { flex: 1 } },
                     React.createElement("label", { style: PDU_LABEL_STYLE }, "Site"),
-                    React.createElement(ThemedSelect, { value: form.site, onChange: (e) => set("site", e.target.value), className: "neu-input", style: { width: "100%" } }, allowedSites.map((s) => React.createElement("option", { key: s, value: s }, s)))),
+                    React.createElement(ThemedSelect, { value: form.site, onChange: (e) => setForm((f) => ({ ...f, site: e.target.value, zone: "", rackType: "", rackNo: "" })), className: "neu-input", style: { width: "100%" } }, allowedSites.map((s) => React.createElement("option", { key: s, value: s }, s)))),
                 React.createElement("div", { style: { flex: 1 } },
-                    React.createElement("label", { style: PDU_LABEL_STYLE }, "Zone"),
-                    React.createElement("input", { className: "neu-input", style: { width: "100%" }, value: form.zone, onChange: (e) => set("zone", e.target.value) }))),
-            React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 12 } }, field("Rack Type", "rackType"), field("Rack No", "rackNo"),
+                    React.createElement("label", { style: PDU_LABEL_STYLE }, "Zone", detectedFields.zone && autoBadge),
+                    cat.zones.length
+                        ? React.createElement(ThemedSelect, { value: form.zone, onChange: (e) => setForm((f) => ({ ...f, zone: e.target.value, rackType: "", rackNo: "" })), className: "neu-input", style: { width: "100%" } }, [!form.zone && React.createElement("option", { key: "", value: "" }, "Select zone"), ...(cat.zones.includes(form.zone) || !form.zone ? cat.zones : [form.zone, ...cat.zones]).map((z) => React.createElement("option", { key: z, value: z }, z))])
+                        : React.createElement("input", { className: "neu-input", style: { width: "100%" }, value: form.zone, onChange: (e) => set("zone", e.target.value) }))),
+            React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 12 } }, rackTypeField, rackNoField,
                 React.createElement("div", { style: { flex: 1 } },
                     React.createElement("label", { style: PDU_LABEL_STYLE }, "Feed Label"),
                     React.createElement(ThemedSelect, { value: form.feedLabel, onChange: (e) => set("feedLabel", e.target.value), className: "neu-input", style: { width: "100%" } }, ["Feed A", "Feed B"].map((f) => React.createElement("option", { key: f, value: f }, f))))),
