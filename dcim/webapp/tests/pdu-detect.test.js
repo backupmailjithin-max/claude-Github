@@ -70,3 +70,21 @@ test('health: judged by the PDU\'s own limits - near overload = warning, overloa
   assert.strictEqual(crit.level, 'critical'); assert.match(crit.detail, /^Bank 2/);
   assert.strictEqual(f([], []), null);
 });
+
+test('SNMP v1: one missing object (NoSuchName) must not fail the whole multi-read', async () => {
+  const snmp = require('net-snmp');
+  const have = { 'a': 5, 'b': 7 }; // 'x' does not exist on this model
+  const orig = snmp.createSession;
+  snmp.createSession = () => ({ on() {}, close() {}, get(oids, cb) {
+    const missing = oids.find((o) => !(o in have));
+    if (missing) { const e = new Error('NoSuchName: ' + missing); return setImmediate(() => cb(e)); }
+    setImmediate(() => cb(null, oids.map((o) => ({ oid: o, type: 2, value: have[o] }))));
+  } });
+  try {
+    const out = await require('../lib/pdu-routes')._snmpGetEach('1.2.3.4', 'c', ['a', 'x', 'b']);
+    assert.deepStrictEqual(out, { a: 5, b: 7 });
+    // a genuine failure (timeout) is still an error
+    snmp.createSession = () => ({ on() {}, close() {}, get(o, cb) { setImmediate(() => cb(new Error('Request timed out'))); } });
+    await assert.rejects(() => require('../lib/pdu-routes')._snmpGetEach('1.2.3.4', 'c', ['a']), /timed out/);
+  } finally { snmp.createSession = orig; }
+});

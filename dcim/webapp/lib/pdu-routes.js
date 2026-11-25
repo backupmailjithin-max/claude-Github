@@ -289,14 +289,22 @@ async function readCircuitTables(ip, community) {
     snmpTableCols(ip, community, '1.3.6.1.4.1.318.1.1.26.8.3', [2, 3, 4, 5, 9]),
     snmpTableCols(ip, community, '1.3.6.1.4.1.318.1.1.26.8.1', [2, 3, 6, 7]),
   ]);
-  return { phSt, phCf, bkSt, bkCf };
+  let props = {}, dev = {};
+  try { props = await snmpTableCols(ip, community, '1.3.6.1.4.1.318.1.1.26.4.2', [3]); } catch (e) { /* name is optional */ }
+  try { dev = await snmpTableCols(ip, community, '1.3.6.1.4.1.318.1.1.26.4.3', [2, 4]); } catch (e) { /* load state is optional */ }
+  return { phSt, phCf, bkSt, bkCf, props, dev };
 }
 // A PDU of a chain is judged only by circuits that carry its own number; a single PDU may fall back to all circuits reported
 // (some firmware leaves that number unset). Never judge one PDU by another PDU's circuits.
 function unitHealth(tables, unit, allowFallback) {
   const ph = buildCircuits(tables.phSt, APC_PHASE_STATUS, tables.phCf, APC_PHASE_CONFIG, unit);
   const bk = buildCircuits(tables.bkSt, APC_BANK_STATUS, tables.bkCf, APC_BANK_CONFIG, unit);
-  return healthFromCircuits(bk.moduleMatched || allowFallback ? bk.items : [], ph.moduleMatched || allowFallback ? ph.items : []);
+  const banks = bk.moduleMatched || allowFallback ? bk.items : [], phases = ph.moduleMatched || allowFallback ? ph.items : [];
+  const h = healthFromCircuits(banks, phases);
+  const nameRow = flatTable(tables.props || {}, APC_PROPS_TABLE)[String(unit)];
+  const devRow = flatTable(tables.dev || {}, '1.3.6.1.4.1.318.1.1.26.4.3.1')[String(unit)];
+  const name = nameRow && nameRow[3] != null ? snmpStr(nameRow[3]) : '';
+  return { health: h, name: name || null, snapshot: { readAt: new Date().toISOString(), loadState: devRow ? (LOAD_STATES[Number(devRow[4])] || null) : null, banks, phases } };
 }
 const clip = (v, n) => (v == null ? v : String(v).slice(0, n));
 
@@ -370,10 +378,20 @@ function snmpGetEach(ip, community, oids, timeout) {
     const done = (err, out) => { try { session.close(); } catch (e) { /* ignore */ } err ? reject(err) : resolve(out); };
     session.on('error', (err) => done(err));
     session.get(oids, (err, varbinds) => {
-      if (err) return done(err);
-      const out = {};
-      oids.forEach((oid, i) => { if (!snmp.isVarbindError(varbinds[i])) out[oid] = varbinds[i].value; });
-      done(null, out);
+      if (!err) {
+        const out = {};
+        oids.forEach((oid, i) => { if (!snmp.isVarbindError(varbinds[i])) out[oid] = varbinds[i].value; });
+        return done(null, out);
+      }
+      // SNMP v1 refuses the whole request when ONE object does not exist on this model (NoSuchName). Ask for each object on its own instead,
+      // so a model that lacks one optional value (e.g. frequency) still returns everything else.
+      if (!/NoSuch/i.test(err.message || '')) return done(err);
+      const out = {}; let pending = oids.length, timedOut = null;
+      oids.forEach((oid) => session.get([oid], (e2, vb) => {
+        if (e2) { if (!/NoSuch/i.test(e2.message || '')) timedOut = e2; }
+        else if (vb && vb[0] && !snmp.isVarbindError(vb[0])) out[oid] = vb[0].value;
+        if (--pending === 0) done(timedOut && !Object.keys(out).length ? timedOut : null, out);
+      }));
     });
   });
 }
@@ -451,7 +469,7 @@ module.exports = function registerPduRoutes(app, deps) {
     try { await pool.query('ALTER TABLE pdus ADD UNIQUE KEY uniq_pdu_ip_unit (ip_address, chain_unit)'); } catch (e) { /* already exists */ }
     try { await pool.query('ALTER TABLE pdus DROP INDEX uniq_pdu_ip'); } catch (e) { /* already replaced */ }
     try { await pool.query('ALTER TABLE pdus ADD COLUMN power_scale DECIMAL(10,4) NOT NULL DEFAULT 1 AFTER power_oid'); } catch (e) { /* column already exists */ }
-    for (const ddl of ['ADD COLUMN health VARCHAR(12) NULL', 'ADD COLUMN health_detail VARCHAR(255) NULL', 'ADD COLUMN health_at DATETIME NULL']) { try { await pool.query('ALTER TABLE pdus ' + ddl); } catch (e) { /* column already exists */ } }
+    for (const ddl of ['ADD COLUMN health VARCHAR(12) NULL', 'ADD COLUMN health_detail VARCHAR(255) NULL', 'ADD COLUMN health_at DATETIME NULL', 'ADD COLUMN pdu_name VARCHAR(100) NULL', 'ADD COLUMN circuits_json MEDIUMTEXT NULL']) { try { await pool.query('ALTER TABLE pdus ' + ddl); } catch (e) { /* column already exists */ } }
   }
 
   function mapPdu(r) {
@@ -463,6 +481,8 @@ module.exports = function registerPduRoutes(app, deps) {
       lastPowerKw: r.last_power_kw != null ? Number(r.last_power_kw) : null,
       lastReadingAt: r.last_reading_at, lastError: r.last_error,
       health: r.health || null, healthDetail: r.health_detail || null, healthAt: r.health_at || null,
+      pduName: r.pdu_name || null, displayId: Number(r.chain_unit) > 0 ? Number(r.chain_unit) : 1,
+      circuits: (() => { try { return r.circuits_json ? JSON.parse(r.circuits_json) : null; } catch (e) { return null; } })(),
     };
   }
 
@@ -928,9 +948,10 @@ module.exports = function registerPduRoutes(app, deps) {
         if (live.length) {
           const tables = await readCircuitTables(live[0].ip_address, live[0].snmp_community || 'public');
           for (const r of live) {
-            const h = unitHealth(tables, Number(r.chain_unit) > 0 ? Number(r.chain_unit) : 1, !(Number(r.chain_unit) > 0));
-            if (h) await pool.query('UPDATE pdus SET health=?, health_detail=?, health_at=NOW() WHERE id=?', [h.level, h.detail, r.id]);
-            else await pool.query('UPDATE pdus SET health=NULL, health_detail=NULL, health_at=NULL WHERE id=?', [r.id]);
+            const u = unitHealth(tables, Number(r.chain_unit) > 0 ? Number(r.chain_unit) : 1, !(Number(r.chain_unit) > 0));
+            const h = u.health, hasCircuits = u.snapshot.banks.length || u.snapshot.phases.length;
+            await pool.query('UPDATE pdus SET health=?, health_detail=?, health_at=?, pdu_name=COALESCE(?, pdu_name), circuits_json=? WHERE id=?',
+              [h ? h.level : null, h ? h.detail : null, h ? new Date() : null, u.name ? clip(u.name, 100) : null, hasCircuits ? JSON.stringify(u.snapshot) : null, r.id]);
           }
         }
       } catch (e) { /* health is best-effort: a PDU that cannot list its circuits keeps its last health */ }
@@ -1004,3 +1025,4 @@ module.exports._phaseFromCount = phaseFromCount; // exposed for tests only
 module.exports._parseChainTables = parseChainTables; // exposed for tests only
 module.exports._buildCircuits = buildCircuits; // exposed for tests only
 module.exports._healthFromCircuits = healthFromCircuits; // exposed for tests only
+module.exports._snmpGetEach = snmpGetEach; // exposed for tests only

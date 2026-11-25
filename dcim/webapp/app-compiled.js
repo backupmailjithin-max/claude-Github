@@ -16239,13 +16239,42 @@ const PDU_RACK_COLUMNS = [
 const PDU_EXPORT_COLUMNS = [
     { key: "id", label: "PDU ID" }, { key: "site", label: "Site" }, { key: "zone", label: "Zone" },
     { key: "rackType", label: "Rack Type" }, { key: "rackNo", label: "Rack No" }, { key: "feedLabel", label: "Feed Label" },
+    { key: "pduName", label: "PDU Name" }, { key: "displayId", label: "PDU Display ID" },
     { key: "ipAddress", label: "IP Address" }, { key: "chainUnit", label: "Chain Unit", format: (v) => v || "" }, { key: "vendor", label: "Vendor" }, { key: "model", label: "Model" },
     { key: "serialNumber", label: "Serial Number" }, { key: "firmware", label: "Firmware" }, { key: "phase", label: "Phase" },
     { key: "maxLoadKw", label: "Max Load (kW)" }, { key: "snmpCommunity", label: "SNMP Community" }, { key: "powerOid", label: "Power OID" },
     { key: "powerScale", label: "Power Scale" }, { key: "pollIntervalSec", label: "Poll Interval (sec)" }, { key: "status", label: "Status" },
     { key: "lastPowerKw", label: "Last Power (kW)" }, { key: "lastReadingAt", label: "Last Reading At", format: (v) => v ? fmtDateTime(v) : "" },
     { key: "lastError", label: "Last Error" },
+    { key: "health", label: "Health", format: (v) => v === "critical" ? "Critical" : v === "warning" ? "Warning" : v === "ok" ? "OK" : "Not checked" },
+    { key: "healthDetail", label: "Health Detail" },
+    { key: "circuits", label: "Load State", format: (v) => (v && v.loadState) || "" },
+    { key: "circuits", label: "Busiest Bank (%)", format: (v) => { const b = v && v.banks ? v.banks.filter((x) => x.usedPct != null) : []; return b.length ? Math.max.apply(null, b.map((x) => x.usedPct)) : ""; } },
+    { key: "healthAt", label: "Circuits Read At", format: (v) => v ? fmtDateTime(v) : "" },
 ];
+// Second sheet of the PDU export: one row per bank (breaker circuit) and per phase of every PDU, from the latest sync.
+const PDU_CIRCUIT_COLUMNS = [
+    { key: "site", label: "Site" }, { key: "zone", label: "Zone" }, { key: "rackNo", label: "Rack No" }, { key: "feedLabel", label: "Feed Label" },
+    { key: "pduName", label: "PDU Name" }, { key: "displayId", label: "PDU Display ID" }, { key: "ipAddress", label: "IP Address" },
+    { key: "kind", label: "Circuit" }, { key: "number", label: "No" }, { key: "loadState", label: "State" }, { key: "currentA", label: "Current (A)" },
+    { key: "overloadA", label: "Overload Limit (A)" }, { key: "nearOverloadA", label: "Warning Limit (A)" }, { key: "usedPct", label: "Used (%)" },
+    { key: "voltage", label: "Voltage (V)" }, { key: "powerKw", label: "Power (kW)" }, { key: "readAt", label: "Read At", format: (v) => v ? fmtDateTime(v) : "" },
+];
+function pduCircuitRows(flat) {
+    const rows = [];
+    (flat || []).forEach((p) => {
+        const c = p.circuits; if (!c) return;
+        [["Bank", c.banks], ["Phase", c.phases]].forEach(([kind, list]) => (list || []).forEach((x) => rows.push({ site: p.site, zone: p.zone, rackNo: p.rackNo, feedLabel: p.feedLabel, pduName: p.pduName || "", displayId: p.displayId, ipAddress: p.ipAddress, kind, ...x, readAt: c.readAt })));
+    });
+    return rows;
+}
+function exportPduWorkbook(flat, filename) {
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoaFromColumns(flat, PDU_EXPORT_COLUMNS)), "PDU Inventory");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoaFromColumns(pduCircuitRows(flat), PDU_CIRCUIT_COLUMNS)), "Circuit Details");
+    const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array", compression: true });
+    downloadBlob(new Blob([wbout], { type: "application/octet-stream" }), filename);
+}
 // Accepted sheet headers for bulk import/edit, normalised (lowercase, letters/digits only) -> field key.
 // The export above and the import below share field names on purpose: export, edit in Excel, re-import.
 const PDU_HEADER_MAP = {
@@ -16283,7 +16312,7 @@ function parsePduImportFile(file) {
 }
 function downloadPduImportTemplate() {
     const sample = [{ site: "Sample Site A", zone: "AZ-1", rackType: "COMP-1", rackNo: "15", feedLabel: "Feed A", ipAddress: "10.20.4.150", vendor: "APC / Schneider Electric", model: "Rack PDU 2G AP8865", serialNumber: "", firmware: "", phase: "Single-Phase", maxLoadKw: "6.0", snmpCommunity: "public", powerOid: "1.3.6.1.4.1.318.1.1.26.4.3.1.5.1", powerScale: "10", chainUnit: "" }, { site: "Sample Site A", zone: "AZ-1", rackType: "COMP-1", rackNo: "16", feedLabel: "Feed A", ipAddress: "10.20.4.151", chainUnit: "1", vendor: "APC / Schneider Electric", model: "Rack PDU 2G AP8886", phase: "3-Phase", maxLoadKw: "22.0", snmpCommunity: "public", powerOid: "1.3.6.1.4.1.318.1.1.26.4.3.1.5.1", powerScale: "10" }, { site: "Sample Site A", zone: "AZ-1", rackType: "COMP-1", rackNo: "17", feedLabel: "Feed A", ipAddress: "10.20.4.151", chainUnit: "2", vendor: "APC / Schneider Electric", model: "Rack PDU 2G AP8886", phase: "3-Phase", maxLoadKw: "22.0", snmpCommunity: "public", powerOid: "1.3.6.1.4.1.318.1.1.26.4.3.1.5.1", powerScale: "10" }];
-    exportToExcel(sample, PDU_EXPORT_COLUMNS.filter((c) => c.key !== "id" && c.key !== "pollIntervalSec" && c.key !== "status" && c.key !== "lastPowerKw" && c.key !== "lastReadingAt" && c.key !== "lastError"), "pdu-import-template.xlsx");
+    exportToExcel(sample, PDU_EXPORT_COLUMNS.filter((c) => Object.values(PDU_HEADER_MAP).indexOf(c.key) >= 0), "pdu-import-template.xlsx");
 }
 function PduImportModal({ onClose, onDone }) {
     const fileRef = useRef(null);
@@ -16904,7 +16933,7 @@ function PduPage({ allowedSites = [], canEdit = false }) {
         catch (e) { setSyncMsg("Sync failed: " + e.message); }
         setSyncing(false);
     };
-    const runExport = () => exportToExcel(flat, PDU_EXPORT_COLUMNS, `pdu-inventory-${localDateStr(today)}.xlsx`);
+    const runExport = () => exportPduWorkbook(flat, `pdu-inventory-${localDateStr(today)}.xlsx`);
     const confirmDelete = async () => {
         if (!deleteConfirm) return;
         setDeleting(true);
