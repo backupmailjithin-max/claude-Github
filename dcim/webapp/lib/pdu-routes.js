@@ -243,6 +243,61 @@ function buildCircuits(statusMap, statusPrefix, configMap, configPrefix, unit) {
   });
   return { items, moduleMatched: mine.length > 0 || all.length === 0 };
 }
+// ---- Health (bank / phase load against the PDU's OWN limits) ---------------------------------------------------------
+// Warning = the PDU itself reports "Near overload" for a bank or phase (or the current passed its near-overload threshold);
+// Critical = "Overload" (or the current reached the overload threshold). The limits are the ones configured on the PDU.
+function healthFromCircuits(banks, phases) {
+  const items = [].concat((banks || []).map((c) => ({ kind: 'Bank', c })), (phases || []).map((c) => ({ kind: 'Phase', c })));
+  if (!items.length) return null;
+  const sev = (c) => {
+    if (c.loadState === 'Overload') return 2;
+    if (c.loadState === 'Near overload') return 1;
+    if (c.currentA != null && c.overloadA && c.currentA >= c.overloadA) return 2;
+    if (c.currentA != null && c.nearOverloadA && c.currentA >= c.nearOverloadA) return 1;
+    return 0;
+  };
+  let worst = null;
+  items.forEach((it) => { const v = sev(it.c), pct = it.c.usedPct != null ? it.c.usedPct : -1; if (!worst || v > worst.v || (v === worst.v && pct > worst.pct)) worst = { ...it, v, pct }; });
+  const w = worst, c = w.c;
+  const level = w.v === 2 ? 'critical' : w.v === 1 ? 'warning' : 'ok';
+  const loadTxt = (c.currentA != null ? c.currentA + ' A' : '') + (c.overloadA ? ' of ' + c.overloadA + ' A limit' : '');
+  const detail = level === 'ok'
+    ? `All ${(banks || []).length} bank(s) and ${(phases || []).length} phase(s) normal` + (w.pct >= 0 ? ` (highest: ${w.kind} ${c.number} at ${w.pct}%)` : '')
+    : `${w.kind} ${c.number}` + (w.pct >= 0 ? ` at ${w.pct}%` : '') + (loadTxt ? ` (${loadTxt})` : '') + ` - ${c.loadState || (level === 'critical' ? 'Overload' : 'Near overload')}`;
+  return { level, detail: detail.slice(0, 250) };
+}
+// Reads only the columns needed, for a whole table, with the same flat 'prefix.col.row' shape that buildCircuits expects.
+function snmpTableCols(ip, community, tableOid, cols, timeout) {
+  return new Promise((resolve, reject) => {
+    let session;
+    try { session = snmp.createSession(ip, community || 'public', { timeout: timeout || 5000, retries: 0 }); }
+    catch (e) { return reject(e); }
+    const done = (err, out) => { try { session.close(); } catch (e) { /* ignore */ } err ? reject(err) : resolve(out); };
+    session.on('error', (err) => done(err));
+    session.tableColumns(tableOid, cols, 20, (err, table) => {
+      if (err) return done(err);
+      const flat = {};
+      Object.keys(table || {}).forEach((row) => Object.keys(table[row]).forEach((col) => { const v = table[row][col]; if (!snmp.isVarbindError(v)) flat[tableOid + '.1.' + col + '.' + row] = v; }));
+      done(null, flat);
+    });
+  });
+}
+async function readCircuitTables(ip, community) {
+  const [phSt, phCf, bkSt, bkCf] = await Promise.all([
+    snmpTableCols(ip, community, '1.3.6.1.4.1.318.1.1.26.6.3', [2, 3, 4, 5, 6]),
+    snmpTableCols(ip, community, '1.3.6.1.4.1.318.1.1.26.6.1', [2, 3, 6, 7]),
+    snmpTableCols(ip, community, '1.3.6.1.4.1.318.1.1.26.8.3', [2, 3, 4, 5, 9]),
+    snmpTableCols(ip, community, '1.3.6.1.4.1.318.1.1.26.8.1', [2, 3, 6, 7]),
+  ]);
+  return { phSt, phCf, bkSt, bkCf };
+}
+// A PDU of a chain is judged only by circuits that carry its own number; a single PDU may fall back to all circuits reported
+// (some firmware leaves that number unset). Never judge one PDU by another PDU's circuits.
+function unitHealth(tables, unit, allowFallback) {
+  const ph = buildCircuits(tables.phSt, APC_PHASE_STATUS, tables.phCf, APC_PHASE_CONFIG, unit);
+  const bk = buildCircuits(tables.bkSt, APC_BANK_STATUS, tables.bkCf, APC_BANK_CONFIG, unit);
+  return healthFromCircuits(bk.moduleMatched || allowFallback ? bk.items : [], ph.moduleMatched || allowFallback ? ph.items : []);
+}
 const clip = (v, n) => (v == null ? v : String(v).slice(0, n));
 
 // Rated/Max Load capacity. Unlike power_oid (polled every cycle, since the live
@@ -396,6 +451,7 @@ module.exports = function registerPduRoutes(app, deps) {
     try { await pool.query('ALTER TABLE pdus ADD UNIQUE KEY uniq_pdu_ip_unit (ip_address, chain_unit)'); } catch (e) { /* already exists */ }
     try { await pool.query('ALTER TABLE pdus DROP INDEX uniq_pdu_ip'); } catch (e) { /* already replaced */ }
     try { await pool.query('ALTER TABLE pdus ADD COLUMN power_scale DECIMAL(10,4) NOT NULL DEFAULT 1 AFTER power_oid'); } catch (e) { /* column already exists */ }
+    for (const ddl of ['ADD COLUMN health VARCHAR(12) NULL', 'ADD COLUMN health_detail VARCHAR(255) NULL', 'ADD COLUMN health_at DATETIME NULL']) { try { await pool.query('ALTER TABLE pdus ' + ddl); } catch (e) { /* column already exists */ } }
   }
 
   function mapPdu(r) {
@@ -406,6 +462,7 @@ module.exports = function registerPduRoutes(app, deps) {
       powerOid: r.power_oid, powerScale: r.power_scale != null ? Number(r.power_scale) : 1, pollIntervalSec: r.poll_interval_sec, status: r.status,
       lastPowerKw: r.last_power_kw != null ? Number(r.last_power_kw) : null,
       lastReadingAt: r.last_reading_at, lastError: r.last_error,
+      health: r.health || null, healthDetail: r.health_detail || null, healthAt: r.health_at || null,
     };
   }
 
@@ -864,7 +921,20 @@ module.exports = function registerPduRoutes(app, deps) {
         const oids = [OID_SYS_DESCR, OID_SYS_NAME, ...new Set(grp.map(effectiveOid).filter(Boolean))];
         try { shared = { out: await snmpGetEach(grp[0].ip_address, grp[0].snmp_community || 'public', oids) }; } catch (e) { shared = null; /* e.g. SNMP v1 refuses the whole request when one unit is absent: read each PDU on its own */ }
       }
-      return Promise.all(grp.map((r) => pollOne(r, shared).catch((e) => ({ id: r.id, status: 'offline', lastError: e.message }))));
+      const polled = await Promise.all(grp.map((r) => pollOne(r, shared).catch((e) => ({ id: r.id, status: 'offline', lastError: e.message }))));
+      // Health: bank / phase load against the PDU's own limits (APC Rack PDU 2G). One read of the host covers every PDU of its chain.
+      try {
+        const live = grp.filter((r) => { const pr = polled.find((x) => x && x.id === r.id); return pr && pr.status !== 'offline' && /apc|schneider/i.test(r.vendor || ''); });
+        if (live.length) {
+          const tables = await readCircuitTables(live[0].ip_address, live[0].snmp_community || 'public');
+          for (const r of live) {
+            const h = unitHealth(tables, Number(r.chain_unit) > 0 ? Number(r.chain_unit) : 1, !(Number(r.chain_unit) > 0));
+            if (h) await pool.query('UPDATE pdus SET health=?, health_detail=?, health_at=NOW() WHERE id=?', [h.level, h.detail, r.id]);
+            else await pool.query('UPDATE pdus SET health=NULL, health_detail=NULL, health_at=NULL WHERE id=?', [r.id]);
+          }
+        }
+      } catch (e) { /* health is best-effort: a PDU that cannot list its circuits keeps its last health */ }
+      return polled;
     }))).flat();
     log.info(`[pdu] polled ${results.length} PDU(s): ${results.filter((r) => r.status === 'online').length} online`);
     return results;
@@ -933,3 +1003,4 @@ module.exports._describeDevice = describeDevice; // exposed for tests only
 module.exports._phaseFromCount = phaseFromCount; // exposed for tests only
 module.exports._parseChainTables = parseChainTables; // exposed for tests only
 module.exports._buildCircuits = buildCircuits; // exposed for tests only
+module.exports._healthFromCircuits = healthFromCircuits; // exposed for tests only

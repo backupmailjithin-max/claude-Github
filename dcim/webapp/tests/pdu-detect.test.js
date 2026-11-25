@@ -59,3 +59,14 @@ test('circuit details: phases / banks of one PDU of a chain, with breaker limit 
   assert.strictEqual(none.items.length, 2); assert.strictEqual(none.moduleMatched, false);
   assert.deepStrictEqual(f({}, S, {}, C, 1), { items: [], moduleMatched: true });
 });
+
+test('health: judged by the PDU\'s own limits - near overload = warning, overload = critical, worst circuit named', () => {
+  const f = require('../lib/pdu-routes')._healthFromCircuits;
+  const ok = f([{ number: 1, currentA: 6, overloadA: 20, nearOverloadA: 16, loadState: 'Normal', usedPct: 30 }], [{ number: 1, currentA: 5, overloadA: 20, nearOverloadA: 16, loadState: 'Normal', usedPct: 25 }]);
+  assert.strictEqual(ok.level, 'ok');
+  const warn = f([{ number: 4, currentA: 17.1, overloadA: 20, nearOverloadA: 16, loadState: 'Near overload', usedPct: 86 }, { number: 1, currentA: 6, overloadA: 20, loadState: 'Normal', usedPct: 30 }], []);
+  assert.strictEqual(warn.level, 'warning'); assert.match(warn.detail, /^Bank 4 at 86% \(17\.1 A of 20 A limit\) - Near overload/);
+  const crit = f([{ number: 2, currentA: 20.5, overloadA: 20, loadState: null, usedPct: 103 }], [{ number: 3, currentA: 17, overloadA: 20, nearOverloadA: 16, loadState: 'Near overload', usedPct: 85 }]);
+  assert.strictEqual(crit.level, 'critical'); assert.match(crit.detail, /^Bank 2/);
+  assert.strictEqual(f([], []), null);
+});

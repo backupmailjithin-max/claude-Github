@@ -16122,7 +16122,7 @@ function pduGroupRacks(flat) {
 // PDUs that share one IP (daisy chain / network port sharing) are one "group"; a single PDU is a group of one.
 const PDU_GROUP_COLUMNS = [
     { key: "site", label: "Site" }, { key: "zone", label: "Zone" }, { key: "ipAddress", label: "Host IP" },
-    { key: "unitsLabel", label: "PDUs" }, { key: "racksLabel", label: "Racks" }, { key: "statusLabel", label: "Status" },
+    { key: "unitsLabel", label: "PDUs" }, { key: "racksLabel", label: "Racks" }, { key: "statusLabel", label: "Status" }, { key: "healthLabel", label: "Health" },
 ];
 function pduBuildGroups(flat) {
     const map = new Map();
@@ -16139,6 +16139,7 @@ function pduBuildGroups(flat) {
         return { ...g, totalKw, ratedKw, usedPct: ratedKw > 0 ? Math.round((totalKw / ratedKw) * 100) : 0,
             unitsLabel: g.units.length === 1 ? "1 PDU" : g.units.length + " PDUs",
             racksLabel: Array.from(new Set(g.units.map((u) => u.rackNo))).join(", "),
+            healthLabel: pduWorstHealth(g.units).label, health: pduWorstHealth(g.units),
             statusLabel: off ? off + " offline" : warn ? warn + " warning" : g.units.every((u) => u.status === "online") ? "All online" : "Not polled yet" };
     }).sort((a, b) => (a.site + a.ipAddress).localeCompare(b.site + b.ipAddress, undefined, { numeric: true }));
 }
@@ -16165,6 +16166,22 @@ const PDU_STATUS_META = {
     warning: ["#EA7A0C", "rgba(234,122,12,.1)", "Warning"],
     unknown: ["#64748B", "rgba(100,116,139,.12)", "Not yet polled"],
 };
+const PDU_HEALTH_RANK = { critical: 3, warning: 2, ok: 1 };
+// Worst health among a set of PDUs: { label: Critical | Warning | OK | Not checked, level, detail } (detail names the feed and the bank / phase).
+function pduWorstHealth(units) {
+    let worst = null;
+    (units || []).forEach((u) => { if (u.health && (!worst || PDU_HEALTH_RANK[u.health] > PDU_HEALTH_RANK[worst.health])) worst = u; });
+    if (!worst) return { label: "Not checked", level: "none", detail: "" };
+    const alertUnits = units.filter((u) => u.health === worst.health && worst.health !== "ok");
+    const detail = worst.health === "ok" ? "All banks normal" : alertUnits.map((u) => (u.feedLabel ? u.feedLabel + ": " : "") + (u.healthDetail || "")).join(" · ");
+    return { label: worst.health === "critical" ? "Critical" : worst.health === "warning" ? "Warning" : "OK", level: worst.health, detail };
+}
+function PduHealthBadge({ health, compact }) {
+    const meta = { critical: ["#DC2626", "rgba(220,38,38,.12)"], warning: ["#EA7A0C", "rgba(234,122,12,.12)"], ok: ["#059669", "rgba(5,150,105,.1)"], none: ["#64748B", "rgba(100,116,139,.12)"] }[health.level] || ["#64748B", "rgba(100,116,139,.12)"];
+    return React.createElement("div", null,
+        React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 9px", borderRadius: 9, background: meta[1], color: meta[0], fontFamily: "Inter", fontSize: 11, fontWeight: 800 } }, React.createElement("span", { style: { width: 6, height: 6, borderRadius: 3, background: meta[0] } }), health.label),
+        health.detail && health.level !== "ok" && health.level !== "none" && !compact && React.createElement("div", { style: { marginTop: 3, fontFamily: "Inter", fontSize: 10, fontWeight: 600, color: meta[0], maxWidth: 230, lineHeight: 1.35 } }, health.detail));
+}
 function PduBadge({ kind, text }) {
     const [c, bg, label] = kind === "status" ? (PDU_STATUS_META[text] || PDU_STATUS_META.unknown) :
         (text === "Single Feed" ? ["#475569", "rgba(100,116,139,.12)", text] : text === "Degraded" ? ["#EA7A0C", "rgba(234,122,12,.12)", text] : ["#059669", "rgba(5,150,105,.1)", text]);
@@ -16215,6 +16232,7 @@ const PDU_RACK_COLUMNS = [
     { key: "rackNo", label: "Rack No" },
     { key: "phaseLabel", label: "Phase" },
     { key: "redundancy", label: "Redundancy" },
+    { key: "healthLabel", label: "Health" },
 ];
 // Full, flat (one row per feed) export - every column the pdus table stores, so an export
 // can also serve as a filled-in import template (see PDU_HEADER_MAP / parsePduImportFile below).
@@ -16875,7 +16893,7 @@ function PduPage({ allowedSites = [], canEdit = false }) {
     const zonesForSite = (site) => Array.from(new Set(racks.filter((r) => site === "all" || r.site === site).map((r) => r.zone)));
     const racksAugmented = useMemo(() => racks.map((r) => {
         const t = pduRackTotals(r);
-        return { ...r, totalKw: t.totalKw, ratedKw: t.ratedKw, usedPct: t.usedPct, phaseLabel: t.phaseLabel, redundancy: pduRedundancy(r) };
+        return { ...r, totalKw: t.totalKw, ratedKw: t.ratedKw, usedPct: t.usedPct, phaseLabel: t.phaseLabel, redundancy: pduRedundancy(r), healthLabel: pduWorstHealth(r.feeds).label };
     }), [racks]);
     const filteredRacks = listSort.apply(racksAugmented.filter((row) => PDU_RACK_COLUMNS.every((col) => listColumnFilterMatches(columnFilters[col.key], col, row))), PDU_RACK_COLUMNS);
     const optionRowsForColumn = (key) => racksAugmented.filter((row) => PDU_RACK_COLUMNS.every((col) => col.key === key || listColumnFilterMatches(columnFilters[col.key], col, row)));
@@ -16939,7 +16957,7 @@ function PduPage({ allowedSites = [], canEdit = false }) {
                             ...PDU_GROUP_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: groupFilters[col.key], onOpen: setOpenFilter, sortKey: groupSort.key, sortDir: groupSort.dir, onSort: groupSort.onSort, style: TH_STYLE })),
                             ...["Load / Rated Capacity", "Capacity Used", ""].map((h) => React.createElement("th", { key: h, style: TH_STYLE }, h)),
                         ])),
-                        React.createElement("tbody", null, filteredGroups.length === 0 ? React.createElement("tr", null, React.createElement("td", { colSpan: 9, style: { padding: 30, textAlign: "center", color: "#94A3B8" } }, "No PDU groups match the current filters.")) : filteredGroups.map((g) => {
+                        React.createElement("tbody", null, filteredGroups.length === 0 ? React.createElement("tr", null, React.createElement("td", { colSpan: 10, style: { padding: 30, textAlign: "center", color: "#94A3B8" } }, "No PDU groups match the current filters.")) : filteredGroups.map((g) => {
                             const open = openGroup === g.key;
                             const sc = g.statusLabel === "All online" ? "#059669" : g.statusLabel === "Not polled yet" ? "#94A3B8" : "#DC2626";
                             return React.createElement(React.Fragment, { key: g.key },
@@ -16950,10 +16968,11 @@ function PduPage({ allowedSites = [], canEdit = false }) {
                                     React.createElement("td", { style: TD_BASE }, g.unitsLabel),
                                     React.createElement("td", { style: TD_BASE }, g.racksLabel),
                                     React.createElement("td", { style: { ...TD_BASE, color: sc, fontWeight: 700, fontSize: 12 } }, g.statusLabel),
+                                    React.createElement("td", { style: TD_BASE }, React.createElement(PduHealthBadge, { health: pduWorstHealth(g.units) })),
                                     React.createElement("td", { style: { ...TD_BASE, fontFamily: "'Space Grotesk'", fontWeight: 800 } }, g.totalKw.toFixed(2), " ", React.createElement("span", { style: { color: "#94A3B8", fontWeight: 600, fontSize: 11 } }, "/ " + g.ratedKw.toFixed(1) + " kW")),
                                     React.createElement("td", { style: TD_BASE }, g.ratedKw > 0 ? g.usedPct + "%" : "—"),
                                     React.createElement("td", { style: TD_BASE }, React.createElement("span", { style: { display: "inline-block", transform: open ? "rotate(90deg)" : "none", transition: "transform .15s", color: "#94A3B8" } }, "›"))),
-                                open && React.createElement("tr", null, React.createElement("td", { colSpan: 9, style: { padding: "0 14px 16px 20px", borderBottom: "1px solid rgba(148,163,184,.14)" } },
+                                open && React.createElement("tr", null, React.createElement("td", { colSpan: 10, style: { padding: "0 14px 16px 20px", borderBottom: "1px solid rgba(148,163,184,.14)" } },
                                     React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 6 } },
                                         React.createElement("thead", null, React.createElement("tr", null, ["Unit", "Rack", "Feed", "Model", "Power", "Max Load", "Used", "Status", ""].map((h) => React.createElement("th", { key: h, style: { ...TH_STYLE, padding: "6px 10px" } }, h)))),
                                         React.createElement("tbody", null, g.units.map((u) => React.createElement("tr", { key: u.id },
@@ -16964,7 +16983,7 @@ function PduPage({ allowedSites = [], canEdit = false }) {
                                             React.createElement("td", { style: { padding: "7px 10px", fontFamily: "'Space Grotesk'", fontWeight: 800 } }, u.lastPowerKw != null ? u.lastPowerKw.toFixed(2) + " kW" : "—"),
                                             React.createElement("td", { style: { padding: "7px 10px" } }, u.maxLoadKw != null ? u.maxLoadKw.toFixed(1) + " kW" : "—"),
                                             React.createElement("td", { style: { padding: "7px 10px" } }, u.lastPowerKw != null && u.maxLoadKw ? Math.round((u.lastPowerKw / u.maxLoadKw) * 100) + "%" : "—"),
-                                            React.createElement("td", { style: { padding: "7px 10px" } }, React.createElement(PduBadge, { kind: "status", text: u.status }), u.lastError && React.createElement("div", { style: { fontSize: 10, color: "#EA7A0C", marginTop: 3 } }, u.lastError)),
+                                            React.createElement("td", { style: { padding: "7px 10px" } }, u.health && u.health !== "ok" && React.createElement(PduHealthBadge, { health: pduWorstHealth([u]) }), React.createElement(PduBadge, { kind: "status", text: u.status }), u.lastError && React.createElement("div", { style: { fontSize: 10, color: "#EA7A0C", marginTop: 3 } }, u.lastError)),
                                             React.createElement("td", { style: { padding: "7px 10px", whiteSpace: "nowrap" } }, React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 11, padding: "5px 11px", color: "#3157ee", marginRight: 6 }, onClick: (e) => { e.stopPropagation(); setDetailsFor(u); } }, "Circuits"), canEdit && React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 11, padding: "5px 11px" }, onClick: (e) => { e.stopPropagation(); setEditing(u); } }, "Edit")))))))));
                         }))))),
             React.createElement("div", { className: "neu-card", style: { overflow: "hidden", display: viewMode === "group" ? "none" : undefined } },
@@ -16974,7 +16993,7 @@ function PduPage({ allowedSites = [], canEdit = false }) {
                             ...PDU_RACK_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, sortKey: listSort.key, sortDir: listSort.dir, onSort: listSort.onSort, style: { textAlign: "left", padding: "10px 14px", fontSize: 9.5, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: "#020617", borderBottom: "1px solid rgba(148,163,184,.25)", whiteSpace: "nowrap" } })),
                             ...["Load / Rated Capacity", "Capacity Used", "Last Reading", ""].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", padding: "10px 14px", fontSize: 9.5, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: "#020617", borderBottom: "1px solid rgba(148,163,184,.25)", whiteSpace: "nowrap" } }, h)),
                         ])),
-                        React.createElement("tbody", null, filteredRacks.length === 0 ? React.createElement("tr", null, React.createElement("td", { colSpan: 10, style: { padding: 30, textAlign: "center", color: "#94A3B8" } }, "No racks match the current filters.")) : filteredRacks.map((rack) => {
+                        React.createElement("tbody", null, filteredRacks.length === 0 ? React.createElement("tr", null, React.createElement("td", { colSpan: 11, style: { padding: 30, textAlign: "center", color: "#94A3B8" } }, "No racks match the current filters.")) : filteredRacks.map((rack) => {
                             const { totalKw, ratedKw, usedPct, phaseLabel } = pduRackTotals(rack);
                             const redundancy = pduRedundancy(rack);
                             const anyOff = rack.feeds.some((f) => f.status === "offline");
@@ -16987,14 +17006,16 @@ function PduPage({ allowedSites = [], canEdit = false }) {
                                     React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)", fontFamily: "'Space Grotesk'", fontWeight: 800 } }, rack.rackNo),
                                     React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)" } }, React.createElement(PduBadge, { kind: "phase", text: phaseLabel })),
                                     React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)" } }, React.createElement(PduBadge, { kind: "redundancy", text: redundancy })),
+                                    React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)" } }, React.createElement(PduHealthBadge, { health: pduWorstHealth(rack.feeds) })),
                                     React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)", fontFamily: "'Space Grotesk'", fontWeight: 800 } }, totalKw.toFixed(2), " ", React.createElement("span", { style: { fontSize: 11, color: "#94A3B8", fontWeight: 600 } }, "/ ", ratedKw.toFixed(1), " kW")),
                                     React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)" } }, React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 7, minWidth: 110 } }, React.createElement("div", { style: { flex: 1, height: 6, borderRadius: 5, background: "rgba(148,163,184,.25)", overflow: "hidden" } }, React.createElement("div", { className: "pdu-load-bar", style: { width: usedPct + "%", height: "100%", borderRadius: 5, background: pduLoadColor(usedPct) } })), React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontWeight: 800, fontSize: 12 } }, usedPct, "%"))),
                                     React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)", fontSize: 11, color: anyOff ? "#DC2626" : "#94A3B8", fontWeight: anyOff ? 700 : 500 } }, anyOff ? "1 feed unreachable" : (rack.feeds[0] && rack.feeds[0].lastReadingAt ? new Date(rack.feeds[0].lastReadingAt).toLocaleString() : "Not yet polled")),
                                     React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)" } }, React.createElement("span", { style: { display: "inline-block", transform: open ? "rotate(90deg)" : "none", transition: "transform .2s ease", color: "#3157EE" } }, "›"))),
-                                open && React.createElement("tr", null, React.createElement("td", { colSpan: 10, style: { padding: "0 14px 18px 20px", borderBottom: "1px solid rgba(148,163,184,.14)" } },
+                                open && React.createElement("tr", null, React.createElement("td", { colSpan: 11, style: { padding: "0 14px 18px 20px", borderBottom: "1px solid rgba(148,163,184,.14)" } },
                                     React.createElement("div", { style: { display: "grid", gridTemplateColumns: rack.feeds.length > 1 ? "1fr 1fr" : "1fr", gap: 10, marginTop: 6 } }, rack.feeds.map((f) => React.createElement("div", { key: f.id, style: { background: f.status === "offline" ? "rgba(241,245,249,.9)" : "rgba(255,255,255,.92)", border: "1px solid rgba(255,255,255,.95)", borderRadius: 13, padding: "11px 13px" } },
                                         React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 7 } }, React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 7 } }, React.createElement("b", { style: { fontSize: 12 } }, f.feedLabel), React.createElement("span", { title: "The PDU number shown on the PDU itself - use it to physically check this feed", style: { fontFamily: "'JetBrains Mono'", fontSize: 9.5, fontWeight: 800, color: "#3157ee", background: "rgba(49,87,238,.1)", padding: "2px 7px", borderRadius: 7 } }, "Display ID " + (f.chainUnit > 0 ? f.chainUnit : 1))), React.createElement(PduBadge, { kind: "status", text: f.status })),
                                         React.createElement("div", { style: { fontSize: 10.5, color: "#020617", marginBottom: 3 } }, [f.vendor, f.model].filter(Boolean).join(" ") || "Vendor/model not set"),
+                                        f.health && React.createElement("div", { style: { margin: "2px 0 6px" } }, React.createElement(PduHealthBadge, { health: pduWorstHealth([f]) })),
                                         React.createElement("div", { style: { fontSize: 10, color: "#94A3B8", fontFamily: "monospace", marginBottom: 8 } }, "S/N ", f.serialNumber || "—", " · ", f.ipAddress),
                                         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 7 } },
                                             [["Power", f.lastPowerKw != null ? f.lastPowerKw.toFixed(2) + " kW" : "—"], ["Max Load", f.maxLoadKw != null ? f.maxLoadKw.toFixed(1) + " kW" : "—"], ["Capacity Used", f.lastPowerKw != null && f.maxLoadKw ? Math.round(f.lastPowerKw / f.maxLoadKw * 100) + "%" : "—"]].map(([l, v]) => React.createElement("div", { key: l }, React.createElement("small", { style: { display: "block", fontSize: 8.5, fontWeight: 700, textTransform: "uppercase", color: "#020617" } }, l), React.createElement("b", { style: { fontFamily: "'Space Grotesk'", fontSize: 13 } }, v)))),
