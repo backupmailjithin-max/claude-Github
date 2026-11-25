@@ -153,6 +153,20 @@ function describeDevice(descr, name) {
     rackHint: rk ? rk[1].toUpperCase() : null, feedHint: fd ? 'Feed ' + fd[1].toUpperCase() : null };
 }
 function pickDevice(descr, name) { const x = describeDevice(descr, name); return { model: x.model, serialNumber: x.serialNumber, firmware: x.firmware }; }
+// Single or 3-phase, read from the device itself where the vendor publishes it (never guessed from the model name).
+// APC Rack PDU 2G: rPDU2DevicePropertiesNumPhases (row = the PDU's row, 1 for a single PDU or the host of a chain);
+// older APC Rack PDUs: rPDULoadDevNumPhases. Other vendors: not read (the form keeps what is selected).
+const APC_NUM_PHASES_OID = '1.3.6.1.4.1.318.1.1.26.4.2.1.7';
+const APC_NUM_PHASES_OID_OLD = '1.3.6.1.4.1.318.1.1.12.2.1.2.0';
+function phaseFromCount(n) { const v = Number(n); return v === 1 ? 'Single-Phase' : (v === 3 ? '3-Phase' : null); }
+async function detectPhase(vendor, ip, community, unit) {
+  if (!vendor || !/apc/i.test(vendor)) return null;
+  const row = Number.isInteger(Number(unit)) && Number(unit) > 0 ? Number(unit) : 1;
+  for (const oid of [APC_NUM_PHASES_OID + '.' + row, APC_NUM_PHASES_OID_OLD]) {
+    try { const out = await snmpGet(ip, community, [oid], DISCOVERY_TIMEOUT_MS); const ph = phaseFromCount(out[oid]); if (ph) return ph; } catch (e) { /* try the next source */ }
+  }
+  return null;
+}
 const clip = (v, n) => (v == null ? v : String(v).slice(0, n));
 
 // Rated/Max Load capacity. Unlike power_oid (polled every cycle, since the live
@@ -488,7 +502,7 @@ module.exports = function registerPduRoutes(app, deps) {
 
   // ---- auto-detect: probe a not-yet-saved IP via SNMP, return best-effort identity fields ----
   app.post('/api/pdus/detect', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
-    const { ipAddress, snmpCommunity } = req.body || {};
+    const { ipAddress, snmpCommunity, chainUnit } = req.body || {};
     if (!ipAddress) return res.status(400).json({ error: '"ipAddress" is required.' });
     try {
       const out = await snmpGet(ipAddress, snmpCommunity || 'public', [OID_SYS_DESCR, OID_SYS_NAME]);
@@ -496,11 +510,12 @@ module.exports = function registerPduRoutes(app, deps) {
       const name = out[OID_SYS_NAME] != null ? String(out[OID_SYS_NAME]) : '';
       const vendor = guessVendor(descr);
       const dd = describeDevice(descr, name);
+      const phase = await detectPhase(vendor, ipAddress, snmpCommunity || 'public', chainUnit);
       const maxLoadCfg = vendor && MAX_LOAD_BY_VENDOR[vendor];
       const maxLoadKw = maxLoadCfg ? await detectMaxLoadKw(vendor, ipAddress, snmpCommunity || 'public') : null;
       res.json({
         reachable: true,
-        vendor, model: dd.model, serialNumber: dd.serialNumber, firmware: dd.firmware, pduName: dd.pduName, rackHint: dd.rackHint, feedHint: dd.feedHint,
+        vendor, model: dd.model, serialNumber: dd.serialNumber, firmware: dd.firmware, pduName: dd.pduName, rackHint: dd.rackHint, feedHint: dd.feedHint, phase,
         maxLoadKw,
         maxLoadNote: maxLoadCfg ? (maxLoadKw != null ? `Max Load detected via ${maxLoadCfg.confidence} confidence source: ${maxLoadCfg.note}` : `Could not read a rated-capacity value from this device right now - ${maxLoadCfg.note}`) : null,
         note: 'Vendor/Model/Firmware are parsed from the device\'s generic SNMP sysDescr/sysName, which varies by vendor and is not always reliable - review and correct every field before saving. Max Load is only auto-filled for a handful of vendors with a confirmed SNMP capacity value (see maxLoadNote); for everything else it stays manual. Live wattage polling additionally needs a Power OID from this model\'s vendor MIB/datasheet (set it in the Power OID field); without one, this PDU is still monitored for online/offline reachability only.',
@@ -761,3 +776,4 @@ module.exports = function registerPduRoutes(app, deps) {
 };
 module.exports._effectiveOid = effectiveOid; // exposed for tests only
 module.exports._describeDevice = describeDevice; // exposed for tests only
+module.exports._phaseFromCount = phaseFromCount; // exposed for tests only

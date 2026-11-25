@@ -25,3 +25,11 @@ test('names without a rack or feed give no hint', () => {
   assert.strictEqual(r.rackHint, null);
   assert.strictEqual(r.feedHint, null);
 });
+
+test('phase count from the device: 1 = Single-Phase, 3 = 3-Phase, anything else is not guessed', () => {
+  const f = require('../lib/pdu-routes')._phaseFromCount;
+  assert.strictEqual(f(1), 'Single-Phase');
+  assert.strictEqual(f('3'), '3-Phase');
+  assert.strictEqual(f(2), null);
+  assert.strictEqual(f(undefined), null);
+});

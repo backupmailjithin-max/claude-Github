@@ -16522,7 +16522,7 @@ function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
         if (!form.ipAddress) { setDetectMsg({ type: "error", text: "Enter an IP address first." }); return; }
         setDetecting(true); setDetectMsg(null); setConflicts({});
         try {
-            const r = await api.detectPdu({ ipAddress: form.ipAddress, snmpCommunity: form.snmpCommunity });
+            const r = await api.detectPdu({ ipAddress: form.ipAddress, snmpCommunity: form.snmpCommunity, chainUnit: form.chainUnit === "" ? 0 : Number(form.chainUnit) });
             if (r.reachable) {
                 const detectedVals = {
                     vendor: r.vendor || "", model: r.model || "", serialNumber: r.serialNumber || "",
@@ -16537,6 +16537,8 @@ function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
                     else if (current !== detectedVal) newConflicts[key] = detectedVal;
                 });
                 // The PDU's own name often says where it is (e.g. "Rack-K20-PDU-A" = rack K20, Feed A): use it to pick the rack and the feed.
+                // Single / 3-phase comes from the device itself (APC publishes it), so it replaces the default selection.
+                if (r.phase) filled.phase = r.phase;
                 let hintLine = "";
                 if (r.pduName) {
                     const hint = r.rackHint ? String(r.rackHint).toUpperCase() : "";
@@ -16668,7 +16670,7 @@ function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
             React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 12 } }, field("Serial Number", "serialNumber"), field("Firmware", "firmware")),
             React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 18 } },
                 React.createElement("div", { style: { flex: 1 } },
-                    React.createElement("label", { style: PDU_LABEL_STYLE }, "Phase"),
+                    React.createElement("label", { style: PDU_LABEL_STYLE }, "Phase", detectedFields.phase && autoBadge),
                     React.createElement(ThemedSelect, { value: form.phase, onChange: (e) => set("phase", e.target.value), className: "neu-input", style: { width: "100%" } }, ["Single-Phase", "3-Phase"].map((p) => React.createElement("option", { key: p, value: p }, p)))),
                 field("Max Load / Rated Capacity (kW)", "maxLoadKw", { placeholder: "e.g. 6.0" })),
             err && React.createElement("div", { style: { color: "#DC2626", fontFamily: "Inter", fontSize: 12.5, fontWeight: 700, marginBottom: 12 } }, err),
