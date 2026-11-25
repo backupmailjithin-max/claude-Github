@@ -2883,6 +2883,7 @@ function ExpandedDetailRow({ colSpan, title, items }) {
 }
 function DCActivity({ activities, allowedSites, canEdit, onEdit, onDelete, onExportExcel, onExportCSV, onImport, importError, importProgress, importErrorDetails, selectedIds, onSelectId, onSelectAll, onDeleteSelected, onClearSelection }) {
     const actListCtl = useProgressiveList();
+    const actTableRef = useRef(null);
     const [expandedId, setExpandedId] = useState(null);
     const [siteFilter, setSiteFilter] = useState("all");
     const [typeFilter, setTypeFilter] = useState("all");
@@ -2932,7 +2933,8 @@ function DCActivity({ activities, allowedSites, canEdit, onEdit, onDelete, onExp
                 React.createElement(Trash2, { s: 13, c: "#DC2626" }),
                 " Delete Selected"),
             React.createElement("button", { onClick: () => onClearSelection(), className: "neu-btn-secondary", style: { fontSize: 11.5 } }, "Clear")),
-        React.createElement("div", { className: "neu-card anim-in d2 movement-table-card", style: { overflowX: "auto", padding: "6px 4px" } },
+        React.createElement("div", { ref: actTableRef, className: "neu-card anim-in d2 movement-table-card", style: { overflowX: "auto", padding: "6px 4px" } },
+            React.createElement(FloatingHScroll, { wrapRef: actTableRef }),
             React.createElement("table", { style: { borderCollapse: "collapse", width: "100%" } },
                 React.createElement("thead", null,
                     React.createElement("tr", null,
@@ -3450,6 +3452,7 @@ function MovementCloseActionModal({ action, onClose, onConfirm }) {
 }
 function MaterialMovements({ onUploadDocs, onApproveNamed, defaultApprover, movements, allowedSites, canEdit, isAdmin, canApprove, onEdit, onDelete, onApprove, onReject, onGenerateTicket, onReceive, onNotReceived, onOutwardComplete, onCancel, onDownload, onDownloadDoc, onViewDoc, onExportExcel, onExportCSV, onImport, importError, importProgress, importErrorDetails, selectedIds, onSelectId, onSelectAll, onDeleteSelected, onClearSelection }) {
     const movListCtl = useProgressiveList();
+    const movTableRef = useRef(null);
     const [expandedId, setExpandedId] = useState(null);
     const [reviewId, setReviewId] = useState(null);
     const [closeAction, setCloseAction] = useState(null); // { id, type: "receive" | "notReceived" | "outwardComplete" | "cancel", itemName, defaultReceiverName }
@@ -3543,7 +3546,8 @@ function MaterialMovements({ onUploadDocs, onApproveNamed, defaultApprover, move
                 React.createElement(Trash2, { s: 13, c: "#DC2626" }),
                 " Delete Selected"),
             React.createElement("button", { onClick: () => onClearSelection(), className: "neu-btn-secondary", style: { fontSize: 11.5 } }, "Clear")),
-        React.createElement("div", { className: "neu-card anim-in d2", style: { overflowX: "auto", padding: "6px 4px" } },
+        React.createElement("div", { ref: movTableRef, className: "neu-card anim-in d2", style: { overflowX: "auto", padding: "6px 4px" } },
+            React.createElement(FloatingHScroll, { wrapRef: movTableRef }),
             React.createElement("table", { style: { borderCollapse: "collapse", width: "100%" } },
                 React.createElement("thead", null,
                     React.createElement("tr", null,
@@ -16565,6 +16569,125 @@ function PduDetailsModal({ pdu, onClose }) {
                     d.moduleMatched === false && React.createElement("div", { key: "mod", style: { marginTop: 10, fontSize: 10.5, color: "#92400E", fontFamily: "Inter" } }, "This PDU does not label its circuits with its own unit number, so all circuits reported by the host are shown.")])
                     : React.createElement("div", { key: "nsup", style: { marginTop: 14, fontSize: 12, color: "#64748B", fontFamily: "Inter" } }, "Circuit-level details are available for APC Rack PDU 2G units. This PDU's name and feed are shown above.")])])), document.body);
 }
+// Feed card: one tank per bank (or phase) showing the live load against the PDU's own overload limit.
+// The numbers come from the circuit snapshot the poller already stores; a PDU without circuit data keeps the plain figures.
+function pduCircuitList(f) {
+    const c = f && f.circuits;
+    if (!c) return [];
+    const banks = (c.banks || []).filter((x) => x && x.currentA != null);
+    if (banks.length) return banks.map((x) => ({ ...x, kind: "Bank" }));
+    return (c.phases || []).filter((x) => x && x.currentA != null).map((x) => ({ ...x, kind: "Phase" }));
+}
+function pduLoadColor(c) {
+    if (c.overloadA && c.currentA >= c.overloadA) return "#DC2626";
+    if (c.nearOverloadA && c.currentA >= c.nearOverloadA) return "#EA7A0C";
+    return "#059669";
+}
+const PDU_MOTION_CSS = "@keyframes pduBolt{0%{opacity:0;transform:translateY(7px) scale(.85)}45%{opacity:1}100%{opacity:0;transform:translateY(-9px) scale(1.05)}}@keyframes pduFlow{to{stroke-dashoffset:-28}}@keyframes pduWave{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}.pdu-bolt{display:inline-block;animation:pduBolt 1.6s ease-in-out infinite}.pdu-flow{animation:pduFlow 1.1s linear infinite}@media (prefers-reduced-motion:reduce){.pdu-bolt,.pdu-flow{animation:none!important}.pdu-bolt{opacity:.85!important}}";
+function PduTank({ c }) {
+    const col = pduLoadColor(c);
+    const pct = c.overloadA ? Math.max(3, Math.min(100, Math.round((c.currentA / c.overloadA) * 100))) : 12;
+    return React.createElement("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", width: 58 }, title: c.kind + " " + c.number + ": " + c.currentA.toFixed(1) + " A" + (c.overloadA ? " of " + c.overloadA + " A limit" : "") + (c.loadState ? " - " + c.loadState : "") },
+        React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontSize: 9, fontWeight: 700, color: "#64748B", marginBottom: 3, whiteSpace: "nowrap" } }, c.overloadA ? "max " + c.overloadA + " A" : "no limit set"),
+        React.createElement("div", { style: { position: "relative", width: 46, height: 92 } },
+            React.createElement("div", { style: { position: "absolute", inset: 0, borderRadius: 11, border: "2px solid #CBD5E1", background: "linear-gradient(180deg,#F8FAFC,#EEF2F7)", overflow: "hidden", boxShadow: "inset 2px 3px 7px rgba(15,23,42,.12)" } },
+                React.createElement("div", { style: { position: "absolute", left: 0, right: 0, bottom: 0, height: pct + "%", background: "linear-gradient(180deg," + col + "CC," + col + ")", transition: "height .6s ease" } },
+                    React.createElement("div", { style: { position: "absolute", left: 0, right: 0, top: 0, height: 3, background: "rgba(255,255,255,.55)" } }))),
+            React.createElement("span", { style: { position: "absolute", left: "50%", transform: "translateX(-50%)", bottom: "min(calc(" + pct + "% + 5px), 78px)", background: "#fff", color: col, border: "1.5px solid " + col, borderRadius: 999, padding: "1px 6px", fontFamily: "'Space Grotesk'", fontSize: 10.5, fontWeight: 800, whiteSpace: "nowrap", boxShadow: "0 2px 6px rgba(15,23,42,.18)" } }, c.currentA.toFixed(1) + " A")),
+        React.createElement("span", { style: { fontFamily: "Inter", fontSize: 9.5, fontWeight: 800, color: "#475569", marginTop: 3 } }, c.kind + " " + c.number));
+}
+function PduFeedCard({ f, canEdit, onDetails, onEdit, onDelete }) {
+    const side = /(^|[^a-z0-9])b\s*$/i.test(String(f.feedLabel || "").trim()) ? "B" : "A";
+    const accent = side === "B" ? "#6D28D9" : "#2F55E8";
+    const used = f.lastPowerKw != null && f.maxLoadKw ? Math.round(f.lastPowerKw / f.maxLoadKw * 100) : null;
+    const health = pduWorstHealth([f]);
+    const tanks = pduCircuitList(f);
+    const total = tanks.length ? tanks.reduce((s, c) => s + c.currentA, 0) : null;
+    const btn = (label, color, onClick, title) => React.createElement("button", { className: "neu-btn-secondary", title: title, style: { fontSize: 10.5, padding: "4px 10px", color: color, whiteSpace: "nowrap" }, onClick: (e) => { e.stopPropagation(); onClick(); } }, label);
+    const metric = (label, value) => React.createElement("div", { style: { minWidth: 0 } }, React.createElement("small", { style: { display: "block", fontSize: 8.5, fontWeight: 800, letterSpacing: ".04em", textTransform: "uppercase", color: "#64748B", lineHeight: 1.1 } }, label), React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontSize: 13.5, fontWeight: 800, color: "#020617" } }, value));
+    return React.createElement("div", { style: { background: "linear-gradient(145deg,#fff," + (side === "B" ? "rgba(124,58,237,.07)" : "rgba(47,85,232,.07)") + ")", border: "1px solid rgba(148,163,184,.25)", borderTop: "3px solid " + accent, borderRadius: 14, padding: "9px 13px 10px", minWidth: 0, boxShadow: "0 4px 14px rgba(23,52,93,.07)" } },
+        React.createElement("style", null, PDU_MOTION_CSS),
+        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" } },
+            React.createElement("span", { style: { background: accent, color: "#fff", fontFamily: "'Space Grotesk'", fontWeight: 800, fontSize: 11.5, letterSpacing: ".04em", padding: "2px 10px", borderRadius: 8 } }, "FEED " + side),
+            React.createElement("span", { title: "The PDU number shown on the PDU itself - use it to physically check this feed", style: { fontFamily: "'JetBrains Mono'", fontSize: 9.5, fontWeight: 800, color: accent, background: "rgba(100,116,139,.12)", padding: "2px 7px", borderRadius: 6 } }, "ID " + (f.displayId != null ? f.displayId : 1)),
+            f.pduName && React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontSize: 10.5, fontWeight: 700, color: "#020617", overflowWrap: "anywhere" } }, f.pduName),
+            React.createElement("span", { style: { marginLeft: "auto" } }, React.createElement(PduBadge, { kind: "status", text: f.status }))),
+        React.createElement("div", { style: { fontSize: 10, color: "#64748B", margin: "3px 0 6px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, [[f.vendor, f.model].filter(Boolean).join(" ") || "Vendor/model not set", "S/N " + (f.serialNumber || "—"), f.ipAddress].join(" · ")),
+        tanks.length > 0 && React.createElement("div", { style: { display: "flex", alignItems: "flex-end", gap: 12, flexWrap: "wrap", padding: "4px 0 6px" } },
+            React.createElement("div", { style: { minWidth: 84 } },
+                React.createElement("small", { style: { display: "block", fontSize: 8.5, fontWeight: 800, letterSpacing: ".04em", textTransform: "uppercase", color: "#64748B" } }, "Total current"),
+                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 24, fontWeight: 800, color: "#17345D", lineHeight: 1.1 } }, total.toFixed(1), React.createElement("span", { style: { fontSize: 12, color: "#64748B", marginLeft: 3 } }, "A")),
+                React.createElement("div", { "aria-hidden": "true", style: { display: "flex", gap: 6, marginTop: 4, color: "#F59E0B", fontSize: 14 } }, [0, 1, 2].map((i) => React.createElement("span", { key: i, className: "pdu-bolt", style: { animationDelay: i * 0.35 + "s" } }, "⚡")))),
+            React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } }, tanks.map((c) => React.createElement(PduTank, { key: c.kind + c.number, c })))),
+        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" } },
+            metric("Power", f.lastPowerKw != null ? f.lastPowerKw.toFixed(2) + " kW" : "—"),
+            metric("Max load", f.maxLoadKw != null ? f.maxLoadKw.toFixed(1) + " kW" : "—"),
+            React.createElement("div", { style: { minWidth: 78 } }, metric("Used", used != null ? used + "%" : "—"), used != null && React.createElement("div", { style: { height: 4, borderRadius: 3, background: "rgba(148,163,184,.3)", marginTop: 2 } }, React.createElement("div", { style: { width: Math.min(100, used) + "%", height: 4, borderRadius: 3, background: used >= 85 ? "#DC2626" : used >= 70 ? "#EA7A0C" : "#059669" } }))),
+            f.health && React.createElement("div", null, React.createElement("small", { style: { display: "block", fontSize: 8.5, fontWeight: 800, letterSpacing: ".04em", textTransform: "uppercase", color: "#64748B", lineHeight: 1.1, marginBottom: 2 } }, "Health"), React.createElement(PduHealthBadge, { health: health, compact: true })),
+            React.createElement("div", { style: { marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" } },
+                btn("⚡ Details", accent, onDetails, "Bank and phase load, read live from the PDU"),
+                canEdit && btn("✎ Edit", "#334155", onEdit, "Edit this PDU"),
+                canEdit && btn("🗑 Delete", "#DC2626", onDelete, "Delete this PDU"))),
+        health.detail && health.level !== "ok" && health.level !== "none" && React.createElement("div", { style: { marginTop: 5, fontSize: 10, fontWeight: 700, color: health.level === "critical" ? "#DC2626" : "#EA7A0C" } }, "⚠ " + health.detail),
+        f.lastError && React.createElement("div", { style: { marginTop: 4, fontSize: 10, color: "#EA7A0C" } }, f.lastError));
+}
+// Daisy-chain view: the host IP box, the network cable into the host PDU's Management port, and each PDU drawn as its own
+// control panel (display, status lights, In / Out / Management ports). Out of one PDU is cabled to In of the next.
+const PDU_VIEWS = ["Input", "Phase", "Bank"];
+function pduLcdLines(u, view) {
+    const c = u.circuits || {};
+    const ph = (c.phases || []).filter((x) => x && x.currentA != null), bk = (c.banks || []).filter((x) => x && x.currentA != null);
+    const volts = ph.length && ph[0].voltage != null ? ph[0].voltage : bk.length && bk[0].voltage != null ? bk[0].voltage : null;
+    if (!ph.length && !bk.length && view !== 0) return ["NO CIRCUIT DATA", "from this PDU"];
+    if (view === 1) return ph.length ? ["PHASE LOAD"].concat(ph.slice(0, 3).map((p) => "L" + p.number + "  " + p.currentA.toFixed(1) + " A")) : ["NO PHASE DATA"];
+    if (view === 2) {
+        const hot = bk.slice().sort((a, b) => (b.usedPct != null ? b.usedPct : -1) - (a.usedPct != null ? a.usedPct : -1))[0];
+        return hot ? ["HOTTEST BANK " + hot.number, hot.currentA.toFixed(1) + " A", hot.usedPct != null ? hot.usedPct + "% OF LIMIT" : ""] : ["NO BANK DATA"];
+    }
+    const maxPh = ph.length ? Math.max.apply(null, ph.map((p) => p.currentA)) : bk.length ? Math.max.apply(null, bk.map((p) => p.currentA)) : null;
+    return ["INPUT", volts != null ? Math.round(volts) + " V" : "— V", maxPh != null ? "MAX " + maxPh.toFixed(1) + " A" : "", u.lastPowerKw != null ? u.lastPowerKw.toFixed(2) + " kW" : "— kW"];
+}
+function PduChainView({ group, onOpen, onEdit }) {
+    const [views, setViews] = useState({});
+    const W = 310, G = 72, TOP = 92, PH = 184, units = group.units, n = units.length;
+    const total = n * W + (n - 1) * G;
+    const portY = TOP + 5;
+    const port = (x, label, dim, free) => React.createElement("div", { key: label, style: { position: "absolute", left: x - 34, top: 5, width: 68, textAlign: "center", opacity: dim ? 0.38 : 1 } },
+        React.createElement("div", { style: { height: 20, margin: "0 8px", borderRadius: 4, background: "#0A0F19", border: "2px solid " + (free ? "#F59E0B" : "#64748B"), borderStyle: free ? "dashed" : "solid" } }),
+        React.createElement("div", { style: { fontFamily: "Inter", fontSize: 8.5, fontWeight: 800, color: "#B6C6E0", letterSpacing: ".03em", marginTop: 3, whiteSpace: "nowrap" } }, label));
+    return React.createElement("div", { style: { overflowX: "auto", padding: "6px 2px 4px" } },
+        React.createElement("style", null, PDU_MOTION_CSS),
+        React.createElement("div", { style: { position: "relative", width: total, height: TOP + PH + 52, margin: "0 auto" } },
+            React.createElement("div", { style: { position: "absolute", left: W / 2 - 100, top: 0, width: 200, height: 56, borderRadius: 12, background: "linear-gradient(145deg,#17345D,#1E4A82)", color: "#fff", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", boxShadow: "0 6px 16px rgba(23,52,93,.28)" } },
+                React.createElement("span", { style: { fontFamily: "Inter", fontSize: 9, fontWeight: 800, letterSpacing: ".06em", color: "#9FB6DA" } }, "HOST IP"),
+                React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontSize: 15, fontWeight: 800 } }, group.ipAddress)),
+            units.map((u, i) => {
+                const x = i * (W + G), view = views[u.id] || 0, host = i === 0, last = i === n - 1;
+                const side = /(^|[^a-z0-9])b\s*$/i.test(String(u.feedLabel || "").trim()) ? "B" : "A";
+                const lit = u.status === "online" ? (u.health === "critical" ? 2 : u.health === "warning" ? 1 : u.health === "ok" ? 0 : -1) : -1;
+                const lines = pduLcdLines(u, view);
+                const leds = [["OK", "#22C55E"], ["Warning", "#F59E0B"], ["Overload", "#EF4444"]];
+                const used = u.lastPowerKw != null && u.maxLoadKw ? Math.round((u.lastPowerKw / u.maxLoadKw) * 100) : null;
+                return React.createElement("div", { key: u.id, role: "button", tabIndex: 0, title: "Open the feed details for this PDU", onClick: () => onOpen(u), onKeyDown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(u); } },
+                    style: { position: "absolute", left: x, top: TOP, width: W, height: PH, borderRadius: 14, background: "linear-gradient(160deg,#2A3A55,#16213A)", boxShadow: "0 10px 22px rgba(15,23,42,.3), inset 0 1px 0 rgba(255,255,255,.12)", cursor: "pointer", outline: "none", color: "#fff", opacity: u.status === "online" ? 1 : 0.8 } },
+                    port(54, "In", host, false), port(W / 2, "Management", !host, false), port(W - 54, "Out", false, last),
+                    React.createElement("div", { style: { position: "absolute", left: 14, top: 58, width: 190, height: 78, borderRadius: 8, background: "#0B2A1E", border: "2px solid #14452F", padding: "6px 10px", fontFamily: "'JetBrains Mono'", fontSize: 11.5, fontWeight: 700, color: u.status === "online" ? "#7CFFB2" : "#3E6B55", lineHeight: 1.35, overflow: "hidden" } },
+                        u.status === "online" ? lines.map((t, k) => React.createElement("div", { key: k, style: { whiteSpace: "nowrap", fontSize: k === 0 ? 9.5 : 11.5, opacity: k === 0 ? 0.8 : 1 } }, t)) : React.createElement("div", null, "OFFLINE", React.createElement("div", { style: { fontSize: 9.5 } }, u.lastError ? "no reading" : "waiting for first poll"))),
+                    React.createElement("span", { style: { position: "absolute", right: 14, top: 58, fontFamily: "'JetBrains Mono'", fontSize: 10, fontWeight: 800, background: "rgba(255,255,255,.14)", padding: "2px 8px", borderRadius: 6 } }, "ID " + (u.displayId != null ? u.displayId : 1)),
+                    React.createElement("button", { type: "button", title: "Scroll the display: " + PDU_VIEWS.join(" / "), onClick: (e) => { e.stopPropagation(); setViews((v) => ({ ...v, [u.id]: ((v[u.id] || 0) + 1) % 3 })); }, style: { position: "absolute", right: 14, top: 84, width: 86, height: 24, borderRadius: 6, whiteSpace: "nowrap", border: "1px solid #64748B", background: "#334155", color: "#E2E8F0", fontFamily: "Inter", fontSize: 10, fontWeight: 800, cursor: "pointer" } }, "Scroll · " + PDU_VIEWS[view]),
+                    React.createElement("div", { style: { position: "absolute", right: 14, top: 114, display: "flex", gap: 7 } }, leds.map((l, k) => React.createElement("span", { key: l[0], title: l[0], style: { width: 11, height: 11, borderRadius: "50%", background: lit === k ? l[1] : "#1F2A3D", boxShadow: lit === k ? "0 0 8px " + l[1] : "inset 0 1px 2px rgba(0,0,0,.5)" } }))),
+                    React.createElement("div", { style: { position: "absolute", left: 14, right: 14, top: 144, display: "flex", alignItems: "center", gap: 7 } },
+                        React.createElement("span", { style: side === "B" ? { width: 16, height: 16, borderRadius: "50%", border: "2.5px solid #A78BFA", flex: "none" } : { width: 16, height: 16, borderRadius: 4, background: "#6F8CFF", flex: "none" } }),
+                        React.createElement("span", { style: { fontFamily: "Inter", fontSize: 11.5, fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, "Rack-" + u.rackNo + " · Feed " + side),
+                        React.createElement("span", { style: { marginLeft: "auto", fontFamily: "'Space Grotesk'", fontSize: 12, fontWeight: 800 } }, u.lastPowerKw != null ? u.lastPowerKw.toFixed(2) + " kW" + (used != null ? " · " + used + "%" : "") : "—"),
+                        onEdit && React.createElement("button", { type: "button", onClick: (e) => { e.stopPropagation(); onEdit(u); }, style: { border: "1px solid #64748B", background: "transparent", color: "#E2E8F0", borderRadius: 6, fontSize: 10, fontWeight: 700, padding: "2px 8px", cursor: "pointer" } }, "Edit")),
+                    React.createElement("div", { style: { position: "absolute", left: 14, right: 14, top: 166, fontFamily: "Inter", fontSize: 9.5, color: "#9FB6DA", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, host ? "Network cable goes to Management" : "In is fed from the previous PDU's Out", last ? " · Out is free for the next PDU" : ""));
+            }),
+            React.createElement("svg", { width: total, height: TOP + PH + 52, style: { position: "absolute", left: 0, top: 0, pointerEvents: "none", overflow: "visible" }, "aria-hidden": "true" },
+                React.createElement("path", { d: "M" + (W / 2) + " 56 V" + (portY - 2), stroke: "#0EA5A4", strokeWidth: 5, fill: "none", strokeLinecap: "round" }),
+                React.createElement("text", { x: W / 2 + 10, y: 76, fontSize: 10, fontWeight: 700, fill: "#0E7490", fontFamily: "Inter" }, "Network cable"),
+                units.slice(0, -1).map((u, i) => { const x1 = i * (W + G) + W - 54, x2 = (i + 1) * (W + G) + 54; return React.createElement("g", { key: u.id }, React.createElement("path", { d: "M" + x1 + " " + portY + " C" + x1 + " " + (portY - 52) + "," + x2 + " " + (portY - 52) + "," + x2 + " " + portY, stroke: "#3157EE", strokeWidth: 5, fill: "none", strokeLinecap: "round", opacity: 0.35 }), React.createElement("path", { className: "pdu-flow", d: "M" + x1 + " " + portY + " C" + x1 + " " + (portY - 52) + "," + x2 + " " + (portY - 52) + "," + x2 + " " + portY, stroke: "#6F8CFF", strokeWidth: 3, fill: "none", strokeDasharray: "6 8", strokeLinecap: "round" })); }))));
+}
 function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
     const isNew = !pdu || !pdu.id;
     const [form, setForm] = useState(() => ({
@@ -17002,18 +17125,7 @@ function PduPage({ allowedSites = [], canEdit = false }) {
                                     React.createElement("td", { style: TD_BASE }, g.ratedKw > 0 ? g.usedPct + "%" : "—"),
                                     React.createElement("td", { style: TD_BASE }, React.createElement("span", { style: { display: "inline-block", transform: open ? "rotate(90deg)" : "none", transition: "transform .15s", color: "#94A3B8" } }, "›"))),
                                 open && React.createElement("tr", null, React.createElement("td", { colSpan: 10, style: { padding: "0 14px 16px 20px", borderBottom: "1px solid rgba(148,163,184,.14)" } },
-                                    React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 6 } },
-                                        React.createElement("thead", null, React.createElement("tr", null, ["Unit", "Rack", "Feed", "Model", "Power", "Max Load", "Used", "Status", ""].map((h) => React.createElement("th", { key: h, style: { ...TH_STYLE, padding: "6px 10px" } }, h)))),
-                                        React.createElement("tbody", null, g.units.map((u) => React.createElement("tr", { key: u.id },
-                                            React.createElement("td", { style: { padding: "7px 10px", fontWeight: 800 } }, u.chainUnit > 0 ? "Unit " + u.chainUnit : "Single"),
-                                            React.createElement("td", { style: { padding: "7px 10px" } }, "Rack-" + u.rackNo),
-                                            React.createElement("td", { style: { padding: "7px 10px" } }, u.feedLabel),
-                                            React.createElement("td", { style: { padding: "7px 10px", color: "#475569" } }, [u.vendor, u.model].filter(Boolean).join(" ") || "—"),
-                                            React.createElement("td", { style: { padding: "7px 10px", fontFamily: "'Space Grotesk'", fontWeight: 800 } }, u.lastPowerKw != null ? u.lastPowerKw.toFixed(2) + " kW" : "—"),
-                                            React.createElement("td", { style: { padding: "7px 10px" } }, u.maxLoadKw != null ? u.maxLoadKw.toFixed(1) + " kW" : "—"),
-                                            React.createElement("td", { style: { padding: "7px 10px" } }, u.lastPowerKw != null && u.maxLoadKw ? Math.round((u.lastPowerKw / u.maxLoadKw) * 100) + "%" : "—"),
-                                            React.createElement("td", { style: { padding: "7px 10px" } }, u.health && u.health !== "ok" && React.createElement(PduHealthBadge, { health: pduWorstHealth([u]) }), React.createElement(PduBadge, { kind: "status", text: u.status }), u.lastError && React.createElement("div", { style: { fontSize: 10, color: "#EA7A0C", marginTop: 3 } }, u.lastError)),
-                                            React.createElement("td", { style: { padding: "7px 10px", whiteSpace: "nowrap" } }, React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 11, padding: "5px 11px", color: "#3157ee", marginRight: 6 }, onClick: (e) => { e.stopPropagation(); setDetailsFor(u); } }, "Circuits"), canEdit && React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 11, padding: "5px 11px" }, onClick: (e) => { e.stopPropagation(); setEditing(u); } }, "Edit")))))))));
+                                    React.createElement(PduChainView, { group: g, onOpen: (u) => setDetailsFor(u), onEdit: canEdit ? (u) => setEditing(u) : null }))));
                         }))))),
             React.createElement("div", { className: "neu-card", style: { overflow: "hidden", display: viewMode === "group" ? "none" : undefined } },
                 React.createElement("div", { style: { overflowX: "auto" } },
@@ -17041,18 +17153,7 @@ function PduPage({ allowedSites = [], canEdit = false }) {
                                     React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)", fontSize: 11, color: anyOff ? "#DC2626" : "#94A3B8", fontWeight: anyOff ? 700 : 500 } }, anyOff ? "1 feed unreachable" : (rack.feeds[0] && rack.feeds[0].lastReadingAt ? new Date(rack.feeds[0].lastReadingAt).toLocaleString() : "Not yet polled")),
                                     React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)" } }, React.createElement("span", { style: { display: "inline-block", transform: open ? "rotate(90deg)" : "none", transition: "transform .2s ease", color: "#3157EE" } }, "›"))),
                                 open && React.createElement("tr", null, React.createElement("td", { colSpan: 11, style: { padding: "0 14px 18px 20px", borderBottom: "1px solid rgba(148,163,184,.14)" } },
-                                    React.createElement("div", { style: { display: "grid", gridTemplateColumns: rack.feeds.length > 1 ? "1fr 1fr" : "1fr", gap: 10, marginTop: 6 } }, rack.feeds.map((f) => React.createElement("div", { key: f.id, style: { background: f.status === "offline" ? "rgba(241,245,249,.9)" : "rgba(255,255,255,.92)", border: "1px solid rgba(255,255,255,.95)", borderRadius: 13, padding: "11px 13px" } },
-                                        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 7 } }, React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 7 } }, React.createElement("b", { style: { fontSize: 12 } }, f.feedLabel), React.createElement("span", { title: "The PDU number shown on the PDU itself - use it to physically check this feed", style: { fontFamily: "'JetBrains Mono'", fontSize: 9.5, fontWeight: 800, color: "#3157ee", background: "rgba(49,87,238,.1)", padding: "2px 7px", borderRadius: 7 } }, "Display ID " + (f.chainUnit > 0 ? f.chainUnit : 1))), React.createElement(PduBadge, { kind: "status", text: f.status })),
-                                        React.createElement("div", { style: { fontSize: 10.5, color: "#020617", marginBottom: 3 } }, [f.vendor, f.model].filter(Boolean).join(" ") || "Vendor/model not set"),
-                                        f.health && React.createElement("div", { style: { margin: "2px 0 6px" } }, React.createElement(PduHealthBadge, { health: pduWorstHealth([f]) })),
-                                        React.createElement("div", { style: { fontSize: 10, color: "#94A3B8", fontFamily: "monospace", marginBottom: 8 } }, "S/N ", f.serialNumber || "—", " · ", f.ipAddress),
-                                        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 7 } },
-                                            [["Power", f.lastPowerKw != null ? f.lastPowerKw.toFixed(2) + " kW" : "—"], ["Max Load", f.maxLoadKw != null ? f.maxLoadKw.toFixed(1) + " kW" : "—"], ["Capacity Used", f.lastPowerKw != null && f.maxLoadKw ? Math.round(f.lastPowerKw / f.maxLoadKw * 100) + "%" : "—"]].map(([l, v]) => React.createElement("div", { key: l }, React.createElement("small", { style: { display: "block", fontSize: 8.5, fontWeight: 700, textTransform: "uppercase", color: "#020617" } }, l), React.createElement("b", { style: { fontFamily: "'Space Grotesk'", fontSize: 13 } }, v)))),
-                                        f.lastError && React.createElement("div", { style: { marginTop: 7, fontSize: 10, color: "#EA7A0C" } }, f.lastError),
-                                        React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 9, flexWrap: "wrap" } },
-                                            React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 11, padding: "6px 12px", color: "#3157ee" }, onClick: (e) => { e.stopPropagation(); setDetailsFor(f); } }, "⚡ Circuit details"),
-                                            canEdit && React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 11, padding: "6px 12px" }, onClick: (e) => { e.stopPropagation(); setEditing(f); } }, "✎ Edit"),
-                                            canEdit && React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 11, padding: "6px 12px", color: "#DC2626" }, onClick: (e) => { e.stopPropagation(); setDeleteConfirm(f); } }, React.createElement(Trash2, { s: 11, c: "#DC2626" }), " Delete"))))))));
+                                    React.createElement("div", { style: { display: "grid", gridTemplateColumns: rack.feeds.length > 1 ? "1fr 1fr" : "1fr", gap: 10, marginTop: 6 } }, rack.feeds.map((f) => React.createElement(PduFeedCard, { key: f.id, f: f, canEdit: canEdit, onDetails: () => setDetailsFor(f), onEdit: () => setEditing(f), onDelete: () => setDeleteConfirm(f) }))))));
                         })))))),
         detailsFor && React.createElement(PduDetailsModal, { pdu: detailsFor, onClose: () => setDetailsFor(null) }),
         editing && React.createElement(PduEditModal, { pdu: editing.id ? editing : null, allowedSites: allowedSites, onClose: () => setEditing(null), onSaved: (msg) => { setEditing(null); load(); if (msg) setChainNote(msg); } }),
@@ -17159,6 +17260,7 @@ function DataCenterDashboard() {
     const [selectedVisitorIds, setSelectedVisitorIds] = useState(new Set());
     const [assetZoom, setAssetZoom] = useState(80);
     const assetScrollRef = useRef(null);
+    const issueTableRef = useRef(null);
     const [assetScrollMax, setAssetScrollMax] = useState(0);
     const [assetScrollLeft, setAssetScrollLeft] = useState(0);
     const [assetPage, setAssetPage] = useState(1);
@@ -18661,7 +18763,8 @@ function DataCenterDashboard() {
                     activeIssueColumnFilterCount,
                     ")"),
                 React.createElement(FileActions, { onExportExcel: handleExportIssuesXlsx, onExportCSV: handleExportIssuesCsv, onImport: handleImportIssues, importError: importError, showImport: false })),
-            React.createElement("div", { className: "neu-card anim-in d7 issue-table-card", style: { overflowX: "auto", overflowY: "hidden" } },
+            React.createElement("div", { ref: issueTableRef, className: "neu-card anim-in d7 issue-table-card", style: { overflowX: "auto", overflowY: "hidden" } },
+                React.createElement(FloatingHScroll, { wrapRef: issueTableRef }),
                 React.createElement("div", { style: { display: "grid", gridTemplateColumns: ISSUE_GRID_COLS, gap: 12, justifyItems: "start", minWidth: ISSUE_GRID_MIN, padding: "12px 18px", borderBottom: "0.5px solid rgba(163,177,198,0.3)", fontFamily: "Inter", fontSize: 11, color: "#020617", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 } },
                     React.createElement("div", null,
                         React.createElement("input", { type: "checkbox", checked: filtered.length > 0 && filtered.every(i => selectedIssueIds.has(i.id)), ref: el => { if (el)
