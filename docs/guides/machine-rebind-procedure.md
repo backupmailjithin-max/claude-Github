@@ -4,7 +4,7 @@ A DCIM licence can be bound to one server. The binding is the server's **machine
 
 ## Do I need a rebind?
 
-DCIM derives the machine ID from the operating system's own machine identifier (Linux `/etc/machine-id`, Windows `MachineGuid`). It does not depend on the host name or the network card.
+DCIM derives the machine ID from the operating system's own machine identifier (Linux `/etc/machine-id`). It does not depend on the host name or the network card.
 
 | Scenario | New machine ID? | Rebind needed? | Notes |
 |---|---|---|---|

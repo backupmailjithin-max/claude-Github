@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
 # Assembles the single-download DCIM Enterprise Offline Distribution Kit from
 # the already-built, independently-tested native artifacts (each produced by
-# its own build-*.sh/.ps1 / CI job, unchanged by this script). This script
-# only arranges files into the kit layout plus the two OS-detecting
-# dispatchers (install, install.ps1) - it contains no install logic itself.
+# its own build-*.sh / CI job, unchanged by this script). This script
+# only arranges files into the kit layout plus the OS-detecting Linux
+# dispatcher (install) - it contains no install logic itself.
 #
 # Expects (overridable via env vars):
 #   DIST_DIR       dist/*.deb, dist/*.rpm, dist/*.run   (default: $REPO_ROOT/dist)
-#   WIN_OUT_DIR    windows/DCIM-Setup*.exe               (default: packaging/windows/Output)
-#   WIN_UTILS_DIR  windows/DCIM-Upgrade*.exe, DCIM-Repair*.exe (default: same as WIN_OUT_DIR)
 # Any artifact that isn't present is skipped with a warning, so this can run
-# on a partial build (e.g. Linux-only CI) without failing the whole kit.
+# on a partial build without failing the whole kit. The kit is Linux-only.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,8 +16,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 VERSION="$(sed -n 's/^Version: //p' "$REPO_ROOT/packaging/linux/debian/control")"
 
 DIST_DIR="${DIST_DIR:-$REPO_ROOT/dist}"
-WIN_OUT_DIR="${WIN_OUT_DIR:-$REPO_ROOT/packaging/windows/Output}"
-WIN_UTILS_DIR="${WIN_UTILS_DIR:-$WIN_OUT_DIR}"
 OUT_DIR="${OUT_DIR:-$DIST_DIR}"
 
 KIT_NAME="DCIM-Enterprise-Offline-Kit-v${VERSION}"
@@ -27,13 +23,12 @@ STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 KIT="$STAGE/$KIT_NAME"
 
-mkdir -p "$KIT"/windows "$KIT"/linux/deb "$KIT"/linux/rpm "$KIT"/linux/appliance \
+mkdir -p "$KIT"/linux/deb "$KIT"/linux/rpm "$KIT"/linux/appliance \
          "$KIT"/common/docs "$KIT"/common/branding "$KIT"/common/templates "$KIT"/common/release-notes
 
 warn() { echo "[build-kit] WARNING: $*" >&2; }
 
 cp "$SCRIPT_DIR/install" "$KIT/install"
-cp "$SCRIPT_DIR/install.ps1" "$KIT/install.ps1"
 chmod 755 "$KIT/install"
 
 shopt -s nullglob
@@ -46,14 +41,6 @@ cp "$REPO_ROOT/packaging/linux/dcim-upgrade.sh" "$KIT/linux/dcim-upgrade"
 cp "$REPO_ROOT/packaging/linux/dcim-repair.sh" "$KIT/linux/dcim-repair"
 chmod 755 "$KIT/linux/dcim-upgrade" "$KIT/linux/dcim-repair"
 
-shopt -s nullglob
-setup_exes=("$WIN_OUT_DIR"/DCIM-Setup*.exe "$WIN_OUT_DIR"/dcim-setup*.exe)
-if [ "${#setup_exes[@]}" -gt 0 ]; then cp "${setup_exes[0]}" "$KIT/windows/"; else warn "no DCIM-Setup*.exe found in $WIN_OUT_DIR"; fi
-upgrade_exes=("$WIN_UTILS_DIR"/DCIM-Upgrade*.exe)
-if [ "${#upgrade_exes[@]}" -gt 0 ]; then cp "${upgrade_exes[0]}" "$KIT/windows/DCIM-Upgrade.exe"; else warn "no DCIM-Upgrade*.exe found in $WIN_UTILS_DIR (build it with packaging/windows/dcim-upgrade-utility.iss first)"; fi
-repair_exes=("$WIN_UTILS_DIR"/DCIM-Repair*.exe)
-if [ "${#repair_exes[@]}" -gt 0 ]; then cp "${repair_exes[0]}" "$KIT/windows/DCIM-Repair.exe"; else warn "no DCIM-Repair*.exe found in $WIN_UTILS_DIR (build it with packaging/windows/dcim-repair-utility.iss first)"; fi
-shopt -u nullglob
 
 [ -f "$REPO_ROOT/docs/PACKAGING.md" ] && cp "$REPO_ROOT/docs/PACKAGING.md" "$KIT/common/docs/"
 [ -f "$REPO_ROOT/docs/RELEASE_NOTES.md" ] && cp "$REPO_ROOT/docs/RELEASE_NOTES.md" "$KIT/common/release-notes/"
@@ -83,27 +70,25 @@ kit - no internet access is required or used at any point.
 | Platform | Run |
 |---|---|
 | Linux    | \`sudo ./install\` (auto-picks .deb/.rpm/appliance for your distro) |
-| Windows  | \`.\install.ps1\` (launches the bundled \`windows\DCIM-Setup.exe\`) |
 
 Installing by hand instead? See \`common/docs/guides/installation-guide.md\`
-for every native package, flag, and the guided GUI/terminal wizard both
-platforms offer.
+for every native package, flag, and the guided terminal wizard.
 
 ## 2. Running the website day to day
 
-Once installed, DCIM runs as a background service (systemd on Linux, a
-Windows Service on Windows) that starts automatically on boot - there is
+Once installed, DCIM runs as a background systemd service that starts
+automatically on boot - there is
 nothing to manually "start" after install.
 
-| Task | Linux | Windows |
-|---|---|---|
-| Open the site | \`http://<server>:<port>/\` in a browser | same |
-| Check it's running | \`systemctl status dcim\` | \`Get-Service DCIM\` |
-| Health check | \`curl http://127.0.0.1:<port>/api/health\` | \`Invoke-RestMethod http://127.0.0.1:<port>/api/health\` |
-| Restart it | \`sudo systemctl restart dcim\` | \`Restart-Service DCIM\` |
-| View logs | \`journalctl -u dcim -n 100\` | \`<installdir>\webapp\logs\` + Event Viewer |
-| Upgrade | \`sudo dcim-upgrade\` | run \`windows\DCIM-Upgrade.exe\` |
-| Repair | \`sudo dcim-repair\` | run \`windows\DCIM-Repair.exe\` |
+| Task | Command |
+|---|---|
+| Open the site | \`http://<server>:<port>/\` in a browser |
+| Check it's running | \`systemctl status dcim\` |
+| Health check | \`curl http://127.0.0.1:<port>/api/health\` |
+| Restart it | \`sudo systemctl restart dcim\` |
+| View logs | \`journalctl -u dcim -n 100\` |
+| Upgrade | \`sudo dcim-upgrade\` |
+| Repair | \`sudo dcim-repair\` |
 
 ## 3. Your port, admin account, and database - where to find them
 
@@ -113,11 +98,7 @@ Summary** with the exact URL, administrator account, database connection
 database - shown nowhere else), and config file location. Save it when it
 appears.
 
-- Linux / Windows console: printed directly to the terminal.
-- Windows GUI installer (\`DCIM-Setup.exe\`): also saved to
-  \`INSTALL-SUMMARY.txt\` in the install directory, since the installer's
-  own window closes as soon as it finishes - tick "View installation
-  summary" on the Finish page, or open that file any time afterward.
+- Printed directly to the terminal.
 
 Full details: \`common/docs/guides/installation-guide.md\` section 5.
 
@@ -125,7 +106,7 @@ Full details: \`common/docs/guides/installation-guide.md\` section 5.
 
 | Document | Covers |
 |---|---|
-| \`common/docs/guides/installation-guide.md\` | Full install reference, both platforms |
+| \`common/docs/guides/installation-guide.md\` | Full install reference |
 | \`common/docs/guides/administrator-guide.md\` | Setup Wizard, users, monitoring integrations, troubleshooting |
 | \`common/docs/guides/upgrade-guide.md\`, \`repair-guide.md\`, \`rollback-guide.md\` | Day-2 operations |
 | \`common/docs/guides/backup-guide.md\`, \`disaster-recovery-guide.md\` | Backups and DR |
@@ -172,8 +153,7 @@ BUILD_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   echo
   echo "| Artifact | Size |"
   echo "|---|---|"
-  for f in "$KIT"/linux/deb/*.deb "$KIT"/linux/rpm/*.rpm "$KIT"/linux/appliance/*.run \
-           "$KIT"/windows/*.exe; do
+  for f in "$KIT"/linux/deb/*.deb "$KIT"/linux/rpm/*.rpm "$KIT"/linux/appliance/*.run; do
     [ -f "$f" ] || continue
     printf "| %s | %s |\n" "$(basename "$f")" "$(du -h "$f" | cut -f1)"
   done

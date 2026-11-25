@@ -4,6 +4,12 @@
 
 This release brings the licensing, packaging and operations work into one production codebase. The sections below are what changed since the earlier v3.2.2 distribution kit, which is described further down.
 
+### Linux-only edition
+
+- The commercial edition ships for Linux only: DEB (Ubuntu / Debian), RPM (AlmaLinux / Rocky / RHEL), the offline `.run` appliance and the offline kit. The Windows installer, upgrade and repair utilities are no longer built or shipped, and the kit has no `windows/` folder or `install.ps1`.
+- Customer guides were updated to describe Linux only.
+- The Windows packaging sources stay in the repository for reference but are not part of any release.
+
 ### Licensing hardening
 
 - Signed offline licences (Ed25519): customer, user limit, expiry and optional machine ID. A licence that is edited or issued for another machine is rejected.

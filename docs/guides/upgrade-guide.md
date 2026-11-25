@@ -6,13 +6,12 @@ Applies to: DCIM Enterprise Offline Distribution Kit v3.2.2
 
 1. **Create Backup** - a full pre-change snapshot (`.env`, webapp files
    excluding `node_modules`, and a real `mysqldump` of the database) saved
-   to `/var/backups/dcim/<timestamp>/` (Linux) or
-   `C:\ProgramData\dcim-backups\<timestamp>\` (Windows).
+   to `/var/backups/dcim/<timestamp>/` .
 2. **Stop Service**.
 3. **Upgrade** - new application files are synced in (your `.env`,
    `uploads/`, `backups/`, and `logs/` are always preserved - never
    overwritten).
-4. **Validate** - the systemd unit / Windows service is re-registered, and
+4. **Validate** - the systemd unit is re-registered, and
    the embedded database (if used) is re-verified as the same instance.
 5. **Restart Service**.
 6. **Verify** - health is polled until it reports `ok`, then a structured
@@ -40,18 +39,6 @@ newer release on a standalone install, re-run the **new** version's
 `.deb`/`.rpm` upgrade (`sudo dpkg -i dcim_<new-version>_amd64.deb` or
 `sudo rpm -U dcim-<new-version>.rpm`) always picks up the new package's own
 bundled files automatically - this distinction doesn't apply there.
-
-## Windows
-
-```powershell
-.\DCIM-Upgrade.exe
-# or, for scripted/unattended (runs under the bundled node.exe, not PowerShell):
-node packaging\windows\install.js -Mode upgrade -Yes -InstallDir C:\DCIM -Port 8974
-```
-`DCIM-Upgrade.exe` carries its own full, current-version payload (it is
-built fresh for each release from the same source as `DCIM-Setup.exe`), so
-it always upgrades to the version it was built from - no "cached version"
-caveat on Windows.
 
 ## Before you upgrade
 

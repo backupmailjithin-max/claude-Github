@@ -36,8 +36,8 @@ Have the following ready. It shortens the resolution time considerably.
 1. **Your DCIM version.** Shown by the health check (`GET /api/health`, field `version`).
 2. **What you were doing and what you expected**, with the exact message on screen.
 3. **Licence status.** Settings → License (mode, company, expiry, machine ID).
-4. **Health check output.** `curl http://127.0.0.1:8974/api/health` (Linux) or `Invoke-RestMethod http://127.0.0.1:8974/api/health` (Windows).
-5. **Recent logs.** Linux: `sudo journalctl -u dcim -n 500`. Windows and Linux: the files in the `webapp/logs` folder. Review them before sending; they may contain user names and host names.
+4. **Health check output.** `curl http://127.0.0.1:8974/api/health`.
+5. **Recent logs.** `sudo journalctl -u dcim -n 500`, and the files in the `webapp/logs` folder. Review them before sending; they may contain user names and host names.
 6. **A recent backup exists** (Settings → Backup & Restore). Do not send backups unless support asks for one.
 
 Never send passwords, the `.env` file, or database passwords.

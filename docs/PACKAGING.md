@@ -1,3 +1,5 @@
+> **Commercial edition scope:** Linux only. The Windows packaging described below is kept for reference but is not built or shipped in the commercial release.
+
 # DCIM Packaging & Deployment
 
 This implements the DCIM vNext packaging roadmap against the actual DCIM

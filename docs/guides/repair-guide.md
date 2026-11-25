@@ -8,7 +8,7 @@ Use Repair when the application or its service is broken but your
 **data** (database) is intact - for example:
 
 - A webapp file was accidentally deleted or modified outside the app.
-- The systemd unit / Windows service registration was removed or corrupted.
+- The systemd unit registration was removed or corrupted.
 - A `node_modules` package got corrupted or partially deleted.
 - The `.env` configuration file was lost or corrupted.
 
@@ -39,14 +39,6 @@ sudo dcim-repair --port 8974 --db-user dcim --db-password 'YourPassword' --db-na
 sudo dcim-repair --port 8974
 ```
 
-## Windows
-
-```powershell
-.\DCIM-Repair.exe
-# or, for scripted/unattended (runs under the bundled node.exe, not PowerShell):
-node packaging\windows\install.js -Mode repair -Yes -InstallDir C:\DCIM -Port 8974
-```
-
 ## What Repair cannot fix
 
 - **A corrupted or lost database.** Use the Backup/Restore Guide or
@@ -65,9 +57,6 @@ node packaging\windows\install.js -Mode repair -Yes -InstallDir C:\DCIM -Port 89
 sudo systemctl is-active dcim
 curl http://127.0.0.1:8974/api/health
 
-# Windows
-Get-Service DCIM
-Invoke-RestMethod http://127.0.0.1:8974/api/health
 ```
 Your data (Users, Assets, Locations, Transfers, etc.) is unaffected - no
 verification of application data is needed after a repair, only that the

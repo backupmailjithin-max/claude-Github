@@ -8,7 +8,6 @@ Use this checklist when delivering DCIM to a customer and when the customer acce
 |---|---|
 | Start-here instructions | `README.md` |
 | Linux installers (deb, rpm, appliance) | `linux/` |
-| Windows installer and upgrade/repair utilities | `windows/` |
 | Guides (this folder) | `common/docs/guides/` |
 | Release notes, known limitations, upgrade matrix | `common/docs/` |
 | Exact bundled versions | `common/docs/VERSION_REPORT.md`, `DEPENDENCY_REPORT.md` |
@@ -20,7 +19,7 @@ The kit is complete for an offline install. It contains no vendor licence-signin
 
 | Guide | For |
 |---|---|
-| Installation Guide | Installing on Linux or Windows |
+| Installation Guide | Installing on Linux |
 | Administrator Guide | Setup Wizard, users, integrations, troubleshooting |
 | Customer Licensing Guide | How the licence and the 10-day trial work |
 | License Activation Guide | Activating the licence |

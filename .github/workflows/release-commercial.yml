@@ -94,10 +94,9 @@ jobs:
         run: |
           ls -R artifacts | head -60
           for pat in "artifacts/dcim-deb/*.deb" "artifacts/dcim-rpm/*.rpm" "artifacts/dcim-offline-appliance/*.run" \
-                     "artifacts/dcim-windows-installer/*.exe" "artifacts/dcim-enterprise-offline-kit/*.tar.gz" "artifacts/dcim-enterprise-offline-kit/*.zip"; do
+                     "artifacts/dcim-enterprise-offline-kit/*.tar.gz" "artifacts/dcim-enterprise-offline-kit/*.zip"; do
             ls $pat >/dev/null 2>&1 || { echo "::error::missing artifact: $pat"; exit 1; }
           done
-          for e in dcim-setup DCIM-Upgrade DCIM-Repair; do ls artifacts/dcim-windows-installer/$e*.exe >/dev/null 2>&1 || { echo "::error::missing Windows $e"; exit 1; }; done
 
       - name: Vendor-signed manifest, pinned keys, no vendor tools (deb)
         run: bash packaging/tools/verify-signed-build.sh artifacts/dcim-deb/*.deb
@@ -115,7 +114,7 @@ jobs:
 
       - name: Checksums and summary
         run: |
-          (cd artifacts && find . -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.run' -o -name '*.exe' -o -name '*.tar.gz' -o -name '*.zip' \) | sort | xargs sha256sum) | tee SHA256SUMS-commercial.txt
+          (cd artifacts && find . -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.run' -o -name '*.tar.gz' -o -name '*.zip' \) | sort | xargs sha256sum) | tee SHA256SUMS-commercial.txt
           { echo "### Commercial build $GITHUB_SHA"; echo '```'; cat SHA256SUMS-commercial.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
@@ -132,10 +131,10 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with: { path: artifacts }
-      - name: Create DRAFT release (a person publishes it after Windows and UAT sign-off)
+      - name: Create DRAFT release (a person publishes it after Linux UAT sign-off)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --title "DCIM Commercial ${GITHUB_REF_NAME#commercial-v}" \
-            --notes "Draft. Publish only after Windows certification and UAT sign-off." \
-            $(find artifacts -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.run' -o -name '*.exe' -o -name '*.tar.gz' -o -name '*.zip' -o -name 'SHA256SUMS-commercial.txt' \))
+            --notes "Draft. Linux only (DEB, RPM, offline .run, offline kit). Publish only after UAT sign-off." \
+            $(find artifacts -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.run' -o -name '*.tar.gz' -o -name '*.zip' -o -name 'SHA256SUMS-commercial.txt' \))

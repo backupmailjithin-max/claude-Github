@@ -4,17 +4,15 @@ Applies to: DCIM Enterprise Offline Distribution Kit v3.2.2
 
 ## Service control
 
-| Task | Linux | Windows |
-|---|---|---|
-| Start | `sudo dcim-service start` | `dcim-service start` (or `Start-Service DCIM`) |
-| Stop | `sudo dcim-service stop` | `dcim-service stop` |
-| Restart | `sudo dcim-service restart` | `dcim-service restart` |
-| Status | `sudo dcim-service status` | `dcim-service status` |
-| Tail logs | `sudo dcim-service logs` (follows `journalctl -u dcim`) | `Get-Content C:\DCIM\webapp\logs\service-stdout.log -Wait` |
+| Task | Command |
+|---|---|
+| Start | `sudo dcim-service start` |
+| Stop | `sudo dcim-service stop` |
+| Restart | `sudo dcim-service restart` |
+| Status | `sudo dcim-service status` |
+| Tail logs | `sudo dcim-service logs` (follows `journalctl -u dcim`) |
 
-Log locations: Linux uses the systemd journal (`journalctl -u dcim`);
-Windows writes to `<InstallDir>\webapp\logs\service-stdout.log` and
-`service-stderr.log` (rotated automatically via NSSM's `AppRotateFiles`).
+Logs are in the systemd journal (`journalctl -u dcim`).
 
 ## Setup Wizard reference
 
@@ -60,9 +58,7 @@ SMTP/OME/OneView not yet configured - expected on a fresh install), else
 ## Support Bundle
 
 `POST /api/support/bundle` (Admin) generates a downloadable zip containing:
-system information, version, recent logs (platform-appropriate - Windows
-reads `service-stdout.log`/`service-stderr.log`, Linux shells out to
-`journalctl -u dcim -n 500`), a redacted `.env` snapshot (secrets stripped),
+system information, version, recent logs (`journalctl -u dcim -n 500`), a redacted `.env` snapshot (secrets stripped),
 a health report, and a performance snapshot. Attach this when opening a
 support case rather than hand-collecting logs.
 
@@ -94,8 +90,7 @@ support case rather than hand-collecting logs.
   firewall, cert rotation) that could affect OME/OneView/SMTP reachability.
 - [ ] Keep the Distribution Kit's `CHECKSUMS.sha256` alongside your deployed
   version for change-management evidence.
-- [ ] Before any upgrade/repair, confirm `/var/backups/dcim/` (Linux) or
-  `C:\ProgramData\dcim-backups\` (Windows) has free space - each
+- [ ] Before any upgrade/repair, confirm `/var/backups/dcim/` has free space - each
   upgrade/repair takes its own pre-change snapshot automatically.
 
 ## Troubleshooting

@@ -19,6 +19,5 @@ npm start
 ## Installing as a service
 
 See [`docs/PACKAGING.md`](docs/PACKAGING.md) for building and running the
-Linux (`.deb`/`.rpm`/`install.sh`) and Windows (`.exe`/`install.ps1`)
-installers, including the Install / Upgrade / Repair flow and the
+Linux (`.deb`/`.rpm`/`install.sh`) installers, including the Install / Upgrade / Repair flow and the
 pre-flight validation checks each one runs.

@@ -31,7 +31,7 @@ Everything on the right is optional. The application works with only a browser a
 | Setup module (`lib/setup-routes.js`) | First-run wizard, OME/OneView/SMTP settings, notification recipients, health check |
 | Mail (`lib/smtp-client.js`) | Sends approval and report emails directly to your SMTP server |
 | Document reading (`ocr/`) | Reads delivery-challan and invoice documents offline |
-| Service wrapper | systemd on Linux, a Windows Service on Windows; starts at boot |
+| Service wrapper | systemd; starts at boot |
 
 ## 3. Security model
 
@@ -64,7 +64,6 @@ A restore runs in a single database transaction, takes a safety backup first, an
 |---|---|
 | Linux `.deb` / `.rpm` | Package-managed install, systemd service |
 | Linux appliance | Single self-extracting installer |
-| Windows installer | Windows Service, optional embedded MariaDB |
 | Embedded or external database | Choose at install time |
 
 Install paths, ports and the database connection are printed in the Configuration Summary at the end of install, upgrade and repair.

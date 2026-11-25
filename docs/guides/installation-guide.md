@@ -9,21 +9,14 @@ internet access is required or used during install):
 
 | Method | When to use |
 |---|---|
-| **One-step dispatcher** (`./install` on Linux, `install.ps1` on Windows) | Recommended for most customers. Auto-detects your OS and runs the matching native installer below. |
-| **Native installer directly** (`.deb`/`.rpm`/`.run` on Linux, `DCIM-Setup.exe` on Windows) | Use when your change-management process requires a specific, auditable package format. |
+| **One-step dispatcher** (`./install`) | Recommended for most customers. Detects your Linux distribution and runs the matching native installer below. |
+| **Native installer directly** (`.deb`/`.rpm`/`.run`) | Use when your change-management process requires a specific, auditable package format. |
 
 ### A formal, guided install, not just flags
 
-Both platforms also offer a guided setup experience for someone installing
-by hand, instead of requiring command-line flags:
+A guided setup is also offered for someone installing by hand, instead of
+requiring command-line flags:
 
-- **Windows (`DCIM-Setup.exe`)**: the installer wizard includes real pages
-  for the choices that matter - **Database Configuration** (embedded vs.
-  your own server, with connection fields only shown when needed),
-  **Application Settings** (HTTP port, optional custom administrator
-  account) - validated before you can continue (e.g. matching passwords, a
-  valid port number). A "Open DCIM in your browser now" checkbox is offered
-  on the Finish page.
 - **Linux** (`sudo dcim-setup` with no flags, or option **1) Install** from
   the interactive menu): the same choices are asked as a series of prompts
   - rendered as proper boxes via `whiptail` when it's available (the usual
@@ -40,7 +33,6 @@ guided prompts only ever appear for a fresh install run interactively.
 
 | | Minimum |
 |---|---|
-| OS (Windows) | Windows Server 2022 (Server 2019 is no longer offered by our CI validation pipeline - see Known Limitations - but the installer itself has no code path that excludes it) |
 | OS (Linux) | Ubuntu 22.04 / 24.04, Rocky Linux 9, AlmaLinux 9 (systemd-based) |
 | Node.js | v18+ (bundled in the kit - you do not need to install it yourself) |
 | Disk space | 500 MB minimum free on the install volume |
@@ -100,32 +92,9 @@ If you skip `--admin-user`/`--admin-password`, sign in with `admin` / `admin`
 on first run - you will be **required** to change the password before using
 any other part of the app.
 
-## 4. Windows installation
+## 4. Platform support
 
-### 4a. One-step dispatcher
-```powershell
-.\install.ps1
-```
-Detects your Windows edition and launches the bundled `DCIM-Setup.exe`.
-
-### 4b. Direct install with options
-```powershell
-.\DCIM-Setup.exe
-# or, for scripted/unattended install (runs under the bundled node.exe, not PowerShell):
-node packaging\windows\install.js -Mode install -Yes -InstallDir C:\DCIM -Port 8974 `
-  -DbUser dcim -DbPassword 'YourPassword' -DbName dcim `
-  -AdminUser myadmin -AdminPassword 'YourAdminPassword'
-```
-
-Key parameters mirror the Linux flags above: `-Mode`, `-InstallDir`
-(default `C:\DCIM`), `-Port` (default `8974`), `-DbHost`/`-DbPort`/
-`-DbUser`/`-DbPassword`/`-DbName`, `-EmbeddedDb`/`-EmbeddedDbPort` (default
-`3307`), `-CorsOrigin`, `-AdminUser`/`-AdminPassword`, `-CspMode` (default
-`report-only`), `-AuditRetentionDays` (default `365`), `-Yes`.
-
-The Windows service is registered via NSSM under the name `DCIM` (embedded
-database, if used, runs as a separate `DCIMMariaDB` service with a
-Windows Service Control Manager dependency on it).
+This edition is supported on Linux only: Ubuntu 22.04 / 24.04, Debian, AlmaLinux 8 / 9, Rocky Linux 9 and RHEL-compatible systemd distributions. There is no Windows installer in this edition.
 
 ## 5. Finding your configuration after install
 
@@ -143,14 +112,6 @@ password in particular isn't recoverable from anywhere else.
 
 - **Linux**: printed directly to the terminal at the end of
   `install`/`dcim-setup`/`dcim-upgrade`/`dcim-repair`.
-- **Windows (console)**: printed directly to the terminal at the end of
-  `install.js`/the Upgrade/Repair utilities (which stay open after
-  finishing, specifically so you can read this).
-- **Windows (`DCIM-Setup.exe` GUI)**: since the installer's own progress
-  window closes as soon as it finishes, the same summary is also saved to
-  `INSTALL-SUMMARY.txt` in the install directory - tick "View installation
-  summary" on the Finish page to open it immediately, or find the file
-  there any time afterward.
 
 ## 6. First sign-in
 
@@ -173,9 +134,6 @@ password in particular isn't recoverable from anywhere else.
 sudo systemctl status dcim
 curl http://127.0.0.1:8974/api/health
 
-# Windows
-Get-Service DCIM
-Invoke-RestMethod http://127.0.0.1:8974/api/health
 ```
 Expect `{"status":"ok", ...}`. If not, see the **Administrator Guide**'s
 troubleshooting section or generate a Support Bundle (same guide).
@@ -196,7 +154,6 @@ database service (`dcim-mariadb`) but **keeps your data** in `/opt/dcim`
 remove everything, or run `uninstall.sh --purge-data`, which asks for
 confirmation. An external MySQL/MariaDB database is never touched.
 
-**Windows:** run `node packaging\windows\uninstall.js -InstallDir C:\DCIM` from an elevated prompt (Administrator). It removes the `DCIM` service (and `DCIMMariaDB` if you used the embedded database); add `-PurgeData` to delete the install folder and data as well. An external database is never touched.
 
 Uninstalling resets the 10-day trial for a fresh install - keep your activation
 code so you can activate again.
