@@ -12817,6 +12817,14 @@ function UserManagement({ users, onRefresh, canAdmin, locations }) {
         editUser && React.createElement(UserEditModal, { user: editUser, locations: locations, onClose: () => setEditUser(null), onSaved: onRefresh }),
         pwdModalOpen && React.createElement(PasswordChangeModal, { onClose: () => { setPwdModalOpen(false); setPwdTarget(null); }, isAdmin: true, targetUser: pwdTarget }));
 }
+// Movement date as the plain calendar date (DD-MMM-YYYY). The server sends it as YYYY-MM-DD, so a browser in another time zone cannot shift the day.
+function lifecycleMoveDay(v) {
+    if (!v) return "—";
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v));
+    if (!m) { const d = new Date(v); return isNaN(d.getTime()) ? "—" : d.toLocaleDateString(); }
+    const mon = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(m[2]) - 1] || m[2];
+    return m[3] + "-" + mon + "-" + m[1];
+}
 function AssetLifecyclePage({ assets, allowedSites, zones, racks, canEdit, onAction, onOpenInventory, onHistoryChanged }) {
     const [editMv, setEditMv] = useState(null);
     const [editMvSaving, setEditMvSaving] = useState(false);
@@ -12833,18 +12841,36 @@ function AssetLifecyclePage({ assets, allowedSites, zones, racks, canEdit, onAct
         { key: "lifecycleStatus", label: "Status" },
         { key: "_currentLocation", label: "Current Custody / Location", format: (v, row) => currentLoc(row) },
         { key: "_previousLocation", label: "Previous / Last Known", format: (v, row) => previousLoc(row) },
-        { key: "latestMovementDate", label: "Movement Date", format: (v) => v ? new Date(v).toLocaleString() : "—" },
+        { key: "latestMovementDay", label: "Movement Date", format: (v, row) => lifecycleMoveDay(v || row.latestMovementDate) },
+        { key: "latestDirection", label: "Movement IN/OUT", format: (v) => v || "—" },
         { key: "_latestMovement", label: "Latest Movement", format: (v, row) => row.latestMovementType || "—" },
+        { key: "latestRemarks", label: "Remarks", format: (v) => v || "—" },
         { key: "reused", label: "Reuse", format: (v) => v ? "Reused" : "—" }
     ];
     const [columnFilters, setColumnFilters] = useState(() => makeEmptyListColumnFilters(LIFECYCLE_COLUMNS));
     const listSort = useListSort();
     const [openFilter, setOpenFilter] = useState(null);
+    // The latest history entry (date, type, IN/OUT, reference, remarks) comes from the lifecycle list API; the inventory list does not carry it.
+    // It is loaded again whenever the inventory list is refreshed (after an action, a correction or an import).
+    const [moveInfo, setMoveInfo] = useState({});
+    useEffect(() => {
+        let alive = true;
+        api.getAssetLifecycle({}).then((list) => {
+            if (!alive || !Array.isArray(list)) return;
+            const m = {};
+            list.forEach((r) => { if (r && r.id) m[r.id] = r; });
+            setMoveInfo(m);
+        }).catch(() => { /* the page still works from the inventory data; the movement columns show a dash */ });
+        return () => { alive = false; };
+    }, [assets]);
     const lifecycleRows = useMemo(() => {
         // Asset Inventory is the single source of current truth. Lifecycle is only the
         // historical/moved view: non-Active assets plus Active assets with movement history.
-        return (assets || []).filter(a => a && (a.lifecycleStatus !== "Active" || !!a.lastMovementAt));
-    }, [assets]);
+        return (assets || []).filter(a => a && (a.lifecycleStatus !== "Active" || !!a.lastMovementAt)).map((a) => {
+            const m = moveInfo[a.id];
+            return m ? { ...a, latestMovementType: m.latestMovementType, latestMovementDate: m.latestMovementDate, latestMovementDay: m.latestMovementDay, latestDirection: m.latestDirection, latestReason: m.latestReason, latestReferenceNo: m.latestReferenceNo, latestRemarks: m.latestRemarks, reused: m.reused } : a;
+        });
+    }, [assets, moveInfo]);
     const rows = useMemo(() => {
         const q = search.trim().toLowerCase();
         return lifecycleRows.filter((a) => {
@@ -12986,8 +13012,9 @@ function AssetLifecyclePage({ assets, allowedSites, zones, racks, canEdit, onAct
                         { key: "deviceName", label: "Device Name" }, { key: "model", label: "Model" },
                         { key: "lifecycleStatus", label: "Status" }, { key: "exportCurrentLocation", label: "Current Custody / Location" },
                         { key: "exportPreviousLocation", label: "Previous / Last Known Location" },
-                        { key: "latestMovementDate", label: "Last Movement Date", format: v => v ? new Date(v).toLocaleString() : "" },
-                        { key: "latestMovementType", label: "Latest Movement" }, { key: "latestReason", label: "Reason" },
+                        { key: "latestMovementDay", label: "Last Movement Date", format: (v, r) => (v || (r && r.latestMovementDate)) ? lifecycleMoveDay(v || r.latestMovementDate) : "" },
+                        { key: "latestDirection", label: "Movement IN/OUT" },
+                        { key: "latestMovementType", label: "Latest Movement" }, { key: "latestReason", label: "Reason" }, { key: "latestRemarks", label: "Remarks" },
                         { key: "latestReferenceNo", label: "Reference No" }, { key: "reused", label: "Reused", format: v => v ? "Yes" : "No" },
                         { key: "manufacturer", label: "Manufacturer" }, { key: "hardwareType", label: "Hardware Type" },
                         { key: "height", label: "Height" }, { key: "lastMovementReason", label: "Last Movement Reason" }
@@ -13003,8 +13030,9 @@ function AssetLifecyclePage({ assets, allowedSites, zones, racks, canEdit, onAct
                         { key: "deviceName", label: "Device Name" }, { key: "model", label: "Model" },
                         { key: "lifecycleStatus", label: "Status" }, { key: "exportCurrentLocation", label: "Current Custody / Location" },
                         { key: "exportPreviousLocation", label: "Previous / Last Known Location" },
-                        { key: "latestMovementDate", label: "Last Movement Date", format: v => v ? new Date(v).toLocaleString() : "" },
-                        { key: "latestMovementType", label: "Latest Movement" }, { key: "latestReason", label: "Reason" },
+                        { key: "latestMovementDay", label: "Last Movement Date", format: (v, r) => (v || (r && r.latestMovementDate)) ? lifecycleMoveDay(v || r.latestMovementDate) : "" },
+                        { key: "latestDirection", label: "Movement IN/OUT" },
+                        { key: "latestMovementType", label: "Latest Movement" }, { key: "latestReason", label: "Reason" }, { key: "latestRemarks", label: "Remarks" },
                         { key: "latestReferenceNo", label: "Reference No" }, { key: "reused", label: "Reused", format: v => v ? "Yes" : "No" },
                         { key: "manufacturer", label: "Manufacturer" }, { key: "hardwareType", label: "Hardware Type" },
                         { key: "height", label: "Height" }, { key: "lastMovementReason", label: "Last Movement Reason" }
@@ -13014,7 +13042,7 @@ function AssetLifecyclePage({ assets, allowedSites, zones, racks, canEdit, onAct
                 React.createElement(Download, { s: 13 }),
                 " Export CSV")),
         React.createElement("div", { className: "neu-card", style: { overflowX: "auto", padding: "5px 4px" } },
-            React.createElement("table", { style: { borderCollapse: "collapse", width: "100%", minWidth: 1240 } },
+            React.createElement("table", { style: { borderCollapse: "collapse", width: "100%", minWidth: 1500 } },
                 React.createElement("thead", null,
                     React.createElement("tr", null,
                         LIFECYCLE_COLUMNS.map((col) => React.createElement(ListFilterHeader, { key: col.key, column: col, filter: columnFilters[col.key], onOpen: setOpenFilter, sortKey: listSort.key, sortDir: listSort.dir, onSort: listSort.onSort, style: { textAlign: "left", padding: "11px 12px", fontFamily: "Inter", fontSize: 10.5, color: "#020617", textTransform: "uppercase", letterSpacing: .4, borderBottom: "1px solid #E2E8F0" } })),
@@ -13029,16 +13057,18 @@ function AssetLifecyclePage({ assets, allowedSites, zones, racks, canEdit, onAct
                             React.createElement("span", { className: "neu-badge", style: { color: statusColor[a.lifecycleStatus] || "#475569", background: (statusColor[a.lifecycleStatus] || "#475569") + "12" } }, a.lifecycleStatus)),
                         React.createElement("td", { style: { padding: "10px 12px", borderBottom: "1px solid #F1F5F9", fontFamily: "Inter", fontSize: 11.5, color: "#334155" } }, currentLoc(a)),
                         React.createElement("td", { style: { padding: "10px 12px", borderBottom: "1px solid #F1F5F9", fontFamily: "Inter", fontSize: 11.5, color: "#64748B" } }, previousLoc(a)),
-                        React.createElement("td", { style: { padding: "10px 12px", borderBottom: "1px solid #F1F5F9", fontFamily: "'JetBrains Mono'", fontSize: 10.5, color: "#334155", whiteSpace: "nowrap" } }, a.latestMovementDate ? new Date(a.latestMovementDate).toLocaleString() : "—"),
+                        React.createElement("td", { style: { padding: "10px 12px", borderBottom: "1px solid #F1F5F9", fontFamily: "'JetBrains Mono'", fontSize: 10.5, color: "#334155", whiteSpace: "nowrap" }, "data-movement-date": a.serialNumber }, lifecycleMoveDay(a.latestMovementDay || a.latestMovementDate)),
+                        React.createElement("td", { style: { padding: "10px 12px", borderBottom: "1px solid #F1F5F9", whiteSpace: "nowrap" }, "data-movement-direction": a.serialNumber }, a.latestDirection ? React.createElement("span", { className: "neu-badge", style: { color: a.latestDirection === "IN" ? "#047857" : (a.latestDirection === "OUT" ? "#B45309" : "#475569"), background: a.latestDirection === "IN" ? "#D1FAE5" : (a.latestDirection === "OUT" ? "#FEF3C7" : "#F1F5F9") } }, a.latestDirection) : React.createElement("span", { style: { color: "#475569", fontSize: 11 } }, "\u2014")),
                         React.createElement("td", { style: { padding: "10px 12px", borderBottom: "1px solid #F1F5F9" } },
                             React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11.5, color: "#334155" } }, a.latestMovementType || "—"),
                             React.createElement("div", { style: { fontFamily: "'JetBrains Mono'", fontSize: 10, color: "#475569", marginTop: 2 } }, a.latestReferenceNo ? a.latestReferenceNo : "")),
+                        React.createElement("td", { style: { padding: "10px 12px", borderBottom: "1px solid #F1F5F9", fontFamily: "Inter", fontSize: 11.5, color: "#334155", maxWidth: 260, whiteSpace: "normal", wordBreak: "break-word" }, title: a.latestRemarks || "", "data-movement-remarks": a.serialNumber }, a.latestRemarks || "\u2014"),
                         React.createElement("td", { style: { padding: "10px 12px", borderBottom: "1px solid #F1F5F9" } }, a.reused ? React.createElement("span", { className: "neu-badge", style: { color: "#0F766E", background: "#CCFBF1" } }, "Reused") : React.createElement("span", { style: { color: "#475569", fontSize: 11 } }, "\u2014")),
                         React.createElement("td", { style: { padding: "10px 12px", borderBottom: "1px solid #F1F5F9", whiteSpace: "nowrap" } },
                             React.createElement("button", { onClick: () => openHistory(a), className: "neu-btn-secondary", style: { fontSize: 11, padding: "6px 10px", marginRight: 6 } }, "History"),
                             actionAllowed(a) && React.createElement("button", { onClick: () => onAction && onAction(a), className: "neu-btn-primary", style: { fontSize: 11, padding: "6px 10px" } }, "Lifecycle Action")))),
                     !rows.length && React.createElement("tr", null,
-                        React.createElement("td", { colSpan: "9", style: { padding: "36px 15px", textAlign: "center", color: "#475569", fontFamily: "Inter", fontSize: 13 } }, "No lifecycle records match the current filters.")))),
+                        React.createElement("td", { colSpan: "11", style: { padding: "36px 15px", textAlign: "center", color: "#475569", fontFamily: "Inter", fontSize: 13 } }, "No lifecycle records match the current filters.")))),
             React.createElement("div", { style: { padding: "10px 12px", fontFamily: "Inter", fontSize: 11, color: "#475569" } },
                 "Tracking identity: ",
                 React.createElement("b", null, "Serial Number"),

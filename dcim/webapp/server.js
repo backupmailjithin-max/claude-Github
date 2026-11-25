@@ -7105,6 +7105,17 @@ app.delete('/api/issues/:id', authenticateToken, requireRole(['Admin','Operator'
 
 // ========== ASSET LIFECYCLE / MOVEMENT HISTORY ==========
 const ASSET_LIFECYCLE_ACTIONS = ['Store', 'Transfer / Reuse', 'Decommission', 'RMA / OEM'];
+// Movement IN / OUT as shown on the Asset Lifecycle page, taken from the latest history entry's type:
+//   IN       the asset arrives at a DC            (received to store, transfer accepted, received / installed)
+//   OUT      the asset leaves a DC or service     (inter-DC transfer, refused / returned, external move, RMA / OEM, decommission)
+//   Internal moved between store and rack inside the same DC
+// Anything unknown or older returns null and the page shows a dash, so no history entry is ever mislabelled.
+const MOVEMENT_DIRECTION = {
+  'Received to Store': 'IN', 'Transfer Accepted': 'IN', 'Receive / Install': 'IN',
+  'Inter-DC Transfer': 'OUT', 'Inter-DC Transfer Refused': 'OUT', 'External Move Out': 'OUT', 'RMA / OEM': 'OUT', 'Decommission': 'OUT',
+  'Store': 'Internal', 'Store / Install': 'Internal',
+};
+function movementDirection(type) { return (type && MOVEMENT_DIRECTION[type]) || null; }
 function lifecycleRowToJson(r) {
   return {
     id: r.id, site: r.site, zone: r.zone, rackNo: r.rack_no, position: r.position,
@@ -7118,6 +7129,7 @@ function lifecycleRowToJson(r) {
     latestMovementType: r.latest_movement_type || null, latestMovementDate: r.latest_movement_date || null,
     latestFromSite: r.latest_from_site || null, latestToSite: r.latest_to_site || null,
     latestReason: r.latest_reason || null, latestReferenceNo: r.latest_reference_no || null,
+    latestMovementDay: r.latest_movement_day || null, latestDirection: movementDirection(r.latest_movement_type), latestRemarks: r.latest_remarks || null,
     reused: !!r.reused,
   };
 }
@@ -7144,6 +7156,7 @@ app.get('/api/asset-lifecycle', authenticateToken, async (req, res) => {
         lm.movement_type AS latest_movement_type, lm.movement_date AS latest_movement_date,
         lm.from_site AS latest_from_site, lm.to_site AS latest_to_site,
         lm.reason AS latest_reason, lm.reference_no AS latest_reference_no,
+        DATE_FORMAT(lm.movement_date, '%Y-%m-%d') AS latest_movement_day, lm.remarks AS latest_remarks,
         EXISTS(
           SELECT 1 FROM asset_movements rm
           WHERE rm.asset_id = a.id AND rm.movement_type = 'Inter-DC Transfer' AND COALESCE(rm.from_site,'') <> COALESCE(rm.to_site,'')
@@ -7363,12 +7376,23 @@ app.post('/api/assets/:id/lifecycle', authenticateToken, requireRole(['Admin','O
     }
 
     await assertSiteAccess(req.user, asset.site);
-    const movementDate = normalizeDateInput(req.body.movementDate) || localTodayStr();
+    // A date that was typed but cannot be read is refused, not quietly replaced by today; an empty date still means today.
+    const rawMovementDate = req.body.movementDate;
+    let movementDate = localTodayStr();
+    if (rawMovementDate !== undefined && rawMovementDate !== null && String(rawMovementDate).trim() !== '') {
+      movementDate = normalizeDateInput(typeof rawMovementDate === 'number' ? rawMovementDate : String(rawMovementDate).trim());
+      if (!movementDate || !/^\d{4}-\d{2}-\d{2}$/.test(movementDate) || isNaN(new Date(movementDate + 'T00:00:00Z').getTime())) return res.status(400).json({ error: 'Movement date is not a valid date.' });
+      if (movementDate > localTodayStr()) return res.status(400).json({ error: 'Movement date cannot be in the future.' });
+      if (movementDate < '2000-01-01') return res.status(400).json({ error: 'Movement date is too old (before 2000).' });
+    }
     const dateTime = `${movementDate} ${new Date().toTimeString().slice(0,8)}`;
     const reason = String(req.body.reason || '').trim() || null;
     const installFromStore = action === 'Install from Store';
     const referenceNo = String(req.body.referenceNo || '').trim() || null;
     const remarks = String(req.body.remarks || '').trim() || null;
+    if (reason && reason.length > 255) return res.status(400).json({ error: 'Reason is too long (maximum 255 characters).' });
+    if (referenceNo && referenceNo.length > 100) return res.status(400).json({ error: 'Reference number is too long (maximum 100 characters).' });
+    if (remarks && remarks.length > 1000) return res.status(400).json({ error: 'Remarks are too long (maximum 1000 characters).' });
     const from = { site: asset.site, zone: asset.zone || null, rackNo: asset.rack_no || null, position: asset.position || null };
     let status = asset.lifecycle_status || 'Active';
     let to = { site: null, zone: null, rackNo: null, position: null };
@@ -7700,9 +7724,15 @@ app.patch('/api/asset-movements/:id', authenticateToken, requireRole(['Admin','O
     const mi = m[3] !== undefined ? m[3] : String(mv.movement_date instanceof Date ? mv.movement_date.getMinutes() : 0).padStart(2, '0');
     const ss = m[4] !== undefined ? m[4] : '00';
     const newDateTime = `${dateOnly} ${hh}:${mi}:${ss}`;
+    // Only a date that is being changed is checked, so an older entry can still have its remarks corrected.
+    if (dateOnly !== dateOnlyStr(mv.movement_date)) {
+      if (dateOnly > localTodayStr()) return res.status(400).json({ error: 'Movement date cannot be in the future.' });
+      if (dateOnly < '2000-01-01') return res.status(400).json({ error: 'Movement date is too old (before 2000).' });
+    }
     const reason = String(b.reason || '').trim().slice(0, 255) || null;
     const referenceNo = String(b.referenceNo || '').trim().slice(0, 100) || null;
     const remarks = String(b.remarks || '').trim() || null;
+    if (remarks && remarks.length > 1000) return res.status(400).json({ error: 'Remarks are too long (maximum 1000 characters).' });
 
     await conn.beginTransaction();
     try {
