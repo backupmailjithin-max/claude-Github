@@ -209,6 +209,40 @@ async function discoverChain(ip, community) {
   return parseChainTables(ident, props);
 }
 
+// ---- Circuit details (APC Rack PDU 2G): per-phase and per-bank (breaker circuit) load, read live from the PDU ----------
+const APC_PHASE_STATUS = '1.3.6.1.4.1.318.1.1.26.6.3.1', APC_PHASE_CONFIG = '1.3.6.1.4.1.318.1.1.26.6.1.1';
+const APC_BANK_STATUS = '1.3.6.1.4.1.318.1.1.26.8.3.1', APC_BANK_CONFIG = '1.3.6.1.4.1.318.1.1.26.8.1.1';
+const LOAD_STATES = { 1: 'Low load', 2: 'Normal', 3: 'Near overload', 4: 'Overload', 5: 'Not supported' };
+function flatTable(map, prefix) { // { 'prefix.col.row': v } -> { row: { col: v } }
+  const rows = {};
+  Object.keys(map || {}).forEach((oid) => {
+    if (oid.indexOf(prefix + '.') !== 0) return;
+    const m = /^(\d+)\.(\d+)$/.exec(oid.slice(prefix.length + 1)); if (!m) return;
+    (rows[m[2]] = rows[m[2]] || {})[Number(m[1])] = map[oid];
+  });
+  return rows;
+}
+// Pure: status + config rows of one table -> the circuits that belong to one PDU of the chain (Module column = the PDU's number).
+// Returns { items, moduleMatched }. If no row carries this PDU's number (some firmware leaves Module at 0), every row is shown and moduleMatched is false.
+function buildCircuits(statusMap, statusPrefix, configMap, configPrefix, unit) {
+  const st = flatTable(statusMap, statusPrefix), cf = flatTable(configMap, configPrefix);
+  const all = Object.keys(st).map((k) => ({ idx: Number(k), c: st[k] })).sort((a, b) => a.idx - b.idx);
+  const mine = all.filter((r) => Number(r.c[2]) === unit);
+  const rows = mine.length ? mine : all;
+  const cfgFor = (c) => { const k = Object.keys(cf).find((x) => Number(cf[x][2]) === Number(c[2]) && Number(cf[x][3]) === Number(c[3])); return k ? cf[k] : {}; };
+  const amps = (v) => (Number.isFinite(Number(v)) && Number(v) >= 0 ? Math.round(Number(v)) / 10 : null);
+  const hundredth = (v) => (Number.isFinite(Number(v)) && Number(v) >= 0 ? Math.round(Number(v)) / 100 : null);
+  const items = rows.map((r) => {
+    const g = cfgFor(r.c);
+    const currentA = amps(r.c[5]), overloadA = Number.isFinite(Number(g[7])) && Number(g[7]) > 0 ? Number(g[7]) : null;
+    const nearA = Number.isFinite(Number(g[6])) && Number(g[6]) > 0 ? Number(g[6]) : null;
+    return { number: Number(r.c[3]) || r.idx, loadState: LOAD_STATES[Number(r.c[4])] || null, currentA,
+      voltage: Number.isFinite(Number(r.c[6])) && Number(r.c[6]) >= 0 ? Number(r.c[6]) : (Number.isFinite(Number(r.c[9])) && Number(r.c[9]) >= 0 ? Number(r.c[9]) : null),
+      powerKw: hundredth(r.c[7] != null ? r.c[7] : r.c[10]), nearOverloadA: nearA, overloadA,
+      usedPct: currentA != null && overloadA ? Math.round((currentA / overloadA) * 100) : null };
+  });
+  return { items, moduleMatched: mine.length > 0 || all.length === 0 };
+}
 const clip = (v, n) => (v == null ? v : String(v).slice(0, n));
 
 // Rated/Max Load capacity. Unlike power_oid (polled every cycle, since the live
@@ -545,6 +579,39 @@ module.exports = function registerPduRoutes(app, deps) {
   // ---- auto-detect: probe a not-yet-saved IP via SNMP, return best-effort identity fields ----
   // One step for a whole daisy chain: the person gives the HOST's IP and the host's Display ID; every PDU behind that IP is read
   // from the host and added (grouped by the shared IP). PDUs already present for this IP are left alone.
+  // Live circuit details for one PDU: name, feed (from the name), load and every phase / bank (breaker circuit).
+  app.get('/api/pdus/:id/details', authenticateToken, async (req, res) => {
+    try {
+      const [rows] = await pool.query('SELECT * FROM pdus WHERE id = ?', [req.params.id]);
+      if (!rows.length) return res.status(404).json({ error: 'PDU not found' });
+      const pdu = rows[0];
+      await assertSiteAccess(req.user, pdu.site);
+      const ip = pdu.ip_address, community = pdu.snmp_community || 'public', unit = Number(pdu.chain_unit) > 0 ? Number(pdu.chain_unit) : 1;
+      const out = { id: pdu.id, ipAddress: ip, chainUnit: Number(pdu.chain_unit) || 0, storedFeed: pdu.feed_label, storedRack: pdu.rack_no, vendor: pdu.vendor, model: pdu.model,
+        phase: pdu.phase, maxLoadKw: pdu.max_load_kw != null ? Number(pdu.max_load_kw) : null, readAt: new Date().toISOString(), reachable: false, supported: false };
+      const base = ['1.3.6.1.2.1.1.5.0', APC_PROPS_TABLE + '.3.' + unit, '1.3.6.1.4.1.318.1.1.26.4.3.1.4.' + unit, '1.3.6.1.4.1.318.1.1.26.4.3.1.5.' + unit, '1.3.6.1.4.1.318.1.1.26.4.3.1.6.' + unit,
+        '1.3.6.1.4.1.318.1.1.26.4.3.1.16.' + unit, '1.3.6.1.4.1.318.1.1.26.4.3.1.17.' + unit, '1.3.6.1.4.1.318.1.1.26.4.3.1.20.' + unit, '1.3.6.1.4.1.318.1.1.26.4.3.1.2.' + unit];
+      let g;
+      try { g = await snmpGetEach(ip, community, base, 6000); }
+      catch (e) { out.error = 'Could not read the PDU: ' + e.message; return res.json(out); }
+      out.reachable = true;
+      const name = snmpStr(g[base[1]]) || snmpStr(g[base[0]]);
+      const dd = describeDevice('', name);
+      out.displayId = Number.isFinite(Number(g[base[8]])) && Number(g[base[8]]) > 0 ? Number(g[base[8]]) : null; out.name = name || null; out.feedFromName = dd.feedHint; out.rackFromName = dd.rackHint;
+      const num = (v, div) => (Number.isFinite(Number(v)) && Number(v) >= 0 ? Math.round(Number(v)) / div : null);
+      const apc = !!pdu.vendor && /apc|schneider/i.test(pdu.vendor) || g[base[2]] !== undefined;
+      if (apc) {
+        out.supported = true;
+        out.loadState = LOAD_STATES[Number(g[base[2]])] || null; out.powerKw = num(g[base[3]], 100); out.peakKw = num(g[base[4]], 100);
+        out.apparentKva = num(g[base[5]], 100); out.powerFactor = num(g[base[6]], 100); out.frequencyHz = num(g[base[7]], 10);
+        const [phSt, phCf, bkSt, bkCf] = await Promise.all([APC_PHASE_STATUS, APC_PHASE_CONFIG, APC_BANK_STATUS, APC_BANK_CONFIG].map((o) => snmpSubtree(ip, community, o, 5000).catch(() => ({}))));
+        const ph = buildCircuits(phSt, APC_PHASE_STATUS, phCf, APC_PHASE_CONFIG, unit), bk = buildCircuits(bkSt, APC_BANK_STATUS, bkCf, APC_BANK_CONFIG, unit);
+        out.phases = ph.items; out.banks = bk.items; out.moduleMatched = ph.moduleMatched && bk.moduleMatched;
+      }
+      res.json(out);
+    } catch (e) { sendErr(res, e); }
+  });
+
   app.post('/api/pdus/chain', authenticateToken, requireRole(['Admin', 'Operator']), async (req, res) => {
     try {
       const b = req.body || {};
@@ -865,3 +932,4 @@ module.exports._effectiveOid = effectiveOid; // exposed for tests only
 module.exports._describeDevice = describeDevice; // exposed for tests only
 module.exports._phaseFromCount = phaseFromCount; // exposed for tests only
 module.exports._parseChainTables = parseChainTables; // exposed for tests only
+module.exports._buildCircuits = buildCircuits; // exposed for tests only

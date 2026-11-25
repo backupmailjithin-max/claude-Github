@@ -413,6 +413,7 @@ const api = {
     connectivityInventoryExtras: () => apiFetch('/connectivity/inventory-extras', { timeoutMs: 120000 }),
     saveAssetConnectivity: (id, body) => apiFetch('/assets/' + encodeURIComponent(id) + '/connectivity', { method: 'PUT', body: JSON.stringify(body) }),
     getPdus: (site) => apiFetch('/pdus' + (site && site !== 'all' ? '?site=' + encodeURIComponent(site) : '')),
+    getPduDetails: (id) => apiFetch('/pdus/' + encodeURIComponent(id) + '/details', { timeoutMs: 30000 }),
     getPduSummary: () => apiFetch('/pdus/summary'),
     createPdu: (body) => apiFetch('/pdus', { method: 'POST', body: JSON.stringify(body) }),
     createPduChain: (body) => apiFetch('/pdus/chain', { method: 'POST', body: JSON.stringify(body), timeoutMs: 40000 }),
@@ -16458,6 +16459,65 @@ function PduDiscoveryModal({ onClose, onDone }) {
             React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", marginTop: 16 } },
                 React.createElement("button", { onClick: onClose, className: "neu-btn-secondary" }, "Close")))), document.body);
 }
+function PduDetailsModal({ pdu, onClose }) {
+    const [d, setD] = useState(null);
+    const [err, setErr] = useState(null);
+    const [busy, setBusy] = useState(true);
+    const load = async () => { setBusy(true); setErr(null); try { setD(await api.getPduDetails(pdu.id)); } catch (e) { setErr(e.message); } setBusy(false); };
+    useEffect(() => { load(); }, [pdu.id]);
+    const stateColor = (st) => st === "Overload" ? "#DC2626" : st === "Near overload" ? "#EA7A0C" : st === "Low load" ? "#64748B" : "#059669";
+    const fmt = (v, u, dec) => v == null ? "—" : (dec != null ? Number(v).toFixed(dec) : v) + (u ? " " + u : "");
+    const feedName = d && (d.feedFromName || d.storedFeed || pdu.feedLabel);
+    const feedMismatch = d && d.feedFromName && d.storedFeed && d.feedFromName !== d.storedFeed;
+    const TH = { padding: "7px 10px", textAlign: "left", fontSize: 9.5, fontWeight: 800, letterSpacing: ".04em", textTransform: "uppercase", color: "#020617", borderBottom: "1px solid rgba(148,163,184,.3)" };
+    const TD = { padding: "8px 10px", borderBottom: "1px solid rgba(148,163,184,.14)", fontSize: 12 };
+    const circuitTable = (title, hint, items, label) => React.createElement("div", { style: { marginTop: 14 } }, [
+        React.createElement("div", { key: "h", style: { fontFamily: "'Space Grotesk'", fontWeight: 800, fontSize: 13, color: "#020617" } }, title, React.createElement("span", { style: { marginLeft: 8, fontFamily: "Inter", fontWeight: 600, fontSize: 10.5, color: "#64748B" } }, hint)),
+        items.length ? React.createElement("table", { key: "t", style: { width: "100%", borderCollapse: "collapse", marginTop: 6, fontFamily: "Inter" } }, [
+            React.createElement("thead", { key: "th" }, React.createElement("tr", null, [label, "State", "Current", "Breaker / overload limit", "Used", "Voltage", "Power"].map((h) => React.createElement("th", { key: h, style: TH }, h)))),
+            React.createElement("tbody", { key: "tb" }, items.map((c) => React.createElement("tr", { key: c.number },
+                React.createElement("td", { style: { ...TD, fontWeight: 800 } }, label + " " + c.number),
+                React.createElement("td", { style: { ...TD, fontWeight: 700, color: stateColor(c.loadState) } }, c.loadState || "—"),
+                React.createElement("td", { style: { ...TD, fontFamily: "'Space Grotesk'", fontWeight: 800 } }, fmt(c.currentA, "A", 1)),
+                React.createElement("td", { style: TD }, c.overloadA ? c.overloadA + " A" + (c.nearOverloadA ? " (warn " + c.nearOverloadA + " A)" : "") : "—"),
+                React.createElement("td", { style: { ...TD, minWidth: 110 } }, c.usedPct == null ? "—" : React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+                    React.createElement("div", { style: { flex: 1, height: 6, borderRadius: 4, background: "rgba(148,163,184,.25)" } }, React.createElement("div", { style: { width: Math.min(100, c.usedPct) + "%", height: 6, borderRadius: 4, background: c.usedPct >= 85 ? "#DC2626" : c.usedPct >= 70 ? "#EA7A0C" : "#059669" } })),
+                    React.createElement("b", { style: { fontSize: 11 } }, c.usedPct + "%"))),
+                React.createElement("td", { style: TD }, fmt(c.voltage, "V")),
+                React.createElement("td", { style: TD }, fmt(c.powerKw, "kW", 2)))))
+        ]) : React.createElement("div", { key: "e", style: { marginTop: 6, fontSize: 11.5, color: "#94A3B8" } }, "This PDU did not list any " + label.toLowerCase() + "s.")]);
+    return ReactDOM.createPortal(React.createElement("div", { style: { position: "fixed", inset: 0, zIndex: 100000, background: "rgba(15,23,42,0.28)", backdropFilter: "blur(2px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }, onMouseDown: (e) => { if (e.target === e.currentTarget) onClose(); } },
+        React.createElement("div", { className: "neu-card", style: { width: "min(860px,100%)", maxHeight: "92vh", overflowY: "auto", padding: "22px 26px" }, onMouseDown: (e) => e.stopPropagation() }, [
+            React.createElement("div", { key: "top", style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 } }, [
+                React.createElement("div", { key: "l" }, [
+                    React.createElement("div", { key: "t", style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617" } }, "PDU circuit details"),
+                    React.createElement("div", { key: "s", style: { fontFamily: "Inter", fontSize: 11.5, color: "#64748B", marginTop: 2 } }, "Read live from the PDU · " + pdu.ipAddress + (pdu.chainUnit > 0 ? " · Unit " + pdu.chainUnit : ""))]),
+                React.createElement("div", { key: "r", style: { display: "flex", gap: 8 } }, [
+                    React.createElement("button", { key: "rf", className: "neu-btn-secondary", disabled: busy, onClick: load, style: { fontSize: 11, padding: "6px 12px" } }, busy ? "Reading…" : "↻ Refresh"),
+                    React.createElement("button", { key: "x", className: "neu-btn-secondary", onClick: onClose, style: { fontSize: 11, padding: "6px 12px" } }, "Close")])]),
+            busy && !d && React.createElement("div", { key: "ld", style: { padding: "30px 0", textAlign: "center", color: "#64748B", fontFamily: "Inter", fontSize: 12.5 } }, "Reading the PDU…"),
+            err && React.createElement("div", { key: "er", style: { marginTop: 12, padding: "9px 12px", borderRadius: 11, background: "rgba(220,38,38,.08)", color: "#B91C1C", fontFamily: "Inter", fontSize: 12, fontWeight: 700 } }, err),
+            d && d.error && React.createElement("div", { key: "de", style: { marginTop: 12, padding: "9px 12px", borderRadius: 11, background: "rgba(220,38,38,.08)", color: "#B91C1C", fontFamily: "Inter", fontSize: 12, fontWeight: 700 } }, d.error),
+            d && d.reachable && React.createElement("div", { key: "body" }, [
+                React.createElement("div", { key: "id", style: { display: "flex", flexWrap: "wrap", gap: 10, marginTop: 14 } }, [
+                    ["PDU name", d.name || "— (not set on the PDU)"], ["Feed", feedName ? String(feedName).replace(/^Feed\s*/i, "Feed ") : "—"], ["Display ID", (d.displayId != null ? d.displayId : (pdu.chainUnit > 0 ? pdu.chainUnit : 1)) + (d.displayId != null ? " (read from the PDU)" : "")], ["Rack", d.storedRack || pdu.rackNo], ["Model", [d.vendor, d.model].filter(Boolean).join(" ") || "—"]
+                ].map(([k, v]) => React.createElement("div", { key: k, style: { flex: "1 1 170px", padding: "9px 12px", borderRadius: 12, background: "rgba(148,163,184,.1)" } }, [
+                    React.createElement("div", { key: "k", style: { fontSize: 9.5, fontWeight: 800, letterSpacing: ".04em", textTransform: "uppercase", color: "#64748B" } }, k),
+                    React.createElement("div", { key: "v", style: { fontFamily: k === "Feed" ? "'Space Grotesk'" : "Inter", fontSize: k === "Feed" ? 16 : 12.5, fontWeight: 800, color: "#020617", marginTop: 2, wordBreak: "break-word" } }, v)]))),
+                d.displayId != null && d.displayId !== (pdu.chainUnit > 0 ? pdu.chainUnit : 1) && React.createElement("div", { key: "did", style: { marginTop: 10, padding: "8px 12px", borderRadius: 11, background: "rgba(217,119,6,.1)", color: "#92400E", fontFamily: "Inter", fontSize: 11.5, fontWeight: 700 } }, "The app reads this PDU as number " + (pdu.chainUnit > 0 ? pdu.chainUnit : 1) + ", but the PDU reports Display ID " + d.displayId + ". Check the Display ID on the PDU and correct the Chain Unit in Edit PDU."),
+                feedMismatch && React.createElement("div", { key: "mm", style: { marginTop: 10, padding: "8px 12px", borderRadius: 11, background: "rgba(217,119,6,.1)", color: "#92400E", fontFamily: "Inter", fontSize: 11.5, fontWeight: 700 } }, "The PDU's own name says " + d.feedFromName + ", but this PDU is saved as " + d.storedFeed + " in the app. Use Edit PDU to correct the Feed Label."),
+                !d.feedFromName && d.name && React.createElement("div", { key: "nf", style: { marginTop: 10, fontSize: 11, color: "#64748B", fontFamily: "Inter" } }, "The PDU name has no A / B marker (for example Rack-K20-PDU-A), so the Feed shown is the one saved in the app."),
+                d.supported ? React.createElement("div", { key: "sup" }, [
+                    React.createElement("div", { key: "tiles", style: { display: "flex", flexWrap: "wrap", gap: 10, marginTop: 14 } }, [
+                        ["Total load", fmt(d.powerKw, "kW", 2)], ["Max load", d.maxLoadKw != null ? d.maxLoadKw.toFixed(1) + " kW" : "—"], ["Load state", d.loadState || "—"], ["Peak", fmt(d.peakKw, "kW", 2)], ["Apparent", fmt(d.apparentKva, "kVA", 2)], ["Frequency", fmt(d.frequencyHz, "Hz", 1)]
+                    ].map(([k, v]) => React.createElement("div", { key: k, style: { flex: "1 1 110px", padding: "9px 12px", borderRadius: 12, background: "rgba(148,163,184,.1)" } }, [
+                        React.createElement("div", { key: "k", style: { fontSize: 9.5, fontWeight: 800, letterSpacing: ".04em", textTransform: "uppercase", color: "#64748B" } }, k),
+                        React.createElement("div", { key: "v", style: { fontFamily: "'Space Grotesk'", fontSize: 16, fontWeight: 800, color: k === "Load state" ? stateColor(v) : "#020617", marginTop: 2 } }, v)]))),
+                    circuitTable("Back circuits (breaker banks)", "each bank is one breaker circuit feeding a group of outlets", d.banks || [], "Bank"),
+                    circuitTable("Phases", "current on each incoming phase", d.phases || [], "Phase"),
+                    d.moduleMatched === false && React.createElement("div", { key: "mod", style: { marginTop: 10, fontSize: 10.5, color: "#92400E", fontFamily: "Inter" } }, "This PDU does not label its circuits with its own unit number, so all circuits reported by the host are shown.")])
+                    : React.createElement("div", { key: "nsup", style: { marginTop: 14, fontSize: 12, color: "#64748B", fontFamily: "Inter" } }, "Circuit-level details are available for APC Rack PDU 2G units. This PDU's name and feed are shown above.")])])), document.body);
+}
 function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
     const isNew = !pdu || !pdu.id;
     const [form, setForm] = useState(() => ({
@@ -16785,6 +16845,7 @@ function PduPage({ allowedSites = [], canEdit = false }) {
     const groupSort = useListSort();
     const [editing, setEditing] = useState(null);
     const [chainNote, setChainNote] = useState("");
+    const [detailsFor, setDetailsFor] = useState(null);
     const [trendOpen, setTrendOpen] = useState(false);
     const [importOpen, setImportOpen] = useState(false);
     const [discoveryOpen, setDiscoveryOpen] = useState(false);
@@ -16904,7 +16965,7 @@ function PduPage({ allowedSites = [], canEdit = false }) {
                                             React.createElement("td", { style: { padding: "7px 10px" } }, u.maxLoadKw != null ? u.maxLoadKw.toFixed(1) + " kW" : "—"),
                                             React.createElement("td", { style: { padding: "7px 10px" } }, u.lastPowerKw != null && u.maxLoadKw ? Math.round((u.lastPowerKw / u.maxLoadKw) * 100) + "%" : "—"),
                                             React.createElement("td", { style: { padding: "7px 10px" } }, React.createElement(PduBadge, { kind: "status", text: u.status }), u.lastError && React.createElement("div", { style: { fontSize: 10, color: "#EA7A0C", marginTop: 3 } }, u.lastError)),
-                                            React.createElement("td", { style: { padding: "7px 10px", whiteSpace: "nowrap" } }, canEdit && React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 11, padding: "5px 11px" }, onClick: (e) => { e.stopPropagation(); setEditing(u); } }, "Edit")))))))));
+                                            React.createElement("td", { style: { padding: "7px 10px", whiteSpace: "nowrap" } }, React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 11, padding: "5px 11px", color: "#3157ee", marginRight: 6 }, onClick: (e) => { e.stopPropagation(); setDetailsFor(u); } }, "Circuits"), canEdit && React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 11, padding: "5px 11px" }, onClick: (e) => { e.stopPropagation(); setEditing(u); } }, "Edit")))))))));
                         }))))),
             React.createElement("div", { className: "neu-card", style: { overflow: "hidden", display: viewMode === "group" ? "none" : undefined } },
                 React.createElement("div", { style: { overflowX: "auto" } },
@@ -16932,16 +16993,18 @@ function PduPage({ allowedSites = [], canEdit = false }) {
                                     React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)" } }, React.createElement("span", { style: { display: "inline-block", transform: open ? "rotate(90deg)" : "none", transition: "transform .2s ease", color: "#3157EE" } }, "›"))),
                                 open && React.createElement("tr", null, React.createElement("td", { colSpan: 10, style: { padding: "0 14px 18px 20px", borderBottom: "1px solid rgba(148,163,184,.14)" } },
                                     React.createElement("div", { style: { display: "grid", gridTemplateColumns: rack.feeds.length > 1 ? "1fr 1fr" : "1fr", gap: 10, marginTop: 6 } }, rack.feeds.map((f) => React.createElement("div", { key: f.id, style: { background: f.status === "offline" ? "rgba(241,245,249,.9)" : "rgba(255,255,255,.92)", border: "1px solid rgba(255,255,255,.95)", borderRadius: 13, padding: "11px 13px" } },
-                                        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 7 } }, React.createElement("b", { style: { fontSize: 12 } }, f.feedLabel), React.createElement(PduBadge, { kind: "status", text: f.status })),
+                                        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 7 } }, React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 7 } }, React.createElement("b", { style: { fontSize: 12 } }, f.feedLabel), React.createElement("span", { title: "The PDU number shown on the PDU itself - use it to physically check this feed", style: { fontFamily: "'JetBrains Mono'", fontSize: 9.5, fontWeight: 800, color: "#3157ee", background: "rgba(49,87,238,.1)", padding: "2px 7px", borderRadius: 7 } }, "Display ID " + (f.chainUnit > 0 ? f.chainUnit : 1))), React.createElement(PduBadge, { kind: "status", text: f.status })),
                                         React.createElement("div", { style: { fontSize: 10.5, color: "#020617", marginBottom: 3 } }, [f.vendor, f.model].filter(Boolean).join(" ") || "Vendor/model not set"),
                                         React.createElement("div", { style: { fontSize: 10, color: "#94A3B8", fontFamily: "monospace", marginBottom: 8 } }, "S/N ", f.serialNumber || "—", " · ", f.ipAddress),
                                         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 7 } },
                                             [["Power", f.lastPowerKw != null ? f.lastPowerKw.toFixed(2) + " kW" : "—"], ["Max Load", f.maxLoadKw != null ? f.maxLoadKw.toFixed(1) + " kW" : "—"], ["Capacity Used", f.lastPowerKw != null && f.maxLoadKw ? Math.round(f.lastPowerKw / f.maxLoadKw * 100) + "%" : "—"]].map(([l, v]) => React.createElement("div", { key: l }, React.createElement("small", { style: { display: "block", fontSize: 8.5, fontWeight: 700, textTransform: "uppercase", color: "#020617" } }, l), React.createElement("b", { style: { fontFamily: "'Space Grotesk'", fontSize: 13 } }, v)))),
                                         f.lastError && React.createElement("div", { style: { marginTop: 7, fontSize: 10, color: "#EA7A0C" } }, f.lastError),
-                                        canEdit && React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 9 } },
-                                            React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 11, padding: "6px 12px" }, onClick: (e) => { e.stopPropagation(); setEditing(f); } }, "✎ Edit"),
-                                            React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 11, padding: "6px 12px", color: "#DC2626" }, onClick: (e) => { e.stopPropagation(); setDeleteConfirm(f); } }, React.createElement(Trash2, { s: 11, c: "#DC2626" }), " Delete"))))))));
+                                        React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 9, flexWrap: "wrap" } },
+                                            React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 11, padding: "6px 12px", color: "#3157ee" }, onClick: (e) => { e.stopPropagation(); setDetailsFor(f); } }, "⚡ Circuit details"),
+                                            canEdit && React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 11, padding: "6px 12px" }, onClick: (e) => { e.stopPropagation(); setEditing(f); } }, "✎ Edit"),
+                                            canEdit && React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 11, padding: "6px 12px", color: "#DC2626" }, onClick: (e) => { e.stopPropagation(); setDeleteConfirm(f); } }, React.createElement(Trash2, { s: 11, c: "#DC2626" }), " Delete"))))))));
                         })))))),
+        detailsFor && React.createElement(PduDetailsModal, { pdu: detailsFor, onClose: () => setDetailsFor(null) }),
         editing && React.createElement(PduEditModal, { pdu: editing.id ? editing : null, allowedSites: allowedSites, onClose: () => setEditing(null), onSaved: (msg) => { setEditing(null); load(); if (msg) setChainNote(msg); } }),
         trendOpen && React.createElement(PduTrendModal, { site: "all", zone: "all", allowedSites: allowedSites, zonesForSite: zonesForSite, onClose: () => setTrendOpen(false) }),
         importOpen && React.createElement(PduImportModal, { onClose: () => setImportOpen(false), onDone: load }),

@@ -44,3 +44,18 @@ test('daisy chain: one entry per PDU row from the host\'s ident + properties tab
   assert.deepStrictEqual([units[1].unit, units[1].name, units[1].phase, units[1].rackHint, units[1].feedHint], [2, 'Rack-K21-PDU-B', 'Single-Phase', 'K21', 'Feed B']);
   assert.deepStrictEqual(require('../lib/pdu-routes')._parseChainTables({}, {}), []);
 });
+
+test('circuit details: phases / banks of one PDU of a chain, with breaker limit and % used', () => {
+  const S = '1.3.6.1.4.1.318.1.1.26.8.3.1', C = '1.3.6.1.4.1.318.1.1.26.8.1.1';
+  const st = { [S + '.2.1']: 1, [S + '.3.1']: 1, [S + '.4.1']: 2, [S + '.5.1']: 85, [S + '.2.2']: 2, [S + '.3.2']: 1, [S + '.4.2']: 4, [S + '.5.2']: 200 };
+  const cf = { [C + '.2.1']: 1, [C + '.3.1']: 1, [C + '.6.1']: 24, [C + '.7.1']: 30, [C + '.2.2']: 2, [C + '.3.2']: 1, [C + '.7.2']: 20 };
+  const f = require('../lib/pdu-routes')._buildCircuits;
+  const one = f(st, S, cf, C, 1);
+  assert.strictEqual(one.items.length, 1);
+  assert.deepStrictEqual([one.items[0].currentA, one.items[0].overloadA, one.items[0].usedPct, one.items[0].loadState], [8.5, 30, 28, 'Normal']);
+  const two = f(st, S, cf, C, 2);
+  assert.deepStrictEqual([two.items[0].currentA, two.items[0].usedPct, two.items[0].loadState], [20, 100, 'Overload']);
+  const none = f(st, S, cf, C, 7); // no row carries unit 7: show all, flagged
+  assert.strictEqual(none.items.length, 2); assert.strictEqual(none.moduleMatched, false);
+  assert.deepStrictEqual(f({}, S, {}, C, 1), { items: [], moduleMatched: true });
+});
