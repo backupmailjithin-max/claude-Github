@@ -7105,17 +7105,24 @@ app.delete('/api/issues/:id', authenticateToken, requireRole(['Admin','Operator'
 
 // ========== ASSET LIFECYCLE / MOVEMENT HISTORY ==========
 const ASSET_LIFECYCLE_ACTIONS = ['Store', 'Transfer / Reuse', 'Decommission', 'RMA / OEM'];
-// Movement IN / OUT as shown on the Asset Lifecycle page, taken from the latest history entry's type:
-//   IN       the asset arrives at a DC            (received to store, transfer accepted, received / installed)
-//   OUT      the asset leaves a DC or service     (inter-DC transfer, refused / returned, external move, RMA / OEM, decommission)
-//   Internal moved between store and rack inside the same DC
-// Anything unknown or older returns null and the page shows a dash, so no history entry is ever mislabelled.
-const MOVEMENT_DIRECTION = {
-  'Received to Store': 'IN', 'Transfer Accepted': 'IN', 'Receive / Install': 'IN',
-  'Inter-DC Transfer': 'OUT', 'Inter-DC Transfer Refused': 'OUT', 'External Move Out': 'OUT', 'RMA / OEM': 'OUT', 'Decommission': 'OUT',
-  'Store': 'Internal', 'Store / Install': 'Internal',
-};
-function movementDirection(type) { return (type && MOVEMENT_DIRECTION[type]) || null; }
+// Movement IN / OUT on the Asset Lifecycle page is about the STORE:
+//   IN   the asset comes into the store (received to store, or moved to the store from a rack / after a transfer is accepted)
+//   OUT  the asset leaves the store (installed from the store, transferred to another DC, RMA / OEM, decommission, external move)
+// An exit only counts as OUT when the asset was in the store just before it: the entry before it in the history is a store entry,
+// or - for opening stock that has no history yet - the asset is flagged as opening stock. Moves that never touch the store
+// (for example a rack asset sent straight to another DC) and anything unknown return null, and the page shows a dash.
+// 'Transfer Accepted' only records the acceptance step (it is always followed by the Store or Install entry), so it is skipped here.
+const STORE_ENTRY_TYPES = new Set(['Received to Store', 'Store']);
+const STORE_EXIT_TYPES = new Set(['Store / Install', 'Inter-DC Transfer', 'RMA / OEM', 'Decommission', 'External Move Out']);
+function movementDirection(type, prevType, openingStock) {
+  if (!type) return null;
+  if (STORE_ENTRY_TYPES.has(type)) return 'IN';
+  if (STORE_EXIT_TYPES.has(type)) {
+    const wasInStore = prevType ? STORE_ENTRY_TYPES.has(prevType) : !!openingStock;
+    return wasInStore ? 'OUT' : null;
+  }
+  return null;
+}
 function lifecycleRowToJson(r) {
   return {
     id: r.id, site: r.site, zone: r.zone, rackNo: r.rack_no, position: r.position,
@@ -7129,7 +7136,7 @@ function lifecycleRowToJson(r) {
     latestMovementType: r.latest_movement_type || null, latestMovementDate: r.latest_movement_date || null,
     latestFromSite: r.latest_from_site || null, latestToSite: r.latest_to_site || null,
     latestReason: r.latest_reason || null, latestReferenceNo: r.latest_reference_no || null,
-    latestMovementDay: r.latest_movement_day || null, latestDirection: movementDirection(r.latest_movement_type), latestRemarks: r.latest_remarks || null,
+    latestMovementDay: r.latest_movement_day || null, latestDirection: movementDirection(r.dir_type, r.dir_prev, r.opening_stock), latestRemarks: r.latest_remarks || null,
     reused: !!r.reused,
   };
 }
@@ -7157,6 +7164,8 @@ app.get('/api/asset-lifecycle', authenticateToken, async (req, res) => {
         lm.from_site AS latest_from_site, lm.to_site AS latest_to_site,
         lm.reason AS latest_reason, lm.reference_no AS latest_reference_no,
         DATE_FORMAT(lm.movement_date, '%Y-%m-%d') AS latest_movement_day, lm.remarks AS latest_remarks,
+        (SELECT m4.movement_type FROM asset_movements m4 WHERE m4.asset_id = a.id AND m4.movement_type <> 'Transfer Accepted' ORDER BY m4.movement_date DESC, m4.created_at DESC LIMIT 1) AS dir_type,
+        (SELECT m5.movement_type FROM asset_movements m5 WHERE m5.asset_id = a.id AND m5.movement_type <> 'Transfer Accepted' ORDER BY m5.movement_date DESC, m5.created_at DESC LIMIT 1 OFFSET 1) AS dir_prev,
         EXISTS(
           SELECT 1 FROM asset_movements rm
           WHERE rm.asset_id = a.id AND rm.movement_type = 'Inter-DC Transfer' AND COALESCE(rm.from_site,'') <> COALESCE(rm.to_site,'')

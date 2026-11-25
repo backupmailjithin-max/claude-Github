@@ -201,7 +201,13 @@ test('H2 /api/reports/email: exists, protected, validated, delivers sanitised re
     assert.ok(/sent by/i.test(body), 'sender line added');
     assert.ok(!/<script/i.test(body) && !/onclick/i.test(body), 'scripts / handlers stripped');
     assert.ok(!/^Bcc:/mi.test(headerPart), 'no injected header');
-    const a = await one("SELECT COUNT(*) n FROM audit_logs WHERE action = 'REPORT_EMAIL' AND entity_type = 'dc_report' AND status = 'success'");
+    // the audit row is written just after the response is sent, so give it a moment instead of reading it at once
+    let a;
+    for (let i = 0; i < 20; i++) {
+      a = await one("SELECT COUNT(*) n FROM audit_logs WHERE action = 'REPORT_EMAIL' AND entity_type = 'dc_report' AND status = 'success'");
+      if (a[0].n >= 1) break;
+      await new Promise((r) => setTimeout(r, 150));
+    }
     assert.ok(a[0].n >= 1, 'audited');
   } finally { f.srv.close(); }
   // SMTP down -> a readable 424 message, not a crash
@@ -320,7 +326,14 @@ test('Site security: an Operator cannot read, edit, delete or attach connectivit
 
 // ------------------------------------------------------------------ L9: branding uploads ----------------------------------------------------------------
 test('L9 logo upload: real images only, SVG with script refused, Admin only, served with locked-down headers', { skip: SKIP }, async () => {
-  const send = async (token, buf, type, name) => { const fd = new FormData(); fd.append('logo', new Blob([buf], { type }), name); const r = await fetch(`${BASE}/api/setup/logo`, { method: 'POST', headers: token ? { authorization: 'Bearer ' + token } : {}, body: fd }); let j = null; try { j = await r.json(); } catch (e) { /* */ } return { status: r.status, body: j }; };
+  const send = async (token, buf, type, name) => {
+    // A refused upload (401/400) can be answered before the client has finished writing the body; the client then reports 'fetch failed'. Try again once or twice.
+    let r;
+    for (let i = 0; i < 3; i++) {
+      const fd = new FormData(); fd.append('logo', new Blob([buf], { type }), name);
+      try { r = await fetch(`${BASE}/api/setup/logo`, { method: 'POST', headers: token ? { authorization: 'Bearer ' + token } : {}, body: fd }); break; } catch (e) { if (i === 2) throw e; }
+    }
+    let j = null; try { j = await r.json(); } catch (e) { /* */ } return { status: r.status, body: j }; };
   const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(40)]);
   const okSvg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 4"><rect width="4" height="4" fill="#123"/></svg>');
   const evilSvg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
