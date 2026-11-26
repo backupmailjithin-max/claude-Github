@@ -16265,10 +16265,17 @@ const PDU_CIRCUIT_COLUMNS = [
     { key: "voltage", label: "Voltage (V)" }, { key: "powerKw", label: "Power (kW)" }, { key: "readAt", label: "Read At", format: (v) => v ? fmtDateTime(v) : "" },
 ];
 function pduCircuitRows(flat) {
-    const rows = [];
+    // Each physical PDU once, each circuit once; a daisy-chain host that reports identical circuits for several units is listed under the first unit only.
+    const rows = [], seenPdu = new Set(), seenSig = new Set();
     (flat || []).forEach((p) => {
         const c = p.circuits; if (!c) return;
-        [["Bank", c.banks], ["Phase", c.phases]].forEach(([kind, list]) => (list || []).forEach((x) => rows.push({ site: p.site, zone: p.zone, rackNo: p.rackNo, feedLabel: p.feedLabel, pduName: p.pduName || "", displayId: p.displayId, ipAddress: p.ipAddress, kind, ...x, readAt: c.readAt })));
+        const pk = p.id != null ? "id:" + p.id : [p.ipAddress, p.chainUnit || 0, p.rackNo, p.feedLabel].join("|");
+        if (seenPdu.has(pk)) return; seenPdu.add(pk);
+        const seenNo = new Set(), mine = [];
+        [["Bank", c.banks], ["Phase", c.phases]].forEach(([kind, list]) => (list || []).forEach((x) => { const k = kind + x.number; if (x.number == null || seenNo.has(k)) return; seenNo.add(k); mine.push([kind, x]); }));
+        const sig = (p.ipAddress || "") + "#" + mine.map((m) => m[0] + m[1].number + ":" + m[1].currentA).join(",");
+        if (!mine.length || seenSig.has(sig)) return; seenSig.add(sig);
+        mine.forEach(([kind, x]) => rows.push({ site: p.site, zone: p.zone, rackNo: p.rackNo, feedLabel: p.feedLabel, pduName: p.pduName || "", displayId: p.displayId, ipAddress: p.ipAddress, kind, ...x, readAt: c.readAt }));
     });
     return rows;
 }
@@ -17108,6 +17115,231 @@ function PduTrendModal({ site, zone, allowedSites, zonesForSite, onClose }) {
     return React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(14,18,28,.45)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, zIndex: 400 }, onClick: onClose },
         React.createElement("div", { className: "neu-card anim-in d1", style: { width: 880, maxWidth: "96vw", maxHeight: "90vh", overflowY: "auto", padding: 28, position: "relative" }, onClick: (e) => e.stopPropagation() }, modalBody));
 }
+// ---- PDF reports from the Power Capacity page: combined theme (light page, dark control-panel tiles), Feed A / Feed B bars, no ring gauges ----
+const PDFC = { page: [233, 239, 247], ink: [23, 52, 93], pmute: [100, 116, 139], pfaint: [148, 163, 184], shadow: [205, 214, 229], bg: [13, 21, 38], tile: [21, 31, 58], tile2: [31, 44, 78], line: [52, 67, 108], track: [46, 60, 98], text: [232, 238, 251], mute: [143, 163, 199], faint: [107, 127, 166], ok: [52, 211, 153], warn: [251, 162, 60], bad: [248, 113, 113], blue: [111, 140, 255], violet: [177, 151, 252], teal: [45, 212, 191], white: [255, 255, 255] };
+const pdfLvCol = (pct) => pct >= 85 ? PDFC.bad : pct >= 70 ? PDFC.warn : PDFC.ok;
+const pdfNum = (n, d) => (n == null || !isFinite(n)) ? "-" : Number(n).toFixed(d == null ? 2 : d);
+const pdfIsB = (f) => /b\s*$/i.test(String(f.feedLabel || "").trim());
+// One row per physical PDU (never twice), and circuits listed once even when a daisy-chain host reports the same circuits for several units.
+function pduPdfRacks(racks) {
+    const seenFeed = new Set(), seenCircuits = new Map(), out = [];
+    (racks || []).forEach((r) => {
+        const feeds = [];
+        (r.feeds || []).slice().sort((a, b) => String(a.feedLabel).localeCompare(String(b.feedLabel))).forEach((f) => {
+            const fk = f.id != null ? "id:" + f.id : [f.ipAddress, f.chainUnit || 0, f.feedLabel, f.rackNo].join("|");
+            const ck = [f.ipAddress, f.chainUnit || 0].join("|");
+            if (seenFeed.has(fk) || seenFeed.has("u:" + ck + "|" + f.rackNo + "|" + f.feedLabel)) return;
+            seenFeed.add(fk); seenFeed.add("u:" + ck + "|" + f.rackNo + "|" + f.feedLabel);
+            const c = f.circuits || null;
+            const uniq = (list) => { const m = new Map(); (list || []).forEach((x) => { if (x && x.number != null && !m.has(x.number)) m.set(x.number, x); }); return Array.from(m.values()).sort((a, b) => a.number - b.number); };
+            let banks = c ? uniq(c.banks) : [], phases = c ? uniq(c.phases) : [], sameAs = null;
+            if (banks.length || phases.length) {
+                const sig = (f.ipAddress || "") + "#" + banks.map((b) => b.number + ":" + b.currentA).join(",") + "#" + phases.map((b) => b.number + ":" + b.currentA).join(",");
+                if (seenCircuits.has(sig)) { sameAs = seenCircuits.get(sig); banks = []; phases = []; }
+                else seenCircuits.set(sig, "Rack " + f.rackNo + " " + (f.feedLabel || ""));
+            }
+            feeds.push({ f, banks, phases, sameAs, hasCircuits: !!c });
+        });
+        if (feeds.length) out.push({ rack: r, feeds });
+    });
+    return out;
+}
+function pduPdfPage(doc, title, sub, dark) {
+    doc.setFillColor(...(dark ? PDFC.bg : PDFC.page)); doc.rect(0, 0, 297, 210, "F"); (doc.__dk = doc.__dk || {})[doc.getNumberOfPages()] = !!dark;
+    doc.setFillColor(...PDFC.blue); doc.roundedRect(10, 8, 2.2, 9, 1, 1, "F");
+    doc.setTextColor(...(dark ? PDFC.text : PDFC.ink)); doc.setFont("helvetica", "bold"); doc.setFontSize(14.5); doc.text(title, 15, 15);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(...(dark ? PDFC.mute : PDFC.pmute)); doc.text(sub, 287, 14.5, { align: "right" });
+}
+function pduPdfFooters(doc) {
+    const n = doc.getNumberOfPages();
+    for (let i = 1; i <= n; i++) { doc.setPage(i); doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor(...((doc.__dk && doc.__dk[i]) ? PDFC.faint : PDFC.pfaint)); doc.text("DCIM Enterprise  |  Power Capacity", 10, 205); doc.text("Page " + i + " of " + n, 287, 205, { align: "right" }); }
+}
+function pduPdfTile(doc, x, y, w, h, edge, flat) {
+    if (!flat) { doc.setFillColor(...PDFC.shadow); doc.roundedRect(x + 0.5, y + 0.8, w, h, 3, 3, "F"); }
+    doc.setFillColor(...PDFC.tile); doc.setDrawColor(...(edge || PDFC.line)); doc.setLineWidth(edge ? 0.5 : 0.25); doc.roundedRect(x, y, w, h, 3, 3, "FD");
+}
+function pduPdfGlow(doc, op, fn) { try { doc.saveGraphicsState(); doc.setGState(new doc.GState({ opacity: op, "stroke-opacity": op })); fn(); doc.restoreGraphicsState(); } catch (e) { /* glow is optional */ } }
+function pduPdfArc(doc, cx, cy, r, a0, a1, col, lw, glow) {
+    const pts = []; const n = Math.max(2, Math.ceil(Math.abs(a1 - a0) / 4));
+    for (let i = 0; i <= n; i++) { const a = (a0 + (a1 - a0) * i / n) * Math.PI / 180; pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]); }
+    const draw = (c, w) => { doc.setDrawColor(...c); doc.setLineWidth(w); doc.setLineCap(1); doc.setLineJoin(1); const v = []; for (let i = 1; i < pts.length; i++) v.push([pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]]); doc.lines(v, pts[0][0], pts[0][1], [1, 1], "S", false); };
+    if (glow) pduPdfGlow(doc, 0.25, () => draw(col, lw * 1.9));
+    draw(col, lw); doc.setLineCap(0);
+}
+function pduPdfGauge(doc, cx, cy, r, pct, lw) {
+    const col = pdfLvCol(pct);
+    pduPdfArc(doc, cx, cy, r, 135, 405, PDFC.track, lw, false);
+    if (pct > 0.5) pduPdfArc(doc, cx, cy, r, 135, 135 + 2.7 * Math.min(100, pct), col, lw, true);
+    [70, 85].forEach((m) => { const a = (135 + 2.7 * m) * Math.PI / 180; doc.setDrawColor(...(m === 85 ? PDFC.bad : PDFC.warn)); doc.setLineWidth(0.5); doc.line(cx + (r - lw) * Math.cos(a), cy + (r - lw) * Math.sin(a), cx + (r + lw) * Math.cos(a), cy + (r + lw) * Math.sin(a)); });
+    doc.setFont("helvetica", "bold"); doc.setFontSize(r * 1.05); doc.setTextColor(...PDFC.text); doc.text(Math.round(pct) + "%", cx, cy + r * 0.2, { align: "center" });
+}
+function pduPdfBar(doc, x, y, w, h, pct, col) {
+    doc.setFillColor(...PDFC.track); doc.roundedRect(x, y, w, h, h / 2, h / 2, "F");
+    const fw = Math.max(0, Math.min(100, pct)) / 100 * w; if (fw > 0.3) { pduPdfGlow(doc, 0.3, () => { doc.setFillColor(...col); doc.roundedRect(x - 0.2, y - 0.5, Math.max(fw, h) + 0.4, h + 1, h / 2, h / 2, "F"); }); doc.setFillColor(...col); doc.roundedRect(x, y, Math.max(fw, h), h, h / 2, h / 2, "F"); }
+}
+function pduPdfTicks(doc, x, y, w, h) {
+    [[70, PDFC.warn], [85, PDFC.bad]].forEach((m) => { doc.setDrawColor(...m[1]); doc.setLineWidth(0.35); doc.line(x + w * m[0] / 100, y - 0.6, x + w * m[0] / 100, y + h + 0.6); });
+}
+// One Feed A / Feed B bar: identity chip, load bar against the PDU rating (70% and 85% marks), kW over rated kW.
+function pduPdfFeedBar(doc, x, y, w, side, kw, rated) {
+    const sc = side === "B" ? PDFC.violet : PDFC.blue;
+    doc.setFillColor(...sc); doc.roundedRect(x, y, 4.6, 4.2, 1, 1, "F"); doc.setFont("helvetica", "bold"); doc.setFontSize(6.6); doc.setTextColor(13, 21, 38); doc.text(side, x + 2.3, y + 3.1, { align: "center" });
+    if (rated == null) { doc.setFont("helvetica", "italic"); doc.setFontSize(6.6); doc.setTextColor(...PDFC.faint); doc.text("No Feed " + side + " on this rack", x + 7, y + 3.1); return; }
+    const pct = rated > 0 ? kw / rated * 100 : 0, bw = Math.max(10, w - 7 - 25);
+    pduPdfBar(doc, x + 7, y + 1.1, bw, 2.2, pct, pct >= 70 ? pdfLvCol(pct) : sc); pduPdfTicks(doc, x + 7, y + 1.1, bw, 2.2);
+    doc.setFont("helvetica", "bold"); doc.setFontSize(6.8); doc.setTextColor(...(pct >= 70 ? pdfLvCol(pct) : PDFC.text)); doc.text(pdfNum(kw, 1) + " / " + pdfNum(rated, 1) + " kW", x + w, y + 3.2, { align: "right" });
+}
+function pduPdfKpis(doc, y, items, dark) {
+    const w = (277 - (items.length - 1) * 4) / items.length;
+    items.forEach((k, i) => { const x = 10 + i * (w + 4); pduPdfTile(doc, x, y, w, 15, null, dark); doc.setFont("helvetica", "bold"); doc.setFontSize(6.8); doc.setTextColor(...PDFC.mute); doc.text(k[0].toUpperCase(), x + 4, y + 5); doc.setFontSize(13); doc.setTextColor(...(k[2] || PDFC.text)); doc.text(k[1], x + 4, y + 12); });
+}
+function pduPdfLegend(doc, x, y, dark) {
+    const tc = dark ? PDFC.mute : PDFC.pmute;
+    [["Feed A", PDFC.blue], ["Feed B", PDFC.violet]].forEach((l, i) => { doc.setFillColor(...l[1]); doc.roundedRect(x + i * 22, y - 2.6, 3.4, 3.4, 0.8, 0.8, "F"); doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor(...tc); doc.text(l[0], x + i * 22 + 5, y); });
+    doc.setLineWidth(0.6); doc.setDrawColor(...PDFC.warn); doc.line(x + 48, y - 1, x + 53, y - 1); doc.text("70% of rated", x + 55, y); doc.setDrawColor(...PDFC.bad); doc.line(x + 80, y - 1, x + 85, y - 1); doc.text("85% of rated", x + 87, y);
+}
+function pduPdfModule(doc, x, y, w, h, c, prefix) {
+    const lim = c.overloadA || Math.max(c.currentA * 1.25, 1), pct = Math.min(100, (c.currentA / lim) * 100);
+    const lv = c.overloadA && c.currentA >= c.overloadA ? PDFC.bad : c.nearOverloadA && c.currentA >= c.nearOverloadA ? PDFC.warn : PDFC.ok, hot = lv !== PDFC.ok;
+    doc.setFillColor(...PDFC.tile2); doc.setDrawColor(...(hot ? lv : PDFC.line)); doc.setLineWidth(hot ? 0.5 : 0.25); doc.roundedRect(x, y, w, h, 2, 2, "FD");
+    doc.setFont("helvetica", "bold"); doc.setFontSize(6.5); doc.setTextColor(...PDFC.mute); doc.text(prefix + c.number, x + 2, y + 3.6);
+    pduPdfGlow(doc, 0.35, () => { doc.setFillColor(...lv); doc.roundedRect(x + w - 4.6, y + 1.4, 3.2, 3.2, 0.9, 0.9, "F"); }); doc.setFillColor(...lv); doc.roundedRect(x + w - 3.9, y + 2.1, 1.8, 1.8, 0.5, 0.5, "F");
+    doc.setFillColor(8, 13, 28); doc.roundedRect(x + 2, y + 5.2, 5, 6.2, 1, 1, "F"); doc.setFillColor(...(hot ? lv : [226, 232, 240])); doc.roundedRect(x + 2.6, y + 5.8, 3.8, 2.8, 0.7, 0.7, "F");
+    doc.setFontSize(pdfNum(c.currentA, 1).length >= 4 ? 8 : 9.5); doc.setTextColor(...PDFC.text); doc.text(pdfNum(c.currentA, 1), x + w - 5.4, y + 9.2, { align: "right" }); doc.setFontSize(6); doc.setTextColor(...PDFC.mute); doc.text("A", x + w - 4.6, y + 9.2);
+    if (c.overloadA) { doc.setFont("helvetica", "normal"); doc.setFontSize(5.6); doc.text("of " + c.overloadA, x + w - 2, y + 11.6, { align: "right" }); }
+    pduPdfBar(doc, x + 2, y + h - 2.1, w - 4, 1.2, pct, lv);
+}
+function buildPduRackPdf(Ctor, racks, meta) {
+    const doc = new Ctor({ orientation: "landscape", unit: "mm", format: "a4", compress: true });
+    const list = pduPdfRacks(racks), M = 10, BOTTOM = 198;
+    const lvOf = (c, dflt) => c.overloadA && c.currentA >= c.overloadA ? PDFC.bad : c.nearOverloadA && c.currentA >= c.nearOverloadA ? PDFC.warn : dflt;
+    const curve = (x0, y0, x1, y1) => { const mx = (x0 + x1) / 2; doc.lines([[mx - x0, 0, mx - x0, y1 - y0, x1 - x0, y1 - y0]], x0, y0, [1, 1], "S", false); };
+    let first = true;
+    list.forEach((it) => {
+        const r = it.rack, t = pduRackTotals(r), hl = pduWorstHealth(r.feeds);
+        for (let i = 0; i === 0 || i < it.feeds.length; i += 2) {
+            const pair = it.feeds.slice(i, i + 2);
+            if (!first) doc.addPage(); first = false;
+            pduPdfPage(doc, "Circuit report: Rack " + r.rackNo + (i ? " (continued)" : ""), meta.scope + "   |   " + meta.when);
+            let y = 22;
+            const edge = hl.level === "critical" ? PDFC.bad : hl.level === "warning" ? PDFC.warn : null, hc = hl.level === "critical" ? PDFC.bad : hl.level === "warning" ? PDFC.warn : hl.level === "ok" ? PDFC.ok : PDFC.faint;
+            pduPdfTile(doc, M, y, 277, 13, edge);
+            doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.setTextColor(...PDFC.text); doc.text("Rack " + r.rackNo, M + 6, y + 8.3);
+            doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(...PDFC.mute); doc.text([r.site, r.zone, pduRedundancy(r)].filter(Boolean).join("  |  "), M + 40, y + 8);
+            pduPdfGlow(doc, 0.35, () => { doc.setFillColor(...hc); doc.roundedRect(M + 150, y + 4.5, 4, 4, 1.1, 1.1, "F"); }); doc.setFillColor(...hc); doc.roundedRect(M + 151, y + 5.5, 2, 2, 0.6, 0.6, "F");
+            doc.setFont("helvetica", "bold"); doc.setFontSize(8.5); doc.setTextColor(...hc); doc.text(hl.label, M + 157, y + 8);
+            doc.setTextColor(...PDFC.text); doc.text(pdfNum(t.totalKw) + " / " + pdfNum(t.ratedKw) + " kW  (" + Math.round(t.usedPct) + "%)", M + 271, y + 8, { align: "right" });
+            y += 17;
+            const n = pair.length, avail = (BOTTOM - y - (n - 1) * 4) / Math.max(n, 1);
+            pair.forEach((x) => {
+                const f = x.f, side = pdfIsB(f) ? "B" : "A", sc = side === "B" ? PDFC.violet : PDFC.blue, nb = x.banks.length, np = x.phases.length, used = f.maxLoadKw ? Math.round((f.lastPowerKw || 0) / f.maxLoadKw * 100) : 0;
+                const pitch = Math.min(8.6, (avail - 18) / Math.max(nb, 3)), ch = (nb || np) ? 18 + Math.max(nb, 3) * pitch : 28;
+                pduPdfTile(doc, M, y, 277, ch, null);
+                doc.setFillColor(...sc); doc.roundedRect(M + 6, y + 4, 5.5, 5.5, 1.3, 1.3, "F"); doc.setFont("helvetica", "bold"); doc.setFontSize(7.5); doc.setTextColor(13, 21, 38); doc.text(side, M + 8.75, y + 8, { align: "center" });
+                doc.setFontSize(9); doc.setTextColor(...PDFC.text); doc.text(String(f.feedLabel || "Feed " + side), M + 14, y + 8.2);
+                doc.setFont("helvetica", "normal"); doc.setFontSize(6.8); doc.setTextColor(...PDFC.mute); doc.text((f.pduName || "-") + "  |  ID " + (f.displayId != null ? f.displayId : (f.chainUnit || 1)) + "  |  " + (f.ipAddress || "-"), M + 14, y + 12.2);
+                const by = y + 16, bodyH = Math.max(nb, 3) * pitch, midY = by + bodyH / 2, nh = Math.min(34, bodyH), ny = midY - nh / 2;
+                doc.setFillColor(...PDFC.tile2); doc.setDrawColor(...sc); doc.setLineWidth(0.45); doc.roundedRect(M + 8, ny, 44, nh, 3, 3, "FD");
+                doc.setFont("helvetica", "bold"); doc.setFontSize(11.5); doc.setTextColor(...pdfLvCol(used)); doc.text(pdfNum(f.lastPowerKw, 1) + " kW", M + 30, ny + nh / 2 + 0.5, { align: "center" });
+                doc.setFont("helvetica", "normal"); doc.setFontSize(6.4); doc.setTextColor(...PDFC.mute); doc.text("PDU total", M + 30, ny + nh / 2 + 4.6, { align: "center" }); doc.text("of " + pdfNum(f.maxLoadKw, 1) + " kW  |  " + used + "%", M + 30, ny + nh / 2 + 8, { align: "center" });
+                if (!nb && !np) { doc.setFont("helvetica", "italic"); doc.setFontSize(8); doc.setTextColor(...PDFC.faint); doc.text(x.sameAs ? "Same circuit readings as " + x.sameAs + " (shared host) - shown once." : (x.hasCircuits ? "No bank or phase listed by this PDU." : "Circuit details not read for this PDU (APC Rack PDU 2G only)."), M + 62, y + ch / 2 + 1.5); y += ch + 4; return; }
+                const phh = Math.min(10, (bodyH - 6) / 3), pg = 3, phTop = midY - (np * phh + (np - 1) * pg) / 2, phMid = (k) => phTop + k * (phh + pg) + phh / 2;
+                if (np) { doc.setFont("helvetica", "bold"); doc.setFontSize(6); doc.setTextColor(...PDFC.faint); doc.text("PHASES", M + 84, phTop - 1.8); }
+                if (nb) { doc.setFont("helvetica", "bold"); doc.setFontSize(6); doc.setTextColor(...PDFC.faint); doc.text("BANKS", M + 146, by - 1.6); }
+                // PDU to phases, then each bank hangs from its phase (banks are grouped evenly across the phases)
+                x.phases.slice(0, 3).forEach((c, k) => { doc.setDrawColor(...sc); doc.setLineWidth(0.4); curve(M + 52, midY, M + 84, phMid(k)); });
+                x.banks.slice(0, 16).forEach((c, k) => { const mid = by + k * pitch + pitch / 2, pk = np ? Math.min(np - 1, Math.floor(k * np / nb)) : -1; doc.setDrawColor(...sc); doc.setLineWidth(0.3); if (pk >= 0) curve(M + 122, phMid(pk), M + 144, mid); else curve(M + 52, midY, M + 144, mid); });
+                x.phases.slice(0, 3).forEach((c, k) => {
+                    const py = phTop + k * (phh + pg), lv = lvOf(c, [PDFC.blue, PDFC.violet, PDFC.teal][k]), lim = c.overloadA || Math.max(c.currentA * 1.25, 1);
+                    doc.setFillColor(...PDFC.tile2); doc.setDrawColor(...(lv === PDFC.bad || lv === PDFC.warn ? lv : PDFC.line)); doc.setLineWidth(0.3); doc.roundedRect(M + 84, py, 38, phh, 2.2, 2.2, "FD");
+                    doc.setFont("helvetica", "bold"); doc.setFontSize(6.4); doc.setTextColor(...PDFC.mute); doc.text("L" + c.number, M + 87, py + phh / 2 + 0.9); doc.setFontSize(8.6); doc.setTextColor(...PDFC.text); doc.text(pdfNum(c.currentA, 1) + " A", M + 120, py + phh / 2 + 1.1, { align: "right" });
+                    pduPdfBar(doc, M + 87, py + phh - 2.1, 32, 1.1, Math.min(100, c.currentA / lim * 100), lv);
+                });
+                x.banks.slice(0, 16).forEach((c, k) => {
+                    const mid = by + k * pitch + pitch / 2, lim = c.overloadA || Math.max(c.currentA * 1.25, 1), lv = lvOf(c, PDFC.ok);
+                    doc.setFont("helvetica", "bold"); doc.setFontSize(6.8); doc.setTextColor(...PDFC.mute); doc.text("B" + c.number, M + 146, mid + 0.9);
+                    pduPdfBar(doc, M + 158, mid - 1.2, 88, 2.4, Math.min(100, c.currentA / lim * 100), lv);
+                    doc.setFontSize(8.6); doc.setTextColor(...(lv === PDFC.ok ? PDFC.text : lv)); doc.text(pdfNum(c.currentA, 1) + " A", M + 271, mid + 1, { align: "right" });
+                });
+                y += ch + 4;
+            });
+            pduPdfLegend(doc, M, Math.min(y + 3, 203));
+        }
+    });
+    if (!list.length) { pduPdfPage(doc, "Circuit report", meta.scope + "   |   " + meta.when); doc.setFont("helvetica", "normal"); doc.setFontSize(10); doc.setTextColor(...PDFC.pmute); doc.text("No racks match the filters on the page.", M, 30); }
+    pduPdfFooters(doc);
+    return doc;
+}
+function buildPduZonePdf(Ctor, racks, meta) {
+    const doc = new Ctor({ orientation: "landscape", unit: "mm", format: "a4", compress: true });
+    const M = 10, BOTTOM = 200, seen = new Set();
+    const rows = (racks || []).map((r) => {
+        const feeds = (r.feeds || []).filter((f) => { const k = f.id != null ? "id:" + f.id : [f.ipAddress, f.chainUnit || 0, f.feedLabel, f.rackNo].join("|"); if (seen.has(k)) return false; seen.add(k); return true; });
+        const sum = (arr, k) => arr.reduce((n, f) => n + (f[k] || 0), 0), fa = feeds.filter((f) => !pdfIsB(f)), fb = feeds.filter(pdfIsB);
+        const A = sum(fa, "lastPowerKw"), B = sum(fb, "lastPowerKw"), ra = sum(fa, "maxLoadKw"), rb = sum(fb, "maxLoadKw"), kw = A + B, rated = ra + rb;
+        return { site: r.site, zone: r.zone, rackNo: r.rackNo, A, B, ra, rb, hasA: fa.length > 0, hasB: fb.length > 0, kw, rated, pct: rated > 0 ? Math.round(kw / rated * 100) : 0, health: pduWorstHealth(feeds), red: pduRedundancy({ feeds }) };
+    });
+    const zm = new Map(); rows.forEach((r) => { const k = r.site + "|" + r.zone; if (!zm.has(k)) zm.set(k, { site: r.site, zone: r.zone, racks: [] }); zm.get(k).racks.push(r); });
+    const zl = Array.from(zm.values()).map((z) => { const kw = z.racks.reduce((n, r) => n + r.kw, 0), rated = z.racks.reduce((n, r) => n + r.rated, 0), A = z.racks.reduce((n, r) => n + r.A, 0), B = z.racks.reduce((n, r) => n + r.B, 0), ra = z.racks.reduce((n, r) => n + r.ra, 0), rb = z.racks.reduce((n, r) => n + r.rb, 0); return { ...z, kw, rated, A, B, ra, rb, hasA: ra > 0, hasB: rb > 0, pct: rated > 0 ? Math.round(kw / rated * 100) : 0, hot: z.racks.filter((r) => r.pct >= 70).length, top: z.racks.slice().sort((a, b) => b.pct - a.pct)[0] }; }).sort((a, b) => (a.site + a.zone).localeCompare(b.site + b.zone));
+    const frame = (t, dark) => pduPdfPage(doc, t, meta.scope + "   |   " + meta.when, dark);
+    const totKw = zl.reduce((n, z) => n + z.kw, 0), totRated = zl.reduce((n, z) => n + z.rated, 0), hotRacks = rows.filter((r) => r.pct >= 70).length;
+    const totBar = (x, y, w, pct) => { pduPdfBar(doc, x, y, w, 2.8, pct, pdfLvCol(pct)); pduPdfTicks(doc, x, y, w, 2.8); };
+    // Page 1: zone summary, one dark tile with a gauge per zone
+    frame("Zone-wise rack power reading", true); let y = 22;
+    pduPdfKpis(doc, y, [["Zones", String(zl.length)], ["Racks", String(rows.length)], ["Total load", pdfNum(totKw, 1) + " kW"], ["Rated capacity", pdfNum(totRated, 1) + " kW"], ["Racks at 70% or more", String(hotRacks), hotRacks ? PDFC.warn : PDFC.ok]], true); y += 20;
+    pduPdfLegend(doc, M, y, true); y += 5;
+    const cw = (277 - 2 * 5) / 3, ch = 58; let col = 0;
+    const split = (x, yy, w, A, B) => { const tot = (A + B) || 1; doc.setFillColor(...PDFC.blue); doc.roundedRect(x, yy, Math.max(0.8, w * A / tot), 2.4, 1.2, 1.2, "F"); doc.setFillColor(...PDFC.violet); if (B > 0) doc.roundedRect(x + w * A / tot, yy, Math.max(0.8, w * B / tot), 2.4, 1.2, 1.2, "F"); };
+    zl.forEach((z) => {
+        if (y + ch > BOTTOM) { doc.addPage(); frame("Zone-wise rack power reading", true); y = 24; }
+        const x = M + col * (cw + 5), edge = z.pct >= 85 ? PDFC.bad : z.pct >= 70 ? PDFC.warn : null;
+        pduPdfTile(doc, x, y, cw, ch, edge, true);
+        doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(...PDFC.text); doc.text(z.zone, x + 5, y + 8); doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor(...PDFC.mute); doc.text(z.site, x + 5, y + 12.5);
+        pduPdfGauge(doc, x + cw / 2, y + 30, 13, z.pct, 3.2);
+        doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(...PDFC.text); doc.text(pdfNum(z.kw, 1) + " of " + pdfNum(z.rated, 1) + " kW", x + cw / 2, y + 47.5, { align: "center" });
+        split(x + 6, y + 50, cw - 12, z.A, z.B);
+        doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.setTextColor(...PDFC.mute); doc.text(z.racks.length + " racks  |  " + z.hot + " at 70%+", x + cw / 2, y + 56, { align: "center" });
+        if (++col === 3) { col = 0; y += ch + 5; }
+    });
+    // One page (or more) per zone: a bento tile for every rack
+    zl.forEach((z) => {
+        const sorted = z.racks.slice().sort((a, b) => b.pct - a.pct || b.kw - a.kw); let i = 0, first = true;
+        while (i < sorted.length) {
+            doc.addPage(); frame("Zone " + z.zone); let yy = 22;
+            if (first) {
+                pduPdfTile(doc, M, yy, 277, 32, z.pct >= 85 ? PDFC.bad : z.pct >= 70 ? PDFC.warn : null);
+                doc.setFont("helvetica", "bold"); doc.setFontSize(15); doc.setTextColor(...PDFC.text); doc.text(z.zone, M + 6, yy + 13); doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(...PDFC.mute); doc.text(z.site, M + 6, yy + 19);
+                doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.setTextColor(...pdfLvCol(z.pct)); doc.text(z.pct + "% of rated", M + 6, yy + 27);
+                doc.setFontSize(9); doc.setTextColor(...PDFC.text); doc.text(pdfNum(z.kw, 1) + " of " + pdfNum(z.rated, 1) + " kW", M + 62, yy + 9); totBar(M + 62, yy + 11, 100, z.pct);
+                pduPdfFeedBar(doc, M + 62, yy + 17.5, 100, "A", z.A, z.hasA ? z.ra : null); pduPdfFeedBar(doc, M + 62, yy + 24, 100, "B", z.B, z.hasB ? z.rb : null);
+                [["Racks", String(z.racks.length)], ["At 70% or more", String(z.hot), z.hot ? PDFC.warn : PDFC.ok], ["Busiest rack", z.top ? z.top.rackNo + " (" + z.top.pct + "%)" : "-"]].forEach((k, j) => { const kx = M + 178 + j * 32; doc.setFont("helvetica", "bold"); doc.setFontSize(6.8); doc.setTextColor(...PDFC.mute); doc.text(k[0].toUpperCase(), kx, yy + 11); doc.setFontSize(11); doc.setTextColor(...(k[2] || PDFC.text)); doc.text(k[1], kx, yy + 19); });
+                pduPdfLegend(doc, M, yy + 38); yy += 41; first = false;
+            } else { pduPdfLegend(doc, M, yy + 3); yy += 7; }
+            const tw = (277 - 3 * 3.5) / 4, th = 27.5;
+            let c = 0;
+            for (; i < sorted.length && yy + th <= BOTTOM; ) {
+                const r = sorted[i], x = M + c * (tw + 3.5), edge = r.pct >= 85 ? PDFC.bad : r.pct >= 70 ? PDFC.warn : null;
+                pduPdfTile(doc, x, yy, tw, th, edge);
+                doc.setFont("helvetica", "bold"); doc.setFontSize(9.5); doc.setTextColor(...PDFC.text); doc.text(String(r.rackNo), x + 4, yy + 6.5);
+                const hc = r.health.level === "critical" ? PDFC.bad : r.health.level === "warning" ? PDFC.warn : r.health.level === "ok" ? PDFC.ok : PDFC.faint;
+                pduPdfGlow(doc, 0.35, () => { doc.setFillColor(...hc); doc.roundedRect(x + tw - 6.2, yy + 3.4, 4, 4, 1.1, 1.1, "F"); }); doc.setFillColor(...hc); doc.roundedRect(x + tw - 5.2, yy + 4.4, 2, 2, 0.6, 0.6, "F");
+                doc.setFontSize(11.5); doc.setTextColor(...pdfLvCol(r.pct)); doc.text(r.pct + "%", x + tw - 9, yy + 7, { align: "right" });
+                doc.setFont("helvetica", "normal"); doc.setFontSize(6.8); doc.setTextColor(...PDFC.mute); doc.text(pdfNum(r.kw, 1) + " of " + pdfNum(r.rated, 1) + " kW", x + 4, yy + 11.2);
+                pduPdfFeedBar(doc, x + 4, yy + 14.5, tw - 8, "A", r.A, r.hasA ? r.ra : null); pduPdfFeedBar(doc, x + 4, yy + 20.5, tw - 8, "B", r.B, r.hasB ? r.rb : null);
+                i++; if (++c === 4) { c = 0; yy += th + 3.5; }
+            }
+        }
+    });
+    pduPdfFooters(doc);
+    return doc;
+}
+async function exportPduPdf(kind, racks, meta) {
+    await window.__loadLib("jspdf");
+    const Ctor = window.jspdf && window.jspdf.jsPDF;
+    if (!Ctor) throw new Error("PDF library (jsPDF) is not loaded. Keep libs/jspdf.umd.min.js beside index.html, then try again.");
+    const doc = kind === "zone" ? buildPduZonePdf(Ctor, racks, meta) : buildPduRackPdf(Ctor, racks, meta);
+    doc.save((kind === "zone" ? "power-location-report-" : "power-rack-circuits-") + meta.stamp + ".pdf");
+}
 function PduPage({ allowedSites = [], canEdit = false }) {
     const [flat, setFlat] = useState([]);
     const [summary, setSummary] = useState(null);
@@ -17131,6 +17363,8 @@ function PduPage({ allowedSites = [], canEdit = false }) {
     const [deleting, setDeleting] = useState(false);
     const [syncing, setSyncing] = useState(false);
     const [syncMsg, setSyncMsg] = useState(null);
+    const [pdfMenu, setPdfMenu] = useState(false);
+    const [pdfBusy, setPdfBusy] = useState(false);
     const [sparkRows, setSparkRows] = useState([]);
     const sparkRef = useRef(null);
     const load = async () => {
@@ -17165,6 +17399,15 @@ function PduPage({ allowedSites = [], canEdit = false }) {
         setSyncing(false);
     };
     const runExport = () => exportPduWorkbook(flat, `pdu-inventory-${localDateStr(today)}.xlsx`);
+    const runPdf = async (kind, only) => {
+        setPdfMenu(false); setPdfBusy(true);
+        try {
+            const filt = countListColumnFilters(columnFilters) > 0;
+            const useR = only || filteredRacks; await exportPduPdf(kind, useR, { stamp: localDateStr(today) + (only && only.length === 1 ? "-" + only[0].rackNo : ""), when: "Generated " + new Date().toLocaleString(), scope: (only ? "Rack " + only[0].rackNo : filt ? "Filtered view" : "All racks") + " - " + useR.length + (useR.length === 1 ? " rack" : " racks") });
+            setSyncMsg("PDF saved.");
+        } catch (e) { setSyncMsg("PDF failed: " + e.message); }
+        setPdfBusy(false);
+    };
     const confirmDelete = async () => {
         if (!deleteConfirm) return;
         setDeleting(true);
@@ -17184,6 +17427,12 @@ function PduPage({ allowedSites = [], canEdit = false }) {
                 React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: "#020617" } }, "Power Capacity Monitoring")),
             React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
                 React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 6 }, onClick: runExport, title: "Export every PDU, all columns" }, React.createElement(Download, { s: 13 }), " Export"),
+                React.createElement("div", { style: { position: "relative" } },
+                    React.createElement("button", { className: "neu-btn-secondary", disabled: pdfBusy, "aria-haspopup": "menu", "aria-expanded": pdfMenu, style: { fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 6 }, onClick: () => setPdfMenu(!pdfMenu), title: "Download a PDF report of the racks shown below" }, React.createElement(Download, { s: 13 }), pdfBusy ? " Building PDF…" : " Export PDF"),
+                    pdfMenu && React.createElement(React.Fragment, null,
+                        React.createElement("div", { style: { position: "fixed", inset: 0, zIndex: 40 }, onClick: () => setPdfMenu(false) }),
+                        React.createElement("div", { role: "menu", className: "neu-card", style: { position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 41, width: 300, padding: 8, display: "flex", flexDirection: "column", gap: 4 } },
+                            [["zone", "Location power report", "Zone summary first, then the power of every rack with its Feed A and Feed B load."], ["rack", "Rack circuit report", "Phase and bank breaker details, one page per rack. Filter to one rack, or use the button inside a rack row."]].map((o) => React.createElement("button", { key: o[0], role: "menuitem", onClick: () => runPdf(o[0]), style: { all: "unset", cursor: "pointer", padding: "9px 11px", borderRadius: 10, display: "block" }, onMouseEnter: (e) => { e.currentTarget.style.background = "rgba(49,87,238,.08)"; }, onMouseLeave: (e) => { e.currentTarget.style.background = "transparent"; } }, React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 800, color: "#17345d" } }, o[1]), React.createElement("div", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748b", marginTop: 2, lineHeight: 1.35 } }, o[2])))))),
                 canEdit && React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 6 }, onClick: () => setImportOpen(true) }, React.createElement(Upload, { s: 13 }), " Import"),
                 canEdit && React.createElement("button", { className: "neu-btn-secondary", style: { fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 6 }, onClick: () => setDiscoveryOpen(true), title: "Scan an IP range (PDU_DISCOVERY_RANGES in .env) for PDUs" }, React.createElement(Search, { s: 13 }), " Discover"),
                 canEdit && React.createElement("button", { className: `neu-btn-secondary pdu-sync-btn${syncing ? " syncing" : ""}`, disabled: syncing, onClick: runSync, style: { fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 6 } }, React.createElement(RefreshCw, { s: 13 }), syncing ? "Syncing…" : "Sync All PDUs Now"),
@@ -17261,6 +17510,7 @@ function PduPage({ allowedSites = [], canEdit = false }) {
                                     React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)", fontSize: 11, color: anyOff ? "#DC2626" : "#94A3B8", fontWeight: anyOff ? 700 : 500 } }, anyOff ? "1 feed unreachable" : (rack.feeds[0] && rack.feeds[0].lastReadingAt ? new Date(rack.feeds[0].lastReadingAt).toLocaleString() : "Not yet polled")),
                                     React.createElement("td", { style: { padding: "12px 14px", borderBottom: "1px solid rgba(148,163,184,.14)" } }, React.createElement("span", { style: { display: "inline-block", transform: open ? "rotate(90deg)" : "none", transition: "transform .2s ease", color: "#3157EE" } }, "›"))),
                                 open && React.createElement("tr", null, React.createElement("td", { colSpan: 11, style: { padding: "0 14px 18px 20px", borderBottom: "1px solid rgba(148,163,184,.14)" } },
+                                    React.createElement("div", { style: { display: "flex", justifyContent: "flex-end" } }, React.createElement("button", { className: "neu-btn-secondary", disabled: pdfBusy, style: { fontSize: 11.5, display: "inline-flex", alignItems: "center", gap: 6 }, onClick: () => runPdf("rack", [rack]), title: "Download the phase and bank circuit details of this rack" }, React.createElement(Download, { s: 12 }), " Circuit PDF for this rack")),
                                     React.createElement("div", { style: { display: "grid", gridTemplateColumns: rack.feeds.length > 1 ? "1fr 1fr" : "1fr", gap: 10, marginTop: 6 } }, rack.feeds.map((f) => React.createElement(PduFeedCard, { key: f.id, f: f, canEdit: canEdit, onDetails: () => setDetailsFor(f), onEdit: () => setEditing(f), onDelete: () => setDeleteConfirm(f) }))))));
                         })))))),
         detailsFor && React.createElement(PduDetailsModal, { pdu: detailsFor, onClose: () => setDetailsFor(null) }),
