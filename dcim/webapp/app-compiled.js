@@ -17205,6 +17205,13 @@ function pduPdfGauge(doc, cx, cy, r, pct, lw) {
     [70, 85].forEach((m) => { const a = (135 + 2.7 * m) * Math.PI / 180; doc.setDrawColor(...(m === 85 ? PDFC.bad : PDFC.warn)); doc.setLineWidth(0.5); doc.line(cx + (r - lw) * Math.cos(a), cy + (r - lw) * Math.sin(a), cx + (r + lw) * Math.cos(a), cy + (r + lw) * Math.sin(a)); });
     doc.setFont("helvetica", "bold"); doc.setFontSize(r * 1.05); doc.setTextColor(...PDFC.text); doc.text(Math.round(pct) + "%", cx, cy + r * 0.2, { align: "center" });
 }
+function pduPdfGaugeLight(doc, cx, cy, r, pct, lw) {
+    const col = pdfSLv(pct);
+    pduPdfArc(doc, cx, cy, r, 135, 405, [214, 222, 236], lw, false);
+    if (pct > 0.5) pduPdfArc(doc, cx, cy, r, 135, 135 + 2.7 * Math.min(100, pct), col, lw, true);
+    [70, 85].forEach((m) => { const a = (135 + 2.7 * m) * Math.PI / 180; doc.setDrawColor(...(m === 85 ? PDFS.bad : PDFS.warn)); doc.setLineWidth(0.5); doc.line(cx + (r - lw) * Math.cos(a), cy + (r - lw) * Math.sin(a), cx + (r + lw) * Math.cos(a), cy + (r + lw) * Math.sin(a)); });
+    doc.setFont("helvetica", "bold"); doc.setFontSize(r * 1.05); doc.setTextColor(...PDFS.ink); doc.text(Math.round(pct) + "%", cx, cy + r * 0.2, { align: "center" });
+}
 function pduPdfBar(doc, x, y, w, h, pct, col) {
     doc.setFillColor(...PDFC.track); doc.roundedRect(x, y, w, h, h / 2, h / 2, "F");
     const fw = Math.max(0, Math.min(100, pct)) / 100 * w; if (fw > 0.3) { pduPdfGlow(doc, 0.3, () => { doc.setFillColor(...col); doc.roundedRect(x - 0.2, y - 0.5, Math.max(fw, h) + 0.4, h + 1, h / 2, h / 2, "F"); }); doc.setFillColor(...col); doc.roundedRect(x, y, Math.max(fw, h), h, h / 2, h / 2, "F"); }
@@ -17302,52 +17309,144 @@ function buildPduRackPdf(Ctor, racks, meta) {
     pduPdfFooters(doc);
     return doc;
 }
+const PDU_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function pduTrendRange(now) {
+    const d0 = new Date(now.getFullYear(), now.getMonth() - 2, 1), iso = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+    return { from: iso(d0), to: iso(now) };
+}
+// Last three calendar months (this month up to today) of one zone's daily readings.
+function pduTrendSummary(rows, now) {
+    const months = [0, 1, 2].map((i) => { const d = new Date(now.getFullYear(), now.getMonth() - 2 + i, 1); return { y: d.getFullYear(), m: d.getMonth(), days: [], label: PDU_MON[d.getMonth()] + (i === 2 ? " (to " + now.getDate() + ")" : "") }; });
+    (rows || []).forEach((r) => { const y = +String(r.date).slice(0, 4), m = +String(r.date).slice(5, 7) - 1, k = months.find((x) => x.y === y && x.m === m); if (k) k.days.push(r); });
+    months.forEach((k) => { const n = k.days.length; k.avg = n ? k.days.reduce((s, r) => s + r.avgKw, 0) / n : null; k.peak = n ? Math.max(...k.days.map((r) => r.peakKw)) : null; k.kwh = n ? k.days.reduce((s, r) => s + (r.energyKwh || r.avgKw * 24), 0) : null; });
+    return months;
+}
+function pduPdfTrendChart(doc, x, y, w, h, months) {
+    const days = []; months.forEach((m) => m.days.forEach((r) => days.push({ avg: r.avgKw, peak: r.peakKw })));
+    doc.setFont("helvetica", "normal");
+    if (days.length < 2) { doc.setFont("helvetica", "italic"); doc.setFontSize(8); doc.setTextColor(...PDFS.mute); doc.text("No power history recorded for these months yet.", x + w / 2, y + h / 2, { align: "center" }); return; }
+    const L = 9, B = 4.5, pw = w - L, ph = h - B, n = days.length, mx = Math.max(...days.map((d) => d.peak), ...days.map((d) => d.avg), 1) * 1.08;
+    const px = (i) => x + L + pw * i / (n - 1), py = (v) => y + ph * (1 - v / mx);
+    doc.setLineWidth(0.15); doc.setDrawColor(213, 221, 234); doc.setFontSize(6.5); doc.setTextColor(...PDFS.mute);
+    for (let i = 0; i <= 3; i++) { const v = mx * i / 3; doc.line(x + L, py(v), x + w, py(v)); doc.text(String(Math.round(v)), x + L - 1.2, py(v) + 0.8, { align: "right" }); }
+    const rel = (arr) => arr.slice(1).map((p, i) => [p[0] - arr[i][0], p[1] - arr[i][1]]);
+    const avgPts = days.map((d, i) => [px(i), py(d.avg)]), poly = [[px(0), py(0)], ...avgPts, [px(n - 1), py(0)]];
+    doc.setFillColor(214, 223, 250); doc.lines(rel(poly), poly[0][0], poly[0][1], [1, 1], "F", true);
+    const peakPts = days.map((d, i) => [px(i), py(d.peak)]);
+    doc.setDrawColor(...PDFS.warn); doc.setLineWidth(0.3); doc.lines(rel(peakPts), peakPts[0][0], peakPts[0][1], [1, 1], "S", false);
+    doc.setDrawColor(...PDFS.a); doc.setLineWidth(0.45); doc.lines(rel(avgPts), avgPts[0][0], avgPts[0][1], [1, 1], "S", false);
+    let s = 0;
+    months.forEach((m) => {
+        const c = m.days.length; if (!c) return;
+        if (s > 0) { doc.setDrawColor(184, 196, 216); doc.setLineWidth(0.2); if (doc.setLineDashPattern) doc.setLineDashPattern([0.8, 0.8], 0); doc.line(px(s), y, px(s), y + ph); if (doc.setLineDashPattern) doc.setLineDashPattern([], 0); }
+        doc.setFont("helvetica", "bold"); doc.setFontSize(7); doc.setTextColor(71, 85, 105); doc.text(m.label.split(" (")[0], (px(s) + px(s + c - 1)) / 2, y + h - 0.6, { align: "center" }); s += c;
+    });
+}
+function pduPdfMonthTable(doc, x, y, w, months) {
+    const cols = [[0, "Month", "l"], [0.31, "Avg kW", "r"], [0.52, "Peak kW", "r"], [0.77, "Energy kWh", "r"], [1, "Change", "r"]];
+    const cx = (c) => c[2] === "l" ? x : x + w * c[0];
+    doc.setFont("helvetica", "bold"); doc.setFontSize(6.5); doc.setTextColor(...PDFS.mute);
+    cols.forEach((c) => doc.text(c[1], cx(c), y + 3, c[2] === "r" ? { align: "right" } : undefined));
+    doc.setDrawColor(213, 221, 234); doc.setLineWidth(0.15); doc.line(x, y + 4.6, x + w, y + 4.6);
+    months.forEach((m, i) => {
+        const yy = y + 10.6 + i * 6.2, prev = i ? months[i - 1].avg : null, ch = m.avg != null && prev ? (m.avg / prev - 1) * 100 : null;
+        doc.setFont("helvetica", "bold"); doc.setFontSize(7); doc.setTextColor(...PDFS.ink); doc.text(m.label, x, yy);
+        const v = [m.avg != null ? pdfNum(m.avg, 1) : "-", m.peak != null ? pdfNum(m.peak, 1) : "-", m.kwh != null ? Math.round(m.kwh).toLocaleString("en-US") : "-"];
+        doc.text(v[0], x + w * 0.31, yy, { align: "right" }); doc.text(v[1], x + w * 0.52, yy, { align: "right" }); doc.text(v[2], x + w * 0.77, yy, { align: "right" });
+        doc.setTextColor(...(ch == null ? PDFS.mute : ch > 0 ? PDFS.warn : PDFS.ok)); doc.text(ch == null ? "-" : (ch > 0 ? "+" : "") + ch.toFixed(1) + "%", x + w, yy, { align: "right" });
+        if (i < 2) { doc.setDrawColor(226, 232, 242); doc.line(x, yy + 2, x + w, yy + 2); }
+    });
+}
+function pduPdfRackTile(doc, r, x, y, w, h) {
+    const k = h / 24, f = Math.min(k, 1.3), edge = r.pct >= 85 ? PDFS.bad : r.pct >= 70 ? PDFS.warn : null;
+    pduPdfSoftTile(doc, x, y, w, h, edge);
+    doc.setFont("helvetica", "bold"); doc.setFontSize(7 * f); doc.setTextColor(71, 85, 105); doc.text(String(r.rackNo), x + 3.2, y + 4.8 * k);
+    doc.setFontSize(13.5 * f); doc.setTextColor(...pdfSLv(r.pct)); doc.text(r.pct + "%", x + 3.2, y + 11.4 * k); const pw = doc.getTextWidth(r.pct + "%");
+    doc.setFontSize(6.6 * f); doc.setTextColor(...PDFS.mute); doc.text(pdfNum(r.kw, 1) + " kW", x + 3.2 + pw + 2, y + 11.2 * k);
+    pduPdfSoftFeed(doc, x + 3.2, y + 14 * k, w - 6.4, "A", r.A, r.hasA ? r.ra : null); pduPdfSoftFeed(doc, x + 3.2, y + 19 * k, w - 6.4, "B", r.B, r.hasB ? r.rb : null);
+}
+function pduPdfTopCard(doc, r, i, x, y, w, h, label) {
+    const edge = r.pct >= 85 ? PDFS.bad : r.pct >= 70 ? PDFS.warn : null;
+    pduPdfSoftTile(doc, x, y, w, h, edge);
+    doc.setFillColor(...PDFS.ink); doc.circle(x + 4.4, y + 4.6, 2.1, "F"); doc.setFont("helvetica", "bold"); doc.setFontSize(6.5); doc.setTextColor(255, 255, 255); doc.text(String(i + 1), x + 4.4, y + 5.4, { align: "center" });
+    doc.setFontSize(7.2); doc.setTextColor(71, 85, 105); doc.text(String(label || r.rackNo), x + 8.4, y + 5.3);
+    doc.setFontSize(12); doc.setTextColor(...pdfSLv(r.pct)); doc.text(r.pct + "%", x + w - 3.2, y + 6, { align: "right" });
+    doc.setFont("helvetica", "bold"); doc.setFontSize(6.2); doc.setTextColor(...PDFS.mute); doc.text(pdfNum(r.kw, 1) + " of " + pdfNum(r.rated, 1) + " kW", x + w - 3.2, y + 9.8, { align: "right" });
+    pduPdfSoftFeed(doc, x + 3.2, y + 11, w - 6.4, "A", r.A, r.hasA ? r.ra : null); pduPdfSoftFeed(doc, x + 3.2, y + 16, w - 6.4, "B", r.B, r.hasB ? r.rb : null);
+}
 function buildPduZonePdf(Ctor, racks, meta) {
     const doc = new Ctor({ orientation: "landscape", unit: "mm", format: "a4", compress: true });
-    const M = 10, BOTTOM = 200, model = pduReportModel(racks);
+    const M = 10, BOTTOM = 198, GAP = 3, model = pduReportModel(racks), now = meta.now || new Date();
     const frame = (t, dark) => pduPdfPage(doc, t, meta.scope + "   |   " + meta.when, dark);
     let firstPage = true; const newPage = () => { if (!firstPage) doc.addPage(); firstPage = false; };
-    // Location summary: one dark page per location, KPI tiles and a gauge card for every zone (same size cards)
     model.sites.forEach((S) => {
-        const cw = (277 - 3 * 5) / 4, ch = 58; let col = 0, y = 0;
-        const open = (cont) => { newPage(); frame(S.site + "  |  Zone-wise rack power reading" + (cont ? " (continued)" : ""), true); y = 22; if (!cont) { pduPdfKpis(doc, y, [["Zones", String(S.zones.length)], ["Racks", String(S.n)], ["Total load", pdfNum(S.kw, 1) + " kW"], ["Rated capacity", pdfNum(S.rated, 1) + " kW"], ["Racks at 70% or more", String(S.hot), S.hot ? PDFC.warn : PDFC.ok]], true); y += 20; pduPdfLegend(doc, M, y, true); y += 5; } else y = 24; col = 0; };
-        open(false);
-        S.zones.forEach((z) => {
-            if (y + ch > BOTTOM) open(true);
-            const x = M + col * (cw + 5), edge = z.pct >= 85 ? PDFC.bad : z.pct >= 70 ? PDFC.warn : null, tt = (z.A + z.B) || 1;
-            pduPdfTile(doc, x, y, cw, ch, edge, true);
-            doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(...PDFC.text); doc.text(z.zone, x + 5, y + 8); doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor(...PDFC.mute); doc.text(z.site, x + 5, y + 12.5);
-            pduPdfGauge(doc, x + cw / 2, y + 30, 13, z.pct, 3.2);
-            doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(...PDFC.text); doc.text(pdfNum(z.kw, 1) + " of " + pdfNum(z.rated, 1) + " kW", x + cw / 2, y + 47.5, { align: "center" });
-            doc.setFillColor(...PDFC.blue); doc.roundedRect(x + 6, y + 50, Math.max(0.8, (cw - 12) * z.A / tt), 2.4, 1.2, 1.2, "F"); if (z.B > 0) { doc.setFillColor(...PDFC.violet); doc.roundedRect(x + 6 + (cw - 12) * z.A / tt, y + 50, Math.max(0.8, (cw - 12) * z.B / tt), 2.4, 1.2, 1.2, "F"); }
-            doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.setTextColor(...PDFC.mute); doc.text(z.n + " racks  |  " + z.hot + " at 70%+", x + cw / 2, y + 56, { align: "center" });
-            if (++col === 4) { col = 0; y += ch + 5; }
-        });
-    });
-    // One light page (or more) per zone: soft zone header and a same-size tile for every rack with Feed A and Feed B
-    model.zones.forEach((z) => {
-        const sorted = z.racks.slice().sort((a, b) => b.pct - a.pct || b.kw - a.kw); let i = 0, firstOfZone = true;
-        while (i < sorted.length) {
-            newPage(); frame("Zone " + z.zone + (firstOfZone ? "" : " (continued)")); let yy = 22;
-            if (firstOfZone) {
-                pduPdfSoftTile(doc, M, yy, 277, 25, z.pct >= 85 ? PDFS.bad : z.pct >= 70 ? PDFS.warn : null);
-                doc.setFont("helvetica", "bold"); doc.setFontSize(15); doc.setTextColor(...PDFS.ink); doc.text(z.zone, M + 7, yy + 11); doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(...PDFS.mute); doc.text(z.site + "  |  " + z.n + " racks  |  " + z.hot + " at 70%+", M + 7, yy + 18);
-                doc.setFont("helvetica", "bold"); doc.setFontSize(19); doc.setTextColor(...pdfSLv(z.pct)); doc.text(z.pct + "%", M + 92, yy + 15); const pw = doc.getTextWidth(z.pct + "%");
-                doc.setFontSize(8); doc.setTextColor(...PDFS.mute); doc.text(pdfNum(z.kw, 1) + " of " + pdfNum(z.rated, 1) + " kW", M + 92 + pw + 3, yy + 14.6);
-                pduPdfSoftFeed(doc, M + 160, yy + 6, 108, "A", z.A, z.hasA ? z.ra : null); pduPdfSoftFeed(doc, M + 160, yy + 14, 108, "B", z.B, z.hasB ? z.rb : null);
-                pduPdfLegend(doc, M, yy + 32); yy += 36; firstOfZone = false;
-            } else { pduPdfLegend(doc, M, yy + 3); yy += 7; }
-            const tw = (277 - 4 * 4) / 5, th = 29; let c = 0;
-            while (i < sorted.length && yy + th <= BOTTOM) {
-                const r = sorted[i], x = M + c * (tw + 4), edge = r.pct >= 85 ? PDFS.bad : r.pct >= 70 ? PDFS.warn : null;
-                pduPdfSoftTile(doc, x, yy, tw, th, edge);
-                doc.setFont("helvetica", "bold"); doc.setFontSize(7.4); doc.setTextColor(71, 85, 105); doc.text(String(r.rackNo), x + 3.5, yy + 5.6);
-                doc.setFontSize(14); doc.setTextColor(...pdfSLv(r.pct)); doc.text(r.pct + "%", x + 3.5, yy + 13.6); const pw2 = doc.getTextWidth(r.pct + "%");
-                doc.setFontSize(6.8); doc.setTextColor(...PDFS.mute); doc.text(pdfNum(r.kw, 1) + " kW", x + 3.5 + pw2 + 2, yy + 13.4);
-                pduPdfSoftFeed(doc, x + 3.5, yy + 17.2, tw - 7, "A", r.A, r.hasA ? r.ra : null); pduPdfSoftFeed(doc, x + 3.5, yy + 23, tw - 7, "B", r.B, r.hasB ? r.rb : null);
-                i++; if (++c === 5) { c = 0; yy += th + 3.8; }
+        // Location overview: light page with a gauge card per zone, then the location trend and its top 5 racks in the free space below
+        if (S.zones.length > 1) {
+            const GX = 4, cw = (277 - 3 * GX) / 4, ch = 62; let col = 0, y = 0;
+            const open = (cont) => {
+                newPage(); frame(S.site + "  |  Zone-wise rack power reading" + (cont ? " (continued)" : "")); col = 0;
+                if (cont) { y = 24; return; }
+                y = 21; const items = [["Zones", String(S.zones.length)], ["Racks", String(S.n)], ["Total load", pdfNum(S.kw, 1) + " kW"], ["Rated capacity", pdfNum(S.rated, 1) + " kW"], ["Racks at 70% or more", String(S.hot), S.hot ? PDFS.warn : PDFS.ok]], kw = (277 - 4 * 4) / 5;
+                items.forEach((k, i) => { const x = M + i * (kw + 4); pduPdfSoftTile(doc, x, y, kw, 15, null); doc.setFont("helvetica", "bold"); doc.setFontSize(6.6); doc.setTextColor(...PDFS.mute); doc.text(k[0].toUpperCase(), x + 4, y + 5); doc.setFontSize(13); doc.setTextColor(...(k[2] || PDFS.ink)); doc.text(k[1], x + 4, y + 12); });
+                y += 21; pduPdfLegend(doc, M, y + 1.5); y += 7;
+            };
+            open(false);
+            S.zones.forEach((z) => {
+                if (y + ch > BOTTOM) open(true);
+                const x = M + col * (cw + GX), edge = z.pct >= 85 ? PDFS.bad : z.pct >= 70 ? PDFS.warn : null, tt = (z.A + z.B) || 1;
+                pduPdfSoftTile(doc, x, y, cw, ch, edge);
+                doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(...PDFS.ink); doc.text(String(z.zone), x + 5, y + 8); doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor(...PDFS.mute); doc.text(z.site, x + 5, y + 12.5);
+                pduPdfGaugeLight(doc, x + cw / 2, y + 30, 13, z.pct, 3.2);
+                doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(...PDFS.ink); doc.text(pdfNum(z.kw, 1) + " of " + pdfNum(z.rated, 1) + " kW", x + cw / 2, y + 47.5, { align: "center" });
+                doc.setFillColor(...PDFS.a); doc.roundedRect(x + 6, y + 50, Math.max(0.8, (cw - 12) * z.A / tt), 2.4, 1.2, 1.2, "F"); if (z.B > 0) { doc.setFillColor(...PDFS.b); doc.roundedRect(x + 6 + (cw - 12) * z.A / tt, y + 50, Math.max(0.8, (cw - 12) * z.B / tt), 2.4, 1.2, 1.2, "F"); }
+                doc.setFillColor(...PDFS.a); doc.roundedRect(x + 6, y + 54, 3.8, 3.8, 1, 1, "F"); doc.setFont("helvetica", "bold"); doc.setFontSize(6.2); doc.setTextColor(255, 255, 255); doc.text("A", x + 7.9, y + 56.8, { align: "center" });
+                doc.setFontSize(7.6); doc.setTextColor(...PDFS.ink); doc.text(pdfNum(z.A, 1) + " kW", x + 11, y + 57);
+                const bt = pdfNum(z.B, 1) + " kW"; doc.text(bt, x + cw - 6, y + 57, { align: "right" }); const bw = doc.getTextWidth(bt);
+                doc.setFillColor(...PDFS.b); doc.roundedRect(x + cw - 6 - bw - 5, y + 54, 3.8, 3.8, 1, 1, "F"); doc.setFontSize(6.2); doc.setTextColor(255, 255, 255); doc.text("B", x + cw - 6 - bw - 3.1, y + 56.8, { align: "center" });
+                doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.setTextColor(...PDFS.mute); doc.text(z.n + " racks  |  " + z.hot + " at 70%+", x + cw / 2, y + 61, { align: "center" });
+                if (++col === 4) { col = 0; y += ch + GX; }
+            });
+            let yy = col ? y + ch + GX : y;
+            if (yy + 47 > BOTTOM) { newPage(); frame(S.site + "  |  Location power summary"); yy = 22; }
+            const lm = pduTrendSummary((meta.trends || {})[S.site + "|*"], now);
+            pduPdfSoftTile(doc, M, yy, 277, 45); doc.setFont("helvetica", "bold"); doc.setFontSize(8.5); doc.setTextColor(...PDFS.ink); doc.text("Power trend, last 3 months  |  " + S.site, M + 5, yy + 6.2);
+            doc.setFillColor(...PDFS.a); doc.roundedRect(M + 100, yy + 3.6, 3, 3, 0.7, 0.7, "F"); doc.setFont("helvetica", "normal"); doc.setFontSize(6.6); doc.setTextColor(...PDFS.mute); doc.text("Daily average kW", M + 104.5, yy + 6.1); doc.setFillColor(...PDFS.warn); doc.roundedRect(M + 128, yy + 3.6, 3, 3, 0.7, 0.7, "F"); doc.text("Daily peak kW", M + 132.5, yy + 6.1); doc.text("Rated " + pdfNum(S.rated, 1) + " kW", M + 156, yy + 6.1);
+            pduPdfTrendChart(doc, M + 5, yy + 9, 170, 33, lm); pduPdfMonthTable(doc, M + 186, yy + 10, 82, lm);
+            yy += 49;
+            const top = S.racks.slice().sort((a, b) => b.pct - a.pct || b.kw - a.kw).slice(0, 5);
+            if (top.length) {
+                if (yy + 29 > BOTTOM) { newPage(); frame(S.site + "  |  Location power summary (continued)"); yy = 22; }
+                doc.setFont("helvetica", "bold"); doc.setFontSize(8.5); doc.setTextColor(...PDFS.ink); doc.text("Top 5 highest-utilised racks in " + S.site, M, yy + 1.5);
+                const cw5 = (277 - 4 * 3) / 5; top.forEach((r, i) => pduPdfTopCard(doc, r, i, M + i * (cw5 + 3), yy + 4.5, cw5, 20.5, r.zone + "  |  " + r.rackNo));
             }
         }
+        // One run of light pages per zone: summary + three-month trend, top 5 racks, then the rack tiles; spare room on the last page is filled
+        S.zones.forEach((z) => {
+            const sorted = z.racks.slice().sort((a, b) => b.pct - a.pct || b.kw - a.kw), top5 = z.n >= 8 ? sorted.slice(0, 5) : [], rest = sorted.slice(top5.length);
+            const months = pduTrendSummary((meta.trends || {})[z.site + "|" + z.zone], now), tw = (277 - 5 * GAP) / 6, th = 24;
+            newPage(); frame("Zone " + z.zone + "  |  " + z.site);
+            pduPdfSoftTile(doc, M, 21, 102.5, 40, z.pct >= 85 ? PDFS.bad : z.pct >= 70 ? PDFS.warn : null);
+            doc.setFont("helvetica", "bold"); doc.setFontSize(17); doc.setTextColor(...PDFS.ink); doc.text(String(z.zone), M + 6, 31.5); doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.setTextColor(...PDFS.mute); doc.text(z.site + "  |  " + z.n + " racks  |  " + z.hot + " at 70%+", M + 6, 36.5);
+            doc.setFont("helvetica", "bold"); doc.setFontSize(26); doc.setTextColor(...pdfSLv(z.pct)); doc.text(z.pct + "%", M + 96.5, 33, { align: "right" }); doc.setFontSize(7.5); doc.setTextColor(...PDFS.mute); doc.text(pdfNum(z.kw, 1) + " of " + pdfNum(z.rated, 1) + " kW", M + 96.5, 38.5, { align: "right" });
+            pduPdfSoftFeed(doc, M + 6, 44.5, 90.5, "A", z.A, z.hasA ? z.ra : null); pduPdfSoftFeed(doc, M + 6, 52, 90.5, "B", z.B, z.hasB ? z.rb : null);
+            pduPdfSoftTile(doc, 116.5, 21, 170.5, 40); doc.setFont("helvetica", "bold"); doc.setFontSize(8.5); doc.setTextColor(...PDFS.ink); doc.text("Power trend, last 3 months", 121, 27.2);
+            doc.setFillColor(...PDFS.a); doc.roundedRect(176, 24.6, 3, 3, 0.7, 0.7, "F"); doc.setFont("helvetica", "normal"); doc.setFontSize(6.6); doc.setTextColor(...PDFS.mute); doc.text("Daily average kW", 180.5, 27.1); doc.setFillColor(...PDFS.warn); doc.roundedRect(204, 24.6, 3, 3, 0.7, 0.7, "F"); doc.text("Daily peak kW", 208.5, 27.1); doc.text("Rated " + pdfNum(z.rated, 1) + " kW", 232, 27.1);
+            pduPdfTrendChart(doc, 121, 30, 92, 28.5, months); pduPdfMonthTable(doc, 218, 31, 64.5, months);
+            let y = 65.5;
+            if (top5.length) {
+                doc.setFont("helvetica", "bold"); doc.setFontSize(8.5); doc.setTextColor(...PDFS.ink); doc.text("Top 5 highest-utilised racks", M, y + 1.5); doc.setFont("helvetica", "normal"); doc.setFontSize(6.6); doc.setTextColor(...PDFS.mute); doc.text("(not repeated in the rack tiles below)", M + 50, y + 1.5);
+                const cw5 = (277 - 4 * GAP) / 5; top5.forEach((r, i) => pduPdfTopCard(doc, r, i, M + i * (cw5 + GAP), y + 4.5, cw5, 20.5)); y += 27;
+            } else y += 1;
+            let i = 0, yy = y, first = true, lastBottom = y;
+            for (;;) {
+                const rows = Math.max(1, Math.floor((BOTTOM - yy + GAP) / (th + GAP)));
+                if (!first) { newPage(); frame("Zone " + z.zone + " (continued)  |  " + z.site); pduPdfLegend(doc, M, 22.5); yy = 27; } else { pduPdfLegend(doc, 188, 66.7); }
+                const cap = Math.max(1, Math.floor((BOTTOM - yy + GAP) / (th + GAP))) * 6, slice = rest.slice(i, i + cap);
+                const isLast = i + slice.length >= rest.length, nrows = Math.ceil(slice.length / 6), thL = isLast ? Math.min(30, Math.max(th, (BOTTOM - yy + GAP) / nrows - GAP)) : th;
+                slice.forEach((r, k) => pduPdfRackTile(doc, r, M + (k % 6) * (tw + GAP), yy + Math.floor(k / 6) * (thL + GAP), tw, thL));
+                lastBottom = yy + nrows * (thL + GAP) - GAP; i += slice.length; first = false; if (i >= rest.length) break;
+            }
+        });
     });
     if (!model.rows.length) { frame("Power report"); doc.setFontSize(10); doc.setTextColor(...PDFC.pmute); doc.text("No racks match the filters on the page.", M, 30); }
     pduPdfFooters(doc);
@@ -17384,9 +17483,30 @@ function PduRepFeed({ side, kw, rated }) {
         e("div", { style: { height: 7, borderRadius: 4, background: "#E1E8F3", boxShadow: "inset 1px 1px 3px #BAC5D6, inset -1px -1px 2px #fff", overflow: "hidden" } }, e("div", { style: { width: Math.max(3, Math.min(100, pct)) + "%", height: "100%", borderRadius: 4, background: c } })),
         e("span", { style: { fontSize: 11, fontWeight: 800, whiteSpace: "nowrap", color: pct >= 70 ? c : "#17345D" } }, kw.toFixed(1) + " kW"));
 }
+function PduRepTrend({ rows, rated }) {
+    const e = React.createElement, months = useMemo(() => pduTrendSummary(rows, new Date()), [rows]), days = [];
+    months.forEach((m) => m.days.forEach((r) => days.push(r)));
+    const W = 520, H = 132, L = 32, B = 16, n = days.length, mx = Math.max(1, ...days.map((d) => Math.max(d.peakKw, d.avgKw))) * 1.08;
+    const px = (i) => L + (W - L - 6) * i / Math.max(1, n - 1), py = (v) => 6 + (H - B - 6) * (1 - v / mx);
+    const path = (k) => days.map((d, i) => (i ? "L" : "M") + px(i).toFixed(1) + " " + py(d[k]).toFixed(1)).join(" ");
+    let s0 = 0; const labels = months.map((m) => { const c = m.days.length, x = c ? (px(s0) + px(s0 + c - 1)) / 2 : 0, cut = s0 > 0 && c ? px(s0) : null; s0 += c; return { m, x, cut, c }; });
+    const th = { textAlign: "right", fontSize: 9.5, color: "#64748B", fontWeight: 800, padding: "3px 6px", borderBottom: "1px solid #D5DDEA" }, td = { textAlign: "right", fontSize: 11.5, fontWeight: 700, padding: "4px 6px", borderBottom: "1px solid #E2E8F2" };
+    return e("div", { style: { display: "flex", flexDirection: "column", gap: 6, minWidth: 0 } },
+        e("div", { style: { display: "flex", gap: 14, flexWrap: "wrap", fontSize: 10.5, color: "#64748B" } }, e("span", null, e("i", { style: { display: "inline-block", width: 10, height: 10, borderRadius: 3, background: "#3157EE", marginRight: 5 } }), "Daily average kW"), e("span", null, e("i", { style: { display: "inline-block", width: 10, height: 10, borderRadius: 3, background: "#EA7A0C", marginRight: 5 } }), "Daily peak kW"), e("span", null, "Rated " + rated.toFixed(1) + " kW")),
+        n < 2 ? e("div", { style: { fontSize: 12, fontStyle: "italic", color: "#94A3B8", padding: "26px 0" } }, "No power history recorded for these months yet.") :
+        e("svg", { viewBox: "0 0 " + W + " " + H, style: { width: "100%", height: "auto", display: "block" }, role: "img", "aria-label": "Zone power for the last three months" },
+            [0, 1, 2, 3].map((i) => e("g", { key: i }, e("line", { x1: L, x2: W - 6, y1: py(mx * i / 3), y2: py(mx * i / 3), stroke: "#D5DDEA" }), e("text", { x: L - 4, y: py(mx * i / 3) + 3, textAnchor: "end", fontSize: 9, fill: "#64748B" }, Math.round(mx * i / 3)))),
+            labels.filter((l) => l.cut != null).map((l, i) => e("line", { key: "c" + i, x1: l.cut, x2: l.cut, y1: 6, y2: H - B, stroke: "#B8C4D8", strokeDasharray: "3 3" })),
+            e("path", { d: path("avgKw") + " L" + px(n - 1) + " " + py(0) + " L" + px(0) + " " + py(0) + " Z", fill: "rgba(49,87,238,.16)" }), e("path", { d: path("peakKw"), stroke: "#EA7A0C", strokeWidth: 1.2, fill: "none" }), e("path", { d: path("avgKw"), stroke: "#3157EE", strokeWidth: 1.8, fill: "none" }),
+            labels.filter((l) => l.c).map((l, i) => e("text", { key: "t" + i, x: l.x, y: H - 3, textAnchor: "middle", fontSize: 9.5, fontWeight: 700, fill: "#475569" }, l.m.label.split(" (")[0]))),
+        e("table", { style: { borderCollapse: "collapse", width: "100%" } }, e("thead", null, e("tr", null, ["Month", "Avg kW", "Peak kW", "Energy kWh", "Change"].map((h, i) => e("th", { key: h, style: Object.assign({}, th, i ? null : { textAlign: "left" }) }, h)))),
+            e("tbody", null, months.map((m, i) => { const prev = i ? months[i - 1].avg : null, ch = m.avg != null && prev ? (m.avg / prev - 1) * 100 : null; return e("tr", { key: i }, e("td", { style: Object.assign({}, td, { textAlign: "left", whiteSpace: "nowrap" }) }, m.label), e("td", { style: td }, m.avg != null ? m.avg.toFixed(1) : "-"), e("td", { style: td }, m.peak != null ? m.peak.toFixed(1) : "-"), e("td", { style: td }, m.kwh != null ? Math.round(m.kwh).toLocaleString("en-US") : "-"), e("td", { style: Object.assign({}, td, { color: ch == null ? "#64748B" : ch > 0 ? "#EA7A0C" : "#059669" }) }, ch == null ? "-" : (ch > 0 ? "+" : "") + ch.toFixed(1) + "%")); }))));
+}
 function PduReportBody({ racks, onExport, onClose, busy }) {
     const e = React.createElement, model = useMemo(() => pduReportModel(racks), [racks]);
     const [sel, setSel] = useState(null), [sort, setSort] = useState("load"), [filt, setFilt] = useState("all"), [q, setQ] = useState("");
+    const [trend, setTrend] = useState(null);
+    useEffect(() => { if (!sel) return; let live = true; setTrend(null); const rng = pduTrendRange(new Date()); api.getPduTrend({ site: sel.site, zone: sel.zone, from: rng.from, to: rng.to }).then((r) => { if (live) setTrend(r); }).catch(() => { if (live) setTrend([]); }); return () => { live = false; }; }, [sel && sel.site, sel && sel.zone]);
     const zone = sel && model.zones.find((z) => z.site === sel.site && z.zone === sel.zone);
     const shown = zone ? zone.racks.filter((r) => (!q || String(r.rackNo).toLowerCase().includes(q.toLowerCase())) && (filt === "all" || (filt === "hot" ? r.pct >= 70 : r.single))).sort((a, b) => sort === "name" ? String(a.rackNo).localeCompare(String(b.rackNo), undefined, { numeric: true }) : sort === "low" ? a.pct - b.pct : b.pct - a.pct) : [];
     const btn = (label, onClick, primary) => e("button", { className: primary ? "neu-btn-primary" : "neu-btn-secondary", disabled: busy, onClick, style: { fontSize: 11.5, padding: "7px 12px", display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" } }, e(Download, { s: 12 }), label);
@@ -17410,6 +17530,7 @@ function PduReportBody({ racks, onExport, onClose, busy }) {
                     e("div", { style: { fontWeight: 800, fontSize: 13 } }, z.zone), e("div", { style: { fontSize: 9.5, color: PDU_REP.mute } }, z.site), e(PduRepGauge, { pct: z.pct }),
                     e("div", { style: { textAlign: "center", fontWeight: 800, fontSize: 11.5 } }, z.kw.toFixed(1) + " of " + z.rated.toFixed(1) + " kW"),
                     e("div", { style: { display: "flex", height: 6, borderRadius: 3, overflow: "hidden", gap: 1, margin: "2px 4px" } }, e("span", { style: { flex: z.A / tt, background: PDU_REP.a } }), e("span", { style: { flex: z.B / tt, background: PDU_REP.b } })),
+                    e("div", { style: { display: "flex", justifyContent: "space-between", gap: 6, fontSize: 10.5, fontWeight: 800, margin: "1px 2px" } }, e("span", null, e("i", { style: { display: "inline-block", width: 14, height: 14, borderRadius: 5, background: PDU_REP.a, color: "#0D1526", fontSize: 9, fontStyle: "normal", textAlign: "center", lineHeight: "14px", marginRight: 4 } }, "A"), z.A.toFixed(1) + " kW"), e("span", null, e("i", { style: { display: "inline-block", width: 14, height: 14, borderRadius: 5, background: PDU_REP.b, color: "#0D1526", fontSize: 9, fontStyle: "normal", textAlign: "center", lineHeight: "14px", marginRight: 4 } }, "B"), z.B.toFixed(1) + " kW")),
                     e("div", { style: { textAlign: "center", fontSize: 9.5, color: PDU_REP.mute } }, z.n + " racks | " + z.hot + " at 70%+"));
             })))),
         zone && e("div", { style: { background: "#E9EFF7", borderRadius: 14, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 } },
@@ -17419,10 +17540,17 @@ function PduReportBody({ racks, onExport, onClose, busy }) {
                 e("input", { type: "search", "aria-label": "Find rack", placeholder: "Find rack", value: q, onChange: (ev) => setQ(ev.target.value), className: "neu-input", style: { fontSize: 12, padding: "6px 9px", width: 130 } }),
                 e("div", { style: { display: "flex", gap: 6 } }, [["all", "All"], ["hot", "70% and above"], ["single", "Single feed"]].map((f) => e("button", { key: f[0], "aria-pressed": filt === f[0], onClick: () => setFilt(f[0]), className: filt === f[0] ? "neu-btn-primary" : "neu-btn-secondary", style: { fontSize: 11, padding: "5px 10px" } }, f[1]))),
                 e("span", { style: { marginLeft: "auto" } }, btn("Export zone " + zone.zone + " (PDF)", () => onExport("zone", racks.filter((r) => (r.site || "-") === zone.site && (r.zone || "-") === zone.zone), zone.site + " " + zone.zone)))),
-            e("div", { style: Object.assign({ display: "grid", gridTemplateColumns: "minmax(130px,1fr) auto minmax(220px,1.6fr)", gap: 16, alignItems: "center", padding: "12px 16px" }, soft) },
-                e("div", null, e("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 20, fontWeight: 800 } }, zone.zone), e("div", { style: { fontSize: 11.5, color: "#64748B" } }, zone.site + " | " + zone.n + " racks | " + zone.hot + " at 70%+")),
-                e("div", { style: { display: "flex", alignItems: "baseline", gap: 8 } }, e("span", { style: { fontFamily: "'Space Grotesk'", fontSize: 28, fontWeight: 800, color: pduRepSLv(zone.pct) } }, zone.pct + "%"), e("span", { style: { fontSize: 11, fontWeight: 700, color: "#64748B" } }, zone.kw.toFixed(1) + " of " + zone.rated.toFixed(1) + " kW")),
-                e("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, e(PduRepFeed, { side: "A", kw: zone.A, rated: zone.hasA ? zone.ra : null }), e(PduRepFeed, { side: "B", kw: zone.B, rated: zone.hasB ? zone.rb : null }))),
+            e("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 12, alignItems: "stretch" } },
+                e("div", { style: Object.assign({ display: "grid", gridTemplateColumns: "1fr auto", gap: "10px 14px", alignItems: "center", alignContent: "center", padding: "14px 16px" }, soft) },
+                    e("div", null, e("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 20, fontWeight: 800 } }, zone.zone), e("div", { style: { fontSize: 11.5, color: "#64748B" } }, zone.site + " | " + zone.n + " racks | " + zone.hot + " at 70%+")),
+                    e("div", { style: { display: "flex", alignItems: "baseline", gap: 8 } }, e("span", { style: { fontFamily: "'Space Grotesk'", fontSize: 28, fontWeight: 800, color: pduRepSLv(zone.pct) } }, zone.pct + "%"), e("span", { style: { fontSize: 11, fontWeight: 700, color: "#64748B" } }, zone.kw.toFixed(1) + " of " + zone.rated.toFixed(1) + " kW")),
+                    e("div", { style: { gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 7 } }, e(PduRepFeed, { side: "A", kw: zone.A, rated: zone.hasA ? zone.ra : null }), e(PduRepFeed, { side: "B", kw: zone.B, rated: zone.hasB ? zone.rb : null }))),
+                e("div", { style: Object.assign({ padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }, soft) }, e("b", { style: { fontFamily: "'Space Grotesk'", fontSize: 13 } }, "Power trend, last 3 months"), trend ? e(PduRepTrend, { rows: trend, rated: zone.rated }) : e("div", { style: { fontSize: 12, color: "#94A3B8", padding: "26px 0" } }, "Loading power history..."))),
+            zone.n >= 8 && e("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 800 } }, "Top 5 highest-utilised racks"),
+            zone.n >= 8 && e("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 12, padding: 4 } }, zone.racks.slice().sort((a, b) => b.pct - a.pct || b.kw - a.kw).slice(0, 5).map((r, i) => e("div", { key: r.rackNo, style: Object.assign({ padding: "10px 12px", display: "flex", flexDirection: "column", gap: 5 }, soft) },
+                e("div", { style: { display: "flex", alignItems: "center", gap: 7 } }, e("span", { style: { width: 20, height: 20, borderRadius: "50%", background: "#17345D", color: "#fff", fontSize: 10.5, fontWeight: 800, display: "grid", placeItems: "center" } }, i + 1), e("b", { style: { fontSize: 12, color: "#475569" } }, r.rackNo), e("span", { style: { marginLeft: "auto", fontFamily: "'Space Grotesk'", fontSize: 21, fontWeight: 800, color: pduRepSLv(r.pct) } }, r.pct + "%")),
+                e("div", { style: { fontSize: 11, fontWeight: 700, color: "#64748B", textAlign: "right" } }, r.kw.toFixed(1) + " of " + r.rated.toFixed(1) + " kW"),
+                e(PduRepFeed, { side: "A", kw: r.A, rated: r.hasA ? r.ra : null }), e(PduRepFeed, { side: "B", kw: r.B, rated: r.hasB ? r.rb : null })))),
             e("div", { style: { fontSize: 11.5, color: "#64748B" } }, shown.length + " of " + zone.n + " racks shown. The rack PDU load and circuit bank PDF is the PDF button on each rack row below."),
             e("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(176px,1fr))", gap: 12, padding: 4 } }, shown.map((r) => e("div", { key: r.rackNo, style: Object.assign({ padding: "10px 12px", display: "flex", flexDirection: "column", gap: 5 }, soft) },
                 e("div", { style: { fontSize: 11, fontWeight: 800, color: "#475569" } }, r.rackNo),
@@ -17501,7 +17629,12 @@ function PduPage({ allowedSites = [], canEdit = false }) {
         setPdfMenu(false); setPdfBusy(true);
         try {
             const filt = countListColumnFilters(columnFilters) > 0;
-            const useR = only || filteredRacks; const safe = (tag || "").replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, ""); await exportPduPdf(kind, useR, { stamp: localDateStr(today) + (safe ? "-" + safe : (only && only.length === 1 ? "-" + only[0].rackNo : "")), when: "Generated " + new Date().toLocaleString(), scope: (tag ? tag : only ? "Rack " + only[0].rackNo : filt ? "Filtered view" : "All racks") + " - " + useR.length + (useR.length === 1 ? " rack" : " racks") });
+            const useR = only || filteredRacks; const safe = (tag || "").replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, ""); const meta = { stamp: localDateStr(today) + (safe ? "-" + safe : (only && only.length === 1 ? "-" + only[0].rackNo : "")), when: "Generated " + new Date().toLocaleString(), scope: (tag ? tag : only ? "Rack " + only[0].rackNo : filt ? "Filtered view" : "All racks") + " - " + useR.length + (useR.length === 1 ? " rack" : " racks") };
+            if (kind === "zone") {
+                const now = new Date(), rng = pduTrendRange(now); meta.now = now; meta.trends = {};
+                await Promise.all(pduReportModel(useR).sites.map(async (S) => { try { meta.trends[S.site + "|*"] = await api.getPduTrend({ site: S.site, from: rng.from, to: rng.to }); } catch (e) { meta.trends[S.site + "|*"] = null; } }).concat(pduReportModel(useR).zones.map(async (z) => { try { meta.trends[z.site + "|" + z.zone] = await api.getPduTrend({ site: z.site, zone: z.zone, from: rng.from, to: rng.to }); } catch (e) { meta.trends[z.site + "|" + z.zone] = null; } })));
+            }
+            await exportPduPdf(kind, useR, meta);
             setSyncMsg("PDF saved.");
         } catch (e) { setSyncMsg("PDF failed: " + e.message); }
         setPdfBusy(false);
