@@ -8,7 +8,7 @@ test('feed card uses the tank design with no leftover preview switch', () => {
 test('group view draws the chain panels without any power-connection box', () => {
   assert.ok(src.includes('function PduChainView'));
   assert.ok(src.includes('Network cable') && src.includes('Management'));
-  assert.ok(!/Power in|Power connection/i.test(src.slice(src.indexOf('function PduChainView'), src.indexOf('function PduEditModal'))));
+  assert.ok(!/Power connection|circuit<\/|Feed . circuit/i.test(src.slice(src.indexOf('function PduChainView'), src.indexOf('function PduEditModal'))));
 });
 test('issue tracker, DC activity and material movement lists have the slide scrollbar', () => {
   ['issueTableRef', 'actTableRef', 'movTableRef'].forEach((r) => assert.ok(src.includes('wrapRef: ' + r), r));

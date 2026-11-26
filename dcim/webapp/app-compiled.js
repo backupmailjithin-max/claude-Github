@@ -16583,18 +16583,24 @@ function pduLoadColor(c) {
     if (c.nearOverloadA && c.currentA >= c.nearOverloadA) return "#EA7A0C";
     return "#059669";
 }
-const PDU_MOTION_CSS = "@keyframes pduBolt{0%{opacity:0;transform:translateY(7px) scale(.85)}45%{opacity:1}100%{opacity:0;transform:translateY(-9px) scale(1.05)}}@keyframes pduFlow{to{stroke-dashoffset:-28}}@keyframes pduWave{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}.pdu-bolt{display:inline-block;animation:pduBolt 1.6s ease-in-out infinite}.pdu-flow{animation:pduFlow 1.1s linear infinite}@media (prefers-reduced-motion:reduce){.pdu-bolt,.pdu-flow{animation:none!important}.pdu-bolt{opacity:.85!important}}";
+const PDU_MOTION_CSS = "@keyframes pduBolt{0%{opacity:0;transform:translateY(7px) scale(.85)}45%{opacity:1}100%{opacity:0;transform:translateY(-9px) scale(1.05)}}@keyframes pduFlow{to{stroke-dashoffset:-28}}@keyframes pduWave{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}.pdu-bolt{display:inline-block;animation:pduBolt 1.6s ease-in-out infinite}.pdu-flow{animation:pduFlow 1.1s linear infinite}.pdu-wave{animation:pduWave 3.2s linear infinite}@keyframes pduFlow14{to{stroke-dashoffset:-14}}@keyframes pduGlow{50%{opacity:.55}}.pdu-flow14{animation:pduFlow14 1.2s linear infinite}.pdu-glow{animation:pduGlow 2.4s ease-in-out infinite}@media (prefers-reduced-motion:reduce){.pdu-bolt,.pdu-flow,.pdu-wave,.pdu-flow14,.pdu-glow{animation:none!important}.pdu-bolt{opacity:.85!important}}";
 function PduTank({ c }) {
-    const col = pduLoadColor(c);
-    const pct = c.overloadA ? Math.max(3, Math.min(100, Math.round((c.currentA / c.overloadA) * 100))) : 12;
-    return React.createElement("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", width: 58 }, title: c.kind + " " + c.number + ": " + c.currentA.toFixed(1) + " A" + (c.overloadA ? " of " + c.overloadA + " A limit" : "") + (c.loadState ? " - " + c.loadState : "") },
-        React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontSize: 9, fontWeight: 700, color: "#64748B", marginBottom: 3, whiteSpace: "nowrap" } }, c.overloadA ? "max " + c.overloadA + " A" : "no limit set"),
-        React.createElement("div", { style: { position: "relative", width: 46, height: 92 } },
-            React.createElement("div", { style: { position: "absolute", inset: 0, borderRadius: 11, border: "2px solid #CBD5E1", background: "linear-gradient(180deg,#F8FAFC,#EEF2F7)", overflow: "hidden", boxShadow: "inset 2px 3px 7px rgba(15,23,42,.12)" } },
-                React.createElement("div", { style: { position: "absolute", left: 0, right: 0, bottom: 0, height: pct + "%", background: "linear-gradient(180deg," + col + "CC," + col + ")", transition: "height .6s ease" } },
-                    React.createElement("div", { style: { position: "absolute", left: 0, right: 0, top: 0, height: 3, background: "rgba(255,255,255,.55)" } }))),
-            React.createElement("span", { style: { position: "absolute", left: "50%", transform: "translateX(-50%)", bottom: "min(calc(" + pct + "% + 5px), 78px)", background: "#fff", color: col, border: "1.5px solid " + col, borderRadius: 999, padding: "1px 6px", fontFamily: "'Space Grotesk'", fontSize: 10.5, fontWeight: 800, whiteSpace: "nowrap", boxShadow: "0 2px 6px rgba(15,23,42,.18)" } }, c.currentA.toFixed(1) + " A")),
-        React.createElement("span", { style: { fontFamily: "Inter", fontSize: 9.5, fontWeight: 800, color: "#475569", marginTop: 3 } }, c.kind + " " + c.number));
+    const lim = c.overloadA || 16, hp = Math.max(0, Math.min(100, (c.currentA / lim) * 100)), inside = hp >= 25;
+    const lvl = c.overloadA && c.currentA >= c.overloadA ? 2 : c.nearOverloadA && c.currentA >= c.nearOverloadA ? 1 : 0;
+    const cols = [["#2DD4BF", "#0F9488", "#0F766E"], ["#FB923C", "#EA7A0C", "#C2410C"], ["#F87171", "#DC2626", "#B91C1C"]][lvl];
+    const nearPct = c.nearOverloadA && c.overloadA ? Math.min(100, (c.nearOverloadA / c.overloadA) * 100) : 80;
+    return React.createElement("div", { style: { width: 50, display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }, title: c.kind + " " + c.number + ": " + c.currentA.toFixed(1) + " A" + (c.overloadA ? " of " + c.overloadA + " A limit" : "") + (c.loadState ? " - " + c.loadState : "") },
+        React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontSize: 10, fontWeight: 700, color: "#64748B", whiteSpace: "nowrap" } }, c.overloadA ? "max " + c.overloadA + " A" : "no limit"),
+        React.createElement("span", { style: { position: "relative", display: "block", width: 50, height: 112, borderRadius: 14, boxSizing: "border-box", border: "1.5px solid " + cols[1], background: "linear-gradient(90deg,rgba(255,255,255,.85),rgba(206,219,236,.45) 50%,rgba(255,255,255,.7))", boxShadow: "inset -7px 0 10px rgba(23,52,93,.12),6px 9px 14px rgba(23,52,93,.2)", overflow: "hidden" } },
+            React.createElement("span", { style: { position: "absolute", left: 0, right: 0, bottom: 0, height: Math.max(2, hp) + "%", transition: "height .8s ease", display: "flex", flexDirection: "column" } },
+                React.createElement("span", { style: { display: "block", width: "200%", height: 9, overflow: "hidden" } }, React.createElement("svg", { className: "pdu-wave", style: { display: "block", width: "100%", height: 9 }, viewBox: "0 0 200 10", preserveAspectRatio: "none", "aria-hidden": "true" }, React.createElement("path", { d: "M0 5 Q12.5 0 25 5 T50 5 T75 5 T100 5 T125 5 T150 5 T175 5 T200 5 V10 H0Z", fill: cols[1] }))),
+                React.createElement("span", { style: { flex: 1, background: "linear-gradient(180deg," + cols[1] + "," + cols[2] + ")" } })),
+            hp > 8 && React.createElement("svg", { className: "pdu-bolt", width: 10, height: 15, viewBox: "-6 -10 12 20", style: { position: "absolute", left: 10, bottom: 6 }, "aria-hidden": "true" }, React.createElement("path", { d: "M2 -9 L-5 2 H-1 L-3 9 L5 -3 H1 Z", fill: "rgba(255,255,255,.92)" })),
+            React.createElement("span", { style: { position: "absolute", left: 0, right: 0, bottom: inside ? "max(6px, calc(" + hp.toFixed(0) + "% - 26px))" : "min(calc(" + hp.toFixed(0) + "% + 5px), 88px)", display: "flex", justifyContent: "center", transition: "bottom .8s ease", zIndex: 2 } },
+                React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontSize: 12.5, fontWeight: 800, color: inside ? "#fff" : "#17345D", textShadow: inside ? "0 1px 2px rgba(0,0,0,.6), 0 0 4px rgba(0,0,0,.35)" : "none" } }, c.currentA.toFixed(1), React.createElement("span", { style: { fontFamily: "Inter", fontSize: 9, fontWeight: 700, opacity: 0.85 } }, " A"))),
+            React.createElement("span", { style: { position: "absolute", left: 0, right: 0, bottom: nearPct + "%", borderTop: "1.5px dashed rgba(23,52,93,.5)" } }),
+            React.createElement("span", { style: { position: "absolute", left: 6, top: 8, bottom: 8, width: 4, borderRadius: 3, background: "rgba(255,255,255,.75)" } })),
+        React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontSize: 10.5, fontWeight: 700, color: "#475569" } }, (c.kind === "Phase" ? "L" : "B") + c.number));
 }
 function PduFeedCard({ f, canEdit, onDetails, onEdit, onDelete }) {
     const side = /(^|[^a-z0-9])b\s*$/i.test(String(f.feedLabel || "").trim()) ? "B" : "A";
@@ -16603,90 +16609,131 @@ function PduFeedCard({ f, canEdit, onDetails, onEdit, onDelete }) {
     const health = pduWorstHealth([f]);
     const tanks = pduCircuitList(f);
     const total = tanks.length ? tanks.reduce((s, c) => s + c.currentA, 0) : null;
-    const btn = (label, color, onClick, title) => React.createElement("button", { className: "neu-btn-secondary", title: title, style: { fontSize: 10.5, padding: "4px 10px", color: color, whiteSpace: "nowrap" }, onClick: (e) => { e.stopPropagation(); onClick(); } }, label);
-    const metric = (label, value) => React.createElement("div", { style: { minWidth: 0 } }, React.createElement("small", { style: { display: "block", fontSize: 8.5, fontWeight: 800, letterSpacing: ".04em", textTransform: "uppercase", color: "#64748B", lineHeight: 1.1 } }, label), React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontSize: 13.5, fontWeight: 800, color: "#020617" } }, value));
-    return React.createElement("div", { style: { background: "linear-gradient(145deg,#fff," + (side === "B" ? "rgba(124,58,237,.07)" : "rgba(47,85,232,.07)") + ")", border: "1px solid rgba(148,163,184,.25)", borderTop: "3px solid " + accent, borderRadius: 14, padding: "9px 13px 10px", minWidth: 0, boxShadow: "0 4px 14px rgba(23,52,93,.07)" } },
+    const hot = tanks.length ? tanks.slice().sort((a, b) => (b.overloadA ? b.currentA / b.overloadA : 0) - (a.overloadA ? a.currentA / a.overloadA : 0))[0] : null;
+    const phases = ((f.circuits && f.circuits.phases) || []).filter((x) => x && x.currentA != null);
+    const lvlCol = (c) => c.overloadA && c.currentA >= c.overloadA ? "#DC2626" : c.nearOverloadA && c.currentA >= c.nearOverloadA ? "#EA7A0C" : "#059669";
+    const chip = health.level === "ok" ? ["Healthy", "#047857", "#D1FAE5"] : health.level === "critical" ? ["Critical", "#B91C1C", "#FEE2E2"] : health.level === "warning" ? ["Warning", "#C2410C", "#FFEDD5"] : [f.status === "online" ? "Online" : String(f.status || "Unknown"), "#475569", "#E2E8F0"];
+    const flowInk = health.level === "critical" ? "#DC2626" : health.level === "warning" ? "#EA7A0C" : accent;
+    const meta = (label, value) => React.createElement("div", null, React.createElement("small", { style: { display: "block", fontSize: 8.5, fontWeight: 800, letterSpacing: ".04em", textTransform: "uppercase", color: "#64748B" } }, label), React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontSize: 13.5, fontWeight: 800, color: "#020617" } }, value));
+    const sBtn = (label, color, onClick, title) => React.createElement("button", { type: "button", className: "neu-btn-secondary", title: title, style: { fontSize: 11, fontWeight: 700, padding: "8px 18px", color: color, whiteSpace: "nowrap" }, onClick: (e) => { e.stopPropagation(); onClick(); } }, label);
+    return React.createElement("div", { style: { background: "linear-gradient(160deg,#fff,#F1F5FB)", border: "1px solid #fff", borderRadius: 20, boxShadow: "9px 9px 20px rgba(163,177,198,.45),-7px -7px 16px #fff", padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10, minWidth: 0 } },
         React.createElement("style", null, PDU_MOTION_CSS),
-        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" } },
-            React.createElement("span", { style: { background: accent, color: "#fff", fontFamily: "'Space Grotesk'", fontWeight: 800, fontSize: 11.5, letterSpacing: ".04em", padding: "2px 10px", borderRadius: 8 } }, "FEED " + side),
-            React.createElement("span", { title: "The PDU number shown on the PDU itself - use it to physically check this feed", style: { fontFamily: "'JetBrains Mono'", fontSize: 9.5, fontWeight: 800, color: accent, background: "rgba(100,116,139,.12)", padding: "2px 7px", borderRadius: 6 } }, "ID " + (f.displayId != null ? f.displayId : 1)),
-            f.pduName && React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontSize: 10.5, fontWeight: 700, color: "#020617", overflowWrap: "anywhere" } }, f.pduName),
-            React.createElement("span", { style: { marginLeft: "auto" } }, React.createElement(PduBadge, { kind: "status", text: f.status }))),
-        React.createElement("div", { style: { fontSize: 10, color: "#64748B", margin: "3px 0 6px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, [[f.vendor, f.model].filter(Boolean).join(" ") || "Vendor/model not set", "S/N " + (f.serialNumber || "—"), f.ipAddress].join(" · ")),
-        tanks.length > 0 && React.createElement("div", { style: { display: "flex", alignItems: "flex-end", gap: 12, flexWrap: "wrap", padding: "4px 0 6px" } },
-            React.createElement("div", { style: { minWidth: 84 } },
-                React.createElement("small", { style: { display: "block", fontSize: 8.5, fontWeight: 800, letterSpacing: ".04em", textTransform: "uppercase", color: "#64748B" } }, "Total current"),
-                React.createElement("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 24, fontWeight: 800, color: "#17345D", lineHeight: 1.1 } }, total.toFixed(1), React.createElement("span", { style: { fontSize: 12, color: "#64748B", marginLeft: 3 } }, "A")),
-                React.createElement("div", { "aria-hidden": "true", style: { display: "flex", gap: 6, marginTop: 4, color: "#F59E0B", fontSize: 14 } }, [0, 1, 2].map((i) => React.createElement("span", { key: i, className: "pdu-bolt", style: { animationDelay: i * 0.35 + "s" } }, "⚡")))),
-            React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } }, tanks.map((c) => React.createElement(PduTank, { key: c.kind + c.number, c })))),
-        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" } },
-            metric("Power", f.lastPowerKw != null ? f.lastPowerKw.toFixed(2) + " kW" : "—"),
-            metric("Max load", f.maxLoadKw != null ? f.maxLoadKw.toFixed(1) + " kW" : "—"),
-            React.createElement("div", { style: { minWidth: 78 } }, metric("Used", used != null ? used + "%" : "—"), used != null && React.createElement("div", { style: { height: 4, borderRadius: 3, background: "rgba(148,163,184,.3)", marginTop: 2 } }, React.createElement("div", { style: { width: Math.min(100, used) + "%", height: 4, borderRadius: 3, background: used >= 85 ? "#DC2626" : used >= 70 ? "#EA7A0C" : "#059669" } }))),
-            f.health && React.createElement("div", null, React.createElement("small", { style: { display: "block", fontSize: 8.5, fontWeight: 800, letterSpacing: ".04em", textTransform: "uppercase", color: "#64748B", lineHeight: 1.1, marginBottom: 2 } }, "Health"), React.createElement(PduHealthBadge, { health: health, compact: true })),
-            React.createElement("div", { style: { marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" } },
-                btn("⚡ Details", accent, onDetails, "Bank and phase load, read live from the PDU"),
-                canEdit && btn("✎ Edit", "#334155", onEdit, "Edit this PDU"),
-                canEdit && btn("🗑 Delete", "#DC2626", onDelete, "Delete this PDU"))),
-        health.detail && health.level !== "ok" && health.level !== "none" && React.createElement("div", { style: { marginTop: 5, fontSize: 10, fontWeight: 700, color: health.level === "critical" ? "#DC2626" : "#EA7A0C" } }, "⚠ " + health.detail),
-        f.lastError && React.createElement("div", { style: { marginTop: 4, fontSize: 10, color: "#EA7A0C" } }, f.lastError));
+        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" } },
+            React.createElement("span", { style: { width: 34, height: 34, borderRadius: side === "B" ? "50%" : 10, boxSizing: "border-box", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Space Grotesk'", fontWeight: 800, fontSize: 16, background: side === "B" ? "#fff" : accent, color: side === "B" ? accent : "#fff", border: "2px solid " + accent } }, side),
+            React.createElement("div", { style: { display: "flex", flexDirection: "column", minWidth: 0 } },
+                React.createElement("b", { style: { fontFamily: "'Space Grotesk'", fontSize: 15, fontWeight: 800 } }, "Feed " + side, React.createElement("span", { title: "The PDU number shown on the PDU itself", style: { fontFamily: "'JetBrains Mono'", fontSize: 10, fontWeight: 700, color: accent, background: "rgba(47,85,232,.1)", padding: "2px 7px", borderRadius: 7, marginLeft: 6 } }, "ID " + (f.displayId != null ? f.displayId : 1)), f.pduName && React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontSize: 10.5, fontWeight: 700, color: "#334155", marginLeft: 8, overflowWrap: "anywhere" } }, f.pduName)),
+                React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontSize: 10.5, color: "#64748B" } }, [[f.vendor, f.model].filter(Boolean).join(" ") || "Model not set", f.serialNumber ? "S/N " + f.serialNumber : null, f.ipAddress].filter(Boolean).join(" · "))),
+            React.createElement("span", { style: { marginLeft: "auto", fontFamily: "Inter", fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 9, color: chip[1], background: chip[2] } }, chip[0] + (health.level === "warning" || health.level === "critical" ? "" : ""))),
+        tanks.length > 0 ? React.createElement("div", { style: { position: "relative", minHeight: 250, borderRadius: 16, background: "linear-gradient(180deg,#EAF0F9,#F6F9FD)", boxShadow: "inset 3px 3px 8px rgba(163,177,198,.4),inset -3px -3px 8px #fff", overflow: "hidden", display: "flex", alignItems: "center", padding: "8px 12px", gap: 6, flexWrap: "wrap" } },
+            React.createElement("div", { style: { position: "relative", width: 138, height: 230, flex: "none" } },
+                React.createElement("svg", { width: 138, height: 230, viewBox: "0 0 138 230", style: { position: "absolute", left: -12, top: 0 }, role: "img", "aria-label": "Power flowing into the PDU" },
+                    React.createElement("path", { d: "M0 140 H134", stroke: "#D3DEEE", strokeWidth: 16, strokeLinecap: "round", fill: "none" }),
+                    React.createElement("path", { className: "pdu-flow", d: "M0 140 H134", stroke: flowInk, strokeWidth: 4, strokeDasharray: "3 9", fill: "none" }),
+                    [0, 0.5, 1].map((d) => React.createElement("g", { key: d }, React.createElement("animateMotion", { dur: "2.4s", begin: d + "s", repeatCount: "indefinite", path: "M0 140 H134" }), React.createElement("path", { d: "M2 -9 L-5 2 H-1 L-3 9 L5 -3 H1 Z", fill: flowInk, stroke: "#fff", strokeWidth: 1 })))),
+                React.createElement("div", { style: { position: "absolute", left: 0, top: 46, display: "flex", flexDirection: "column", gap: 2 } },
+                    React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontSize: 9, fontWeight: 800, letterSpacing: ".18em", color: "#64748B" } }, "POWER IN"),
+                    React.createElement("span", { style: { fontFamily: "'Space Grotesk'", fontSize: 26, fontWeight: 800, lineHeight: 1 } }, f.lastPowerKw != null ? f.lastPowerKw.toFixed(2) : "—", React.createElement("span", { style: { fontFamily: "Inter", fontSize: 12, fontWeight: 700, color: "#64748B" } }, " kW")),
+                    React.createElement("span", { style: { fontFamily: "Inter", fontSize: 10.5, fontWeight: 600, color: "#64748B" } }, used != null ? used + "% of " + f.maxLoadKw.toFixed(1) + " kW" : "max load not set"))),
+            React.createElement("div", { style: { flex: "1 1 330px", display: "flex", justifyContent: "center", perspective: 900 } },
+                React.createElement("div", { style: { transformStyle: "preserve-3d", transform: "rotateX(12deg) rotateY(-12deg)", padding: "10px 16px 8px", borderRadius: 18, background: "linear-gradient(160deg,#FBFDFF,#DDE7F4)", border: "1px solid #fff", boxShadow: "14px 20px 28px rgba(23,52,93,.22)", maxWidth: "100%" } },
+                    React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 2, flexWrap: "wrap" } },
+                        React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontSize: 9, fontWeight: 800, letterSpacing: ".16em", color: "#64748B" } }, "TOTAL CURRENT"),
+                        React.createElement("b", { style: { fontFamily: "'Space Grotesk'", fontSize: 21, fontWeight: 800, lineHeight: 1 } }, total.toFixed(1), React.createElement("span", { style: { fontFamily: "Inter", fontSize: 11, color: "#64748B" } }, " A")),
+                        React.createElement("span", { style: { marginLeft: "auto", fontFamily: "Inter", fontSize: 9.5, fontWeight: 700, color: "#64748B" } }, "tank top " + (hot && hot.overloadA ? hot.overloadA : 16) + " A · dashed = near overload")),
+                    React.createElement("svg", { width: "100%", height: 14, viewBox: "0 0 340 14", preserveAspectRatio: "none", style: { display: "block", marginBottom: 4 }, "aria-hidden": "true" }, React.createElement("path", { className: "pdu-flow", d: "M0 7 H340", stroke: flowInk, strokeWidth: 3, strokeDasharray: "3 9", fill: "none" })),
+                    React.createElement("div", { style: { display: "flex", gap: 9 } }, tanks.map((c) => React.createElement(PduTank, { key: c.kind + c.number, c })))))) :
+            React.createElement("div", { style: { display: "flex", gap: 18, flexWrap: "wrap", padding: "6px 2px" } }, meta("Power", f.lastPowerKw != null ? f.lastPowerKw.toFixed(2) + " kW" : "—"), meta("Max load", f.maxLoadKw != null ? f.maxLoadKw.toFixed(1) + " kW" : "—"), meta("Used", used != null ? used + "%" : "—"), React.createElement("span", { style: { fontSize: 10.5, color: "#64748B", alignSelf: "center" } }, "Bank and phase tanks appear once this PDU's circuits have been read.")),
+        hot && React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "9px 14px", borderRadius: 12, background: lvlCol(hot) === "#EA7A0C" ? "#FDEFE3" : lvlCol(hot) === "#DC2626" ? "#FEE2E2" : "#EEF2F7", fontSize: 12 } },
+            React.createElement("b", { style: { fontFamily: "'JetBrains Mono'", fontSize: 10, letterSpacing: ".1em", color: lvlCol(hot) } }, (hot.kind === "Phase" ? "PHASE " : "BANK ") + hot.number),
+            React.createElement("span", { style: { fontFamily: "Inter", fontWeight: 700 } }, hot.currentA.toFixed(1) + " A" + (hot.overloadA ? " of " + hot.overloadA + " A · " + Math.round(hot.currentA / hot.overloadA * 100) + "%" : "")),
+            React.createElement("span", { style: { marginLeft: "auto", fontSize: 11, fontWeight: 600, color: lvlCol(hot) } }, lvlCol(hot) === "#EA7A0C" ? "Near overload - move load off this " + (hot.kind === "Phase" ? "phase" : "bank") : lvlCol(hot) === "#DC2626" ? "Overload - reduce load now" : "Inside limits")),
+        phases.length > 0 && React.createElement("div", { style: { display: "flex", gap: 14, flexWrap: "wrap", fontFamily: "'JetBrains Mono'", fontSize: 11.5, fontWeight: 600, padding: "0 4px" } }, React.createElement("span", { style: { fontSize: 9, letterSpacing: ".12em", color: "#64748B", fontWeight: 800 } }, "PHASES"), phases.slice(0, 3).map((p) => React.createElement("span", { key: p.number, style: { color: lvlCol(p) } }, "L" + p.number + " " + p.currentA.toFixed(1) + " A"))),
+        (f.lastError || (health.detail && health.level !== "ok" && health.level !== "none")) && React.createElement("div", { style: { fontSize: 10, fontWeight: 700, color: health.level === "critical" ? "#DC2626" : "#EA7A0C" } }, f.lastError ? f.lastError : "⚠ " + health.detail),
+        React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center" } },
+            React.createElement("button", { type: "button", title: "Bank and phase load, read live from the PDU", onClick: (e) => { e.stopPropagation(); onDetails(); }, style: { flex: 1, border: "none", borderRadius: 14, padding: "11px 16px", background: "linear-gradient(180deg,#4A6BF5,#3157EE)", color: "#fff", fontFamily: "Inter", fontSize: 12, fontWeight: 800, cursor: "pointer", boxShadow: "0 6px 14px rgba(49,87,238,.35)" } }, "Details"),
+            canEdit && sBtn("Edit", "#334155", onEdit, "Edit this PDU"),
+            canEdit && sBtn("Delete", "#DC2626", onDelete, "Delete this PDU")));
 }
 // Daisy-chain view: the host IP box, the network cable into the host PDU's Management port, and each PDU drawn as its own
 // control panel (display, status lights, In / Out / Management ports). Out of one PDU is cabled to In of the next.
+// Daisy-chain view, laid out as in the approved design: host IP box, network cable into the host PDU's Management port,
+// each PDU as a panel with display, status lights, Select / Scroll / Menu buttons and In / Management / Out ports,
+// and an Out to In cable between PDUs. Clicking a PDU opens its feed details.
 const PDU_VIEWS = ["Input", "Phase", "Bank"];
 function pduLcdLines(u, view) {
     const c = u.circuits || {};
     const ph = (c.phases || []).filter((x) => x && x.currentA != null), bk = (c.banks || []).filter((x) => x && x.currentA != null);
     const volts = ph.length && ph[0].voltage != null ? ph[0].voltage : bk.length && bk[0].voltage != null ? bk[0].voltage : null;
-    if (!ph.length && !bk.length && view !== 0) return ["NO CIRCUIT DATA", "from this PDU"];
-    if (view === 1) return ph.length ? ["PHASE LOAD"].concat(ph.slice(0, 3).map((p) => "L" + p.number + "  " + p.currentA.toFixed(1) + " A")) : ["NO PHASE DATA"];
+    const kw = u.lastPowerKw != null ? u.lastPowerKw.toFixed(1) + " kW" : "-- kW";
+    if (view === 1) return ph.length ? ["Phase"].concat(ph.slice(0, 3).map((p) => "L" + p.number + " " + p.currentA.toFixed(1) + " A")) : ["Phase", "no phase data", "", ""];
     if (view === 2) {
-        const hot = bk.slice().sort((a, b) => (b.usedPct != null ? b.usedPct : -1) - (a.usedPct != null ? a.usedPct : -1))[0];
-        return hot ? ["HOTTEST BANK " + hot.number, hot.currentA.toFixed(1) + " A", hot.usedPct != null ? hot.usedPct + "% OF LIMIT" : ""] : ["NO BANK DATA"];
+        const hot = bk.slice().sort((a, b) => b.currentA - a.currentA)[0];
+        return hot ? ["Bank " + hot.number, hot.currentA.toFixed(1) + " A", hot.overloadA ? "of " + hot.overloadA + " A" : "", hot.usedPct != null ? hot.usedPct + "%" : ""] : ["Bank", "no bank data", "", ""];
     }
     const maxPh = ph.length ? Math.max.apply(null, ph.map((p) => p.currentA)) : bk.length ? Math.max.apply(null, bk.map((p) => p.currentA)) : null;
-    return ["INPUT", volts != null ? Math.round(volts) + " V" : "— V", maxPh != null ? "MAX " + maxPh.toFixed(1) + " A" : "", u.lastPowerKw != null ? u.lastPowerKw.toFixed(2) + " kW" : "— kW"];
+    return ["Input", volts != null ? Math.round(volts) + " V" : "-- V", maxPh != null ? maxPh.toFixed(1) + " A" : "-- A", kw];
 }
 function PduChainView({ group, onOpen, onEdit }) {
     const [views, setViews] = useState({});
-    const W = 310, G = 72, TOP = 92, PH = 184, units = group.units, n = units.length;
-    const total = n * W + (n - 1) * G;
-    const portY = TOP + 5;
-    const port = (x, label, dim, free) => React.createElement("div", { key: label, style: { position: "absolute", left: x - 34, top: 5, width: 68, textAlign: "center", opacity: dim ? 0.38 : 1 } },
-        React.createElement("div", { style: { height: 20, margin: "0 8px", borderRadius: 4, background: "#0A0F19", border: "2px solid " + (free ? "#F59E0B" : "#64748B"), borderStyle: free ? "dashed" : "solid" } }),
-        React.createElement("div", { style: { fontFamily: "Inter", fontSize: 8.5, fontWeight: 800, color: "#B6C6E0", letterSpacing: ".03em", marginTop: 3, whiteSpace: "nowrap" } }, label));
-    return React.createElement("div", { style: { overflowX: "auto", padding: "6px 2px 4px" } },
+    const W = 432, PW = 354, n = group.units.length, units = group.units;
+    const total = (n - 1) * W + PW, H = 410, HX = 337;
+    const FC = { A: "#2F55E8", B: "#6D28D9" };
+    const glow = "0 0 12px rgba(96,165,250,.9)";
+    const port = (x, y, label, op, shadow, leds) => React.createElement("span", { style: { position: "absolute", left: x, top: y, width: 70, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, opacity: op } },
+        React.createElement("span", { style: { font: "600 10px Inter,sans-serif", color: "#b6c2da" } }, label),
+        React.createElement("span", { style: { position: "relative", width: 46, height: 32, borderRadius: 4, background: "#0a0f19", border: "2px solid #3a465c", boxShadow: shadow } },
+            React.createElement("span", { style: { position: "absolute", top: 5, left: 7, right: 7, height: 7, background: "repeating-linear-gradient(90deg,#b08d3c 0 2px,transparent 2px 5px)" } }),
+            React.createElement("span", { style: { position: "absolute", left: 13, right: 13, bottom: -2, height: 8, background: "#161d2c" } }),
+            leds && React.createElement("span", { style: { position: "absolute", top: 2, right: 2, width: 4, height: 4, borderRadius: "50%", background: "#3ddc84" } }),
+            leds && React.createElement("span", { style: { position: "absolute", top: 2, right: 9, width: 4, height: 4, borderRadius: "50%", background: "#f59e0b" } })));
+    const cables = [], labels = [];
+    cables.push({ d: "M" + HX + " 64 V122 C" + HX + " 160, 307 170, 307 198", col: "#0ea5a4", w: 9, t: 3.5, dash: "none", fo: 0.9 }); labels.push({ x: 380, y: 132, s: "Network cable" });
+    for (let i = 0; i < n - 1; i++) { const a = i * W + 307, b = (i + 1) * W + 47; cables.push({ d: "M" + a + " 278 C" + a + " 372, " + b + " 372, " + b + " 278", col: "#3157ee", w: 9, t: 3.5, dash: "none", fo: 0.9 }); labels.push({ x: (a + b) / 2, y: 380, s: "Out to In cable" }); }
+    const lx = (n - 1) * W + 307; cables.push({ d: "M" + lx + " 278 V328", col: "#94A3B8", w: 0, t: 2, dash: "3 5", fo: 0 }); labels.push({ x: lx, y: 346, s: "Out is free for the next PDU" });
+    return React.createElement("div", { style: { overflowX: "auto", padding: "10px 6px 6px" } },
         React.createElement("style", null, PDU_MOTION_CSS),
-        React.createElement("div", { style: { position: "relative", width: total, height: TOP + PH + 52, margin: "0 auto" } },
-            React.createElement("div", { style: { position: "absolute", left: W / 2 - 100, top: 0, width: 200, height: 56, borderRadius: 12, background: "linear-gradient(145deg,#17345D,#1E4A82)", color: "#fff", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", boxShadow: "0 6px 16px rgba(23,52,93,.28)" } },
-                React.createElement("span", { style: { fontFamily: "Inter", fontSize: 9, fontWeight: 800, letterSpacing: ".06em", color: "#9FB6DA" } }, "HOST IP"),
-                React.createElement("span", { style: { fontFamily: "'JetBrains Mono'", fontSize: 15, fontWeight: 800 } }, group.ipAddress)),
+        React.createElement("div", { style: { position: "relative", width: total, height: H, margin: "0 auto" } },
+            React.createElement("div", { style: { position: "absolute", left: 262, top: 0, width: 150, height: 64, boxSizing: "border-box", borderRadius: 14, background: "#fff", border: "2px solid rgba(49,87,238,.4)", boxShadow: "0 0 18px rgba(49,87,238,.2)", padding: "8px 12px", display: "flex", alignItems: "center", gap: 9 } },
+                React.createElement("svg", { width: 26, height: 26, viewBox: "0 0 24 24", fill: "none", stroke: "#3157ee", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, React.createElement("rect", { x: 2, y: 6, width: 20, height: 9, rx: 2 }), React.createElement("path", { d: "M6 10.5h.01M10 10.5h.01M14 10.5h.01M7 19h10M12 15v4" })),
+                React.createElement("span", { style: { display: "flex", flexDirection: "column" } }, React.createElement("span", { style: { font: "600 10px Inter,sans-serif", color: "#64748b" } }, "Host IP"), React.createElement("b", { style: { font: "800 12.5px 'JetBrains Mono',monospace", color: "#17345d" } }, group.ipAddress))),
+            React.createElement("span", { style: { position: "absolute", left: 430, top: 6, font: "500 11.5px/1.4 Inter,sans-serif", color: "#64748b", width: 300 } }, "Only the host PDU is on the network. Guest PDUs are read through the cable chain."),
             units.map((u, i) => {
-                const x = i * (W + G), view = views[u.id] || 0, host = i === 0, last = i === n - 1;
+                const x = i * W, view = views[u.id] || 0, host = i === 0, last = i === n - 1;
                 const side = /(^|[^a-z0-9])b\s*$/i.test(String(u.feedLabel || "").trim()) ? "B" : "A";
-                const lit = u.status === "online" ? (u.health === "critical" ? 2 : u.health === "warning" ? 1 : u.health === "ok" ? 0 : -1) : -1;
-                const lines = pduLcdLines(u, view);
-                const leds = [["OK", "#22C55E"], ["Warning", "#F59E0B"], ["Overload", "#EF4444"]];
-                const used = u.lastPowerKw != null && u.maxLoadKw ? Math.round((u.lastPowerKw / u.maxLoadKw) * 100) : null;
-                return React.createElement("div", { key: u.id, role: "button", tabIndex: 0, title: "Open the feed details for this PDU", onClick: () => onOpen(u), onKeyDown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(u); } },
-                    style: { position: "absolute", left: x, top: TOP, width: W, height: PH, borderRadius: 14, background: "linear-gradient(160deg,#2A3A55,#16213A)", boxShadow: "0 10px 22px rgba(15,23,42,.3), inset 0 1px 0 rgba(255,255,255,.12)", cursor: "pointer", outline: "none", color: "#fff", opacity: u.status === "online" ? 1 : 0.8 } },
-                    port(54, "In", host, false), port(W / 2, "Management", !host, false), port(W - 54, "Out", false, last),
-                    React.createElement("div", { style: { position: "absolute", left: 14, top: 58, width: 190, height: 78, borderRadius: 8, background: "#0B2A1E", border: "2px solid #14452F", padding: "6px 10px", fontFamily: "'JetBrains Mono'", fontSize: 11.5, fontWeight: 700, color: u.status === "online" ? "#7CFFB2" : "#3E6B55", lineHeight: 1.35, overflow: "hidden" } },
-                        u.status === "online" ? lines.map((t, k) => React.createElement("div", { key: k, style: { whiteSpace: "nowrap", fontSize: k === 0 ? 9.5 : 11.5, opacity: k === 0 ? 0.8 : 1 } }, t)) : React.createElement("div", null, "OFFLINE", React.createElement("div", { style: { fontSize: 9.5 } }, u.lastError ? "no reading" : "waiting for first poll"))),
-                    React.createElement("span", { style: { position: "absolute", right: 14, top: 58, fontFamily: "'JetBrains Mono'", fontSize: 10, fontWeight: 800, background: "rgba(255,255,255,.14)", padding: "2px 8px", borderRadius: 6 } }, "ID " + (u.displayId != null ? u.displayId : 1)),
-                    React.createElement("button", { type: "button", title: "Scroll the display: " + PDU_VIEWS.join(" / "), onClick: (e) => { e.stopPropagation(); setViews((v) => ({ ...v, [u.id]: ((v[u.id] || 0) + 1) % 3 })); }, style: { position: "absolute", right: 14, top: 84, width: 86, height: 24, borderRadius: 6, whiteSpace: "nowrap", border: "1px solid #64748B", background: "#334155", color: "#E2E8F0", fontFamily: "Inter", fontSize: 10, fontWeight: 800, cursor: "pointer" } }, "Scroll · " + PDU_VIEWS[view]),
-                    React.createElement("div", { style: { position: "absolute", right: 14, top: 114, display: "flex", gap: 7 } }, leds.map((l, k) => React.createElement("span", { key: l[0], title: l[0], style: { width: 11, height: 11, borderRadius: "50%", background: lit === k ? l[1] : "#1F2A3D", boxShadow: lit === k ? "0 0 8px " + l[1] : "inset 0 1px 2px rgba(0,0,0,.5)" } }))),
-                    React.createElement("div", { style: { position: "absolute", left: 14, right: 14, top: 144, display: "flex", alignItems: "center", gap: 7 } },
-                        React.createElement("span", { style: side === "B" ? { width: 16, height: 16, borderRadius: "50%", border: "2.5px solid #A78BFA", flex: "none" } : { width: 16, height: 16, borderRadius: 4, background: "#6F8CFF", flex: "none" } }),
-                        React.createElement("span", { style: { fontFamily: "Inter", fontSize: 11.5, fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, "Rack-" + u.rackNo + " · Feed " + side),
-                        React.createElement("span", { style: { marginLeft: "auto", fontFamily: "'Space Grotesk'", fontSize: 12, fontWeight: 800 } }, u.lastPowerKw != null ? u.lastPowerKw.toFixed(2) + " kW" + (used != null ? " · " + used + "%" : "") : "—"),
-                        onEdit && React.createElement("button", { type: "button", onClick: (e) => { e.stopPropagation(); onEdit(u); }, style: { border: "1px solid #64748B", background: "transparent", color: "#E2E8F0", borderRadius: 6, fontSize: 10, fontWeight: 700, padding: "2px 8px", cursor: "pointer" } }, "Edit")),
-                    React.createElement("div", { style: { position: "absolute", left: 14, right: 14, top: 166, fontFamily: "Inter", fontSize: 9.5, color: "#9FB6DA", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, host ? "Network cable goes to Management" : "In is fed from the previous PDU's Out", last ? " · Out is free for the next PDU" : ""));
+                const online = u.status === "online";
+                const lvl = !online ? 3 : u.health === "critical" ? 2 : u.health === "warning" ? 1 : u.health === "ok" ? 0 : -1;
+                const hl = [["Healthy", "#047857"], ["Warning", "#B45309"], ["Critical", "#B91C1C"], ["Offline", "#475569"]][lvl < 0 ? 3 : lvl];
+                const healthTxt = lvl === -1 ? ["Not checked", "#475569"] : hl;
+                const lines = online ? pduLcdLines(u, view) : ["No link", "--", "--", "--"];
+                const leds = [["OK", "#3ddc84"], ["Warning", "#f5c542"], ["Overload", "#ff4d4d"]];
+                const chainNo = u.chainUnit || i + 1;
+                const model = String(u.model || "").replace(/APC \/ Schneider Electric/i, "APC") || "PDU";
+                const open = () => onOpen(u);
+                return React.createElement("div", { key: u.id, style: { position: "absolute", left: x, top: 124, width: PW } },
+                    React.createElement("button", { type: "button", title: "Open the feed details for this PDU", onClick: open, style: { all: "unset", boxSizing: "border-box", cursor: "pointer", display: "flex", alignItems: "center", gap: 8, height: 24, padding: "0 4px", width: "100%" } },
+                        React.createElement("span", { style: { width: 20, height: 20, borderRadius: side === "A" ? 8 : "50%", boxSizing: "border-box", display: "flex", alignItems: "center", justifyContent: "center", font: "800 10.5px 'Space Grotesk',sans-serif", background: side === "A" ? "#2F55E8" : "#fff", color: side === "A" ? "#fff" : "#6D28D9", border: "2px solid " + FC[side] } }, side),
+                        React.createElement("b", { style: { font: "800 13px 'Space Grotesk',sans-serif", color: "#17345d" } }, "Unit " + chainNo + " · Rack " + u.rackNo),
+                        React.createElement("span", { style: { font: "600 11px Inter,sans-serif", color: "#64748b" } }, model),
+                        React.createElement("span", { style: { font: "700 11px Inter,sans-serif", color: healthTxt[1] } }, healthTxt[0]),
+                        onEdit && React.createElement("span", { role: "button", tabIndex: 0, title: "Edit this PDU", onClick: (e) => { e.stopPropagation(); onEdit(u); }, onKeyDown: (e) => { if (e.key === "Enter") { e.stopPropagation(); onEdit(u); } }, style: { font: "700 10px Inter,sans-serif", color: "#3157ee", marginLeft: 4 } }, "Edit")),
+                    React.createElement("div", { style: { position: "relative", width: PW, height: 170, marginTop: 2, borderRadius: 12, background: "linear-gradient(180deg,#2a3449,#161d2c)", border: "1px solid #3a465c", boxShadow: "0 10px 22px rgba(23,52,93,.28), inset 0 1px 0 rgba(255,255,255,.08)" } },
+                        React.createElement("span", { style: { position: "absolute", left: 12, top: 12, width: 70, height: 46, boxSizing: "border-box", borderRadius: 8, background: FC[side], display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#fff" } }, React.createElement("span", { style: { font: "600 9px Inter,sans-serif", opacity: 0.9 } }, "Power in"), React.createElement("b", { style: { font: "800 11.5px 'JetBrains Mono',monospace" } }, "Feed " + side)),
+                        port(12, 84, "In", host ? 0.38 : 1, host ? "none" : glow, false),
+                        React.createElement("button", { type: "button", "aria-label": "Open feed details for unit " + chainNo, onClick: open, style: { all: "unset", cursor: "pointer", position: "absolute", left: 92, top: 12, width: 170, height: 92, boxSizing: "border-box", borderRadius: 6, border: "3px solid #0b111c", background: online ? "linear-gradient(180deg,#7fd0e6,#4fb3d3)" : "linear-gradient(180deg,#7d8798,#5d6678)", boxShadow: "inset 0 0 14px rgba(0,40,70,.35), 0 0 14px " + (online ? "rgba(79,179,211,.55)" : "transparent"), padding: "6px 9px", display: "flex", flexDirection: "column", gap: 1, color: online ? "#07354f" : "#1f2735", font: "700 13px/1.25 'JetBrains Mono',monospace" } },
+                            React.createElement("span", { style: { display: "flex", alignItems: "center" } }, React.createElement("span", null, lines[0]), React.createElement("span", { style: { marginLeft: "auto", font: "700 9.5px 'JetBrains Mono',monospace", border: "1px solid " + (online ? "#07354f" : "#1f2735"), padding: "0 4px", borderRadius: 3 } }, "ID " + (u.displayId != null ? u.displayId : 1))),
+                            React.createElement("span", null, lines[1]), React.createElement("span", null, lines[2]), React.createElement("span", null, lines[3])),
+                        React.createElement("span", { style: { position: "absolute", left: 92, top: 112, display: "flex", gap: 9, alignItems: "center" } }, leds.map((l, k) => React.createElement("span", { key: l[0], style: { display: "flex", alignItems: "center", gap: 4 } }, React.createElement("span", { style: { width: 8, height: 8, borderRadius: "50%", background: lvl === k ? l[1] : "#3a4560", boxShadow: lvl === k ? "0 0 8px " + l[1] : "none" } }), React.createElement("span", { style: { font: "600 9px Inter,sans-serif", color: "#b6c2da" } }, l[0])))),
+                        React.createElement("span", { style: { position: "absolute", left: 92, top: 132, display: "flex", gap: 16 } },
+                            React.createElement("span", { "aria-hidden": "true", style: { display: "flex", flexDirection: "column", alignItems: "center", gap: 2 } }, React.createElement("span", { style: { width: 22, height: 22, borderRadius: "50%", background: "radial-gradient(circle at 35% 30%,#e3e8f0,#8e99ac)" } }), React.createElement("span", { style: { font: "600 8px Inter,sans-serif", color: "#b6c2da" } }, "Select")),
+                            React.createElement("span", { style: { display: "flex", flexDirection: "column", alignItems: "center", gap: 2 } }, React.createElement("button", { type: "button", title: "Scroll the display: Input / Phase / Bank", "aria-label": "Scroll display on unit " + chainNo, onClick: () => setViews((v) => ({ ...v, [u.id]: ((v[u.id] || 0) + 1) % 3 })), style: { all: "unset", cursor: "pointer", width: 22, height: 22, borderRadius: "50%", background: "radial-gradient(circle at 35% 30%,#fff,#9eabc0)", boxShadow: "0 0 0 2px rgba(96,165,250,.7)" } }), React.createElement("span", { style: { font: "700 8px Inter,sans-serif", color: "#9cc2ff" } }, "Scroll")),
+                            React.createElement("span", { "aria-hidden": "true", style: { display: "flex", flexDirection: "column", alignItems: "center", gap: 2 } }, React.createElement("span", { style: { width: 22, height: 22, borderRadius: "50%", background: "radial-gradient(circle at 35% 30%,#e3e8f0,#8e99ac)" } }), React.createElement("span", { style: { font: "600 8px Inter,sans-serif", color: "#b6c2da" } }, "Menu"))),
+                        port(272, 12, "Management", host ? 1 : 0.38, host ? glow : "none", true),
+                        port(272, 84, "Out", 1, last ? "none" : glow, false),
+                        null));
             }),
-            React.createElement("svg", { width: total, height: TOP + PH + 52, style: { position: "absolute", left: 0, top: 0, pointerEvents: "none", overflow: "visible" }, "aria-hidden": "true" },
-                React.createElement("path", { d: "M" + (W / 2) + " 56 V" + (portY - 2), stroke: "#0EA5A4", strokeWidth: 5, fill: "none", strokeLinecap: "round" }),
-                React.createElement("text", { x: W / 2 + 10, y: 76, fontSize: 10, fontWeight: 700, fill: "#0E7490", fontFamily: "Inter" }, "Network cable"),
-                units.slice(0, -1).map((u, i) => { const x1 = i * (W + G) + W - 54, x2 = (i + 1) * (W + G) + 54; return React.createElement("g", { key: u.id }, React.createElement("path", { d: "M" + x1 + " " + portY + " C" + x1 + " " + (portY - 52) + "," + x2 + " " + (portY - 52) + "," + x2 + " " + portY, stroke: "#3157EE", strokeWidth: 5, fill: "none", strokeLinecap: "round", opacity: 0.35 }), React.createElement("path", { className: "pdu-flow", d: "M" + x1 + " " + portY + " C" + x1 + " " + (portY - 52) + "," + x2 + " " + (portY - 52) + "," + x2 + " " + portY, stroke: "#6F8CFF", strokeWidth: 3, fill: "none", strokeDasharray: "6 8", strokeLinecap: "round" })); }))));
+            React.createElement("svg", { width: total, height: H, viewBox: "0 0 " + total + " " + H, style: { position: "absolute", left: 0, top: 0, pointerEvents: "none", overflow: "visible" }, "aria-hidden": "true" },
+                cables.map((c, k) => React.createElement("g", { key: k }, c.w > 0 && React.createElement("path", { className: "pdu-glow", d: c.d, fill: "none", stroke: c.col, strokeWidth: c.w, strokeLinecap: "round", opacity: 0.22 }), React.createElement("path", { d: c.d, fill: "none", stroke: c.col, strokeWidth: c.t, strokeLinecap: "round", strokeDasharray: c.dash }), c.fo > 0 && React.createElement("path", { className: "pdu-flow14", d: c.d, fill: "none", stroke: "#ffffff", strokeOpacity: c.fo, strokeWidth: 1.6, strokeDasharray: "3 11" }))),
+                labels.map((t, k) => React.createElement("text", { key: k, x: t.x, y: t.y, textAnchor: "middle", fontFamily: "Inter", fontSize: 11, fontWeight: 600, fill: "#64748b" }, t.s)))));
 }
 function PduEditModal({ pdu, allowedSites, onClose, onSaved }) {
     const isNew = !pdu || !pdu.id;
