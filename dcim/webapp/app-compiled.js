@@ -17384,7 +17384,7 @@ function PduRepFeed({ side, kw, rated }) {
         e("div", { style: { height: 7, borderRadius: 4, background: "#E1E8F3", boxShadow: "inset 1px 1px 3px #BAC5D6, inset -1px -1px 2px #fff", overflow: "hidden" } }, e("div", { style: { width: Math.max(3, Math.min(100, pct)) + "%", height: "100%", borderRadius: 4, background: c } })),
         e("span", { style: { fontSize: 11, fontWeight: 800, whiteSpace: "nowrap", color: pct >= 70 ? c : "#17345D" } }, kw.toFixed(1) + " kW"));
 }
-function PduReportView({ racks, onExport, onClose, busy }) {
+function PduReportBody({ racks, onExport, onClose, busy }) {
     const e = React.createElement, model = useMemo(() => pduReportModel(racks), [racks]);
     const [sel, setSel] = useState(null), [sort, setSort] = useState("load"), [filt, setFilt] = useState("all"), [q, setQ] = useState("");
     const zone = sel && model.zones.find((z) => z.site === sel.site && z.zone === sel.zone);
@@ -17394,7 +17394,7 @@ function PduReportView({ racks, onExport, onClose, busy }) {
     const legend = (dark) => e("div", { style: { display: "flex", gap: 14, flexWrap: "wrap", fontSize: 10.5, color: dark ? PDU_REP.mute : "#64748B", alignItems: "center" } }, [["Feed A", dark ? PDU_REP.a : "#3157EE"], ["Feed B", dark ? PDU_REP.b : "#7C5CF0"], ["70% of rated or more", "#EA7A0C"], ["85% or more", "#DC2626"]].map((l) => e("span", { key: l[0] }, e("i", { style: { display: "inline-block", width: 10, height: 10, borderRadius: 3, background: l[1], marginRight: 6, verticalAlign: -1 } }), l[0])));
     const soft = { background: "linear-gradient(145deg,#F2F5FB,#E6ECF6)", borderRadius: 16, boxShadow: "5px 5px 12px #BAC5D6, -5px -5px 12px #FFFFFF", color: "#17345D" };
     if (!model.rows.length) return e("div", { className: "neu-card", style: { padding: 18, marginBottom: 18 } }, e("div", { style: { display: "flex", alignItems: "center" } }, e("b", { style: { fontFamily: "'Space Grotesk'", fontSize: 15 } }, "Power report"), e("button", { className: "neu-btn-secondary", style: { marginLeft: "auto", fontSize: 11.5 }, onClick: onClose }, "Close")), e("div", { style: { marginTop: 8, color: "#64748B", fontSize: 12.5 } }, "No PDU racks to report yet."));
-    return e("div", { className: "neu-card", style: { padding: "14px 16px", marginBottom: 18, display: "flex", flexDirection: "column", gap: 10 } },
+    return e("div", { className: "neu-card", style: { padding: "14px 16px", marginBottom: 0, display: "flex", flexDirection: "column", gap: 10 } },
         e("div", { style: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" } },
             e("b", { style: { fontFamily: "'Space Grotesk'", fontSize: 16, color: "#17345D" } }, "Power report"),
             e("span", { style: { fontSize: 11.5, color: "#64748B", flex: 1, minWidth: 200 } }, model.sites.length + " location" + (model.sites.length > 1 ? "s" : "") + ", " + model.all.n + " racks, " + model.all.kw.toFixed(1) + " of " + model.all.rated.toFixed(1) + " kW. Select a zone card to see its racks."),
@@ -17430,6 +17430,12 @@ function PduReportView({ racks, onExport, onClose, busy }) {
                 e(PduRepFeed, { side: "A", kw: r.A, rated: r.hasA ? r.ra : null }), e(PduRepFeed, { side: "B", kw: r.B, rated: r.hasB ? r.rb : null })))),
             !shown.length && e("div", { style: { fontSize: 12, color: "#64748B" } }, "No racks match."),
             legend(false)));
+}
+function PduReportView(props) {
+    const onClose = props.onClose;
+    useEffect(() => { const h = (ev) => { if (ev.key === "Escape") { ev.stopImmediatePropagation(); onClose(); } }; window.addEventListener("keydown", h, true); return () => window.removeEventListener("keydown", h, true); }, [onClose]);
+    return ReactDOM.createPortal(React.createElement("div", { style: { position: "fixed", inset: 0, zIndex: 100000, background: "rgba(14,18,28,0.5)", backdropFilter: "blur(5px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }, onMouseDown: (ev) => { if (ev.target === ev.currentTarget) onClose(); } },
+        React.createElement("div", { role: "dialog", "aria-modal": "true", "aria-label": "Power report", onMouseDown: (ev) => ev.stopPropagation(), style: { width: "min(1180px,100%)", maxHeight: "94vh", overflowY: "auto", borderRadius: 22, background: "linear-gradient(145deg,#e7edf5,#f5f8fc 44%,#e9f1fb)", boxShadow: "0 30px 80px rgba(0,0,0,.45)", padding: 10 } }, React.createElement(PduReportBody, props))), document.body);
 }
 function PduPage({ allowedSites = [], canEdit = false }) {
     const [flat, setFlat] = useState([]);
