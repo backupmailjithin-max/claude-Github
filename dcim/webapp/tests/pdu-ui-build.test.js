@@ -28,7 +28,7 @@ test('PDU details window is the dark control panel and keeps its warnings', () =
 
 test('PDU PDF reports exist and list each PDU and circuit once', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'app-compiled.js'), 'utf8');
-  for (const t of ['function buildPduRackPdf', 'function buildPduZonePdf', 'Rack circuit report', 'Location power report', 'Circuit PDF for this rack', 'Export PDF']) assert.ok(src.includes(t), t);
+  for (const t of ['function buildPduRackPdf', 'function buildPduZonePdf', 'Rack circuit report', 'Location power report', 'Circuit PDF for this rack', 'function PduReportView', 'function pduReportModel', 'View Report', 'Export PDF']) assert.ok(src.includes(t), t);
   const cut = (name, next) => { const a = src.indexOf('function ' + name); const b = src.indexOf(next, a); return src.slice(a, b); };
   const fn = new Function(cut('pduPdfRacks', 'function pduPdfPage') + '\nreturn pduPdfRacks;')();
   const circ = (a) => ({ banks: [{ number: 1, currentA: a }, { number: 1, currentA: a }, { number: 2, currentA: a }], phases: [{ number: 1, currentA: a }] });
