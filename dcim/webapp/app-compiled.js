@@ -17365,6 +17365,25 @@ function pduPdfRackTile(doc, r, x, y, w, h) {
     doc.setFontSize(6.6 * f); doc.setTextColor(...PDFS.mute); doc.text(pdfNum(r.kw, 1) + " kW", x + 3.2 + pw + 2, y + 11.2 * k);
     pduPdfSoftFeed(doc, x + 3.2, y + 14 * k, w - 6.4, "A", r.A, r.hasA ? r.ra : null); pduPdfSoftFeed(doc, x + 3.2, y + 19 * k, w - 6.4, "B", r.B, r.hasB ? r.rb : null);
 }
+// Top 5 highest-utilised racks as ONE module: a ranked table (rack, load, total kW, Feed A bar, Feed B bar).
+function pduPdfTopModule(doc, list, x, y, w, h, title, withZone, legend) {
+    pduPdfSoftTile(doc, x, y, w, h);
+    doc.setFont("helvetica", "bold"); doc.setFontSize(8.5); doc.setTextColor(...PDFS.ink); doc.text(title, x + 5, y + 6.2); if (legend) pduPdfLegend(doc, x + w - 112, y + 6.2);
+    doc.setFontSize(6.4); doc.setTextColor(...PDFS.mute);
+    [["#", 6, "l"], [withZone ? "ZONE | RACK" : "RACK", 13, "l"], ["LOAD", 60, "l"], ["TOTAL kW", 82, "l"], ["FEED A", 126, "l"], ["FEED B", 204, "l"]].forEach((c) => doc.text(c[0], x + c[1], y + 11.8));
+    doc.setDrawColor(213, 221, 234); doc.setLineWidth(0.15); doc.line(x + 4, y + 13.4, x + w - 4, y + 13.4);
+    const rh = (h - 15.5) / Math.max(1, list.length), f = Math.min(1.25, Math.max(1, rh / 7.8));
+    list.forEach((r, i) => {
+        const yy = y + 14.6 + i * rh, mid = yy + rh / 2, edge = r.pct >= 85 ? PDFS.bad : r.pct >= 70 ? PDFS.warn : PDFS.ok;
+        if (i) { doc.setDrawColor(226, 232, 242); doc.setLineWidth(0.12); doc.line(x + 4, yy, x + w - 4, yy); }
+        doc.setFillColor(...edge); doc.roundedRect(x + 2.6, yy + 1.2, 1, rh - 2.4, 0.5, 0.5, "F");
+        doc.setFillColor(...PDFS.ink); doc.circle(x + 7.2, mid, 2.2, "F"); doc.setFont("helvetica", "bold"); doc.setFontSize(6.6); doc.setTextColor(255, 255, 255); doc.text(String(i + 1), x + 7.2, mid + 0.85, { align: "center" });
+        doc.setFontSize(8 * f); doc.setTextColor(...PDFS.ink); doc.text((withZone ? r.zone + "  |  " : "") + String(r.rackNo), x + 13, mid + 1);
+        doc.setFontSize(11 * f); doc.setTextColor(...pdfSLv(r.pct)); doc.text(r.pct + "%", x + 60, mid + 1.4);
+        doc.setFontSize(7.4 * f); doc.setTextColor(...PDFS.mute); doc.text(pdfNum(r.kw, 1) + " of " + pdfNum(r.rated, 1) + " kW", x + 82, mid + 1);
+        pduPdfSoftFeed(doc, x + 126, mid - 2.2, 72, "A", r.A, r.hasA ? r.ra : null); pduPdfSoftFeed(doc, x + 204, mid - 2.2, w - 204 - 6, "B", r.B, r.hasB ? r.rb : null);
+    });
+}
 function pduPdfTopCard(doc, r, i, x, y, w, h, label) {
     const k = Math.max(1, h / 20.5), f = Math.min(k, 1.25), edge = r.pct >= 85 ? PDFS.bad : r.pct >= 70 ? PDFS.warn : null;
     pduPdfSoftTile(doc, x, y, w, h, edge);
@@ -17383,10 +17402,11 @@ function buildPduZonePdf(Ctor, racks, meta) {
         // Location overview (light): zone gauge cards; the location trend sits in the free space beside the cards (or below them); location top 5 racks underneath. Blocks grow to use the page.
         if (meta.overview !== false && S.zones.length >= 1) {
             const GX = 4, cw = (277 - 3 * GX) / 4, nz = S.zones.length, rowsN = Math.ceil(nz / 4), rem = nz % 4, freeCols = rem ? 4 - rem : 0, beside = freeCols >= 2;
-            const START = 49, TREND_BELOW = beside ? 0 : 49, TOP5 = 29, chBase = 62;
-            const natural = rowsN * (chBase + GX) + TREND_BELOW + TOP5, room = BOTTOM - START - natural;
-            const dch = rowsN === 1 || natural <= BOTTOM - START ? Math.max(0, Math.min(chBase * 0.55, room * 0.62 / rowsN)) : 0, ch = chBase + dch, k = ch / chBase;
-            const top5h = 20.5 + (room > 0 ? Math.max(0, Math.min(16, (room - dch * rowsN) * 0.9)) : 0);
+            const START = 49, TREND_BELOW = beside ? 0 : 49, TOP5 = 53;
+            const natural0 = rowsN * (62 + GX) + TREND_BELOW + TOP5, compact = rowsN === 1 && natural0 > BOTTOM - START, chBase = compact ? 52 : 62, trendH = compact ? 38 : 45;
+            const natural = rowsN * (chBase + GX) + (beside ? 0 : trendH + 4) + (compact ? 46 : 50) + 3, room = BOTTOM - START - natural;
+            const dch = rowsN === 1 || natural <= BOTTOM - START ? Math.max(0, Math.min(chBase * 0.55, room * 0.62 / rowsN)) : 0, ch = chBase + dch, k = ch / 62;
+            const top5h = (compact ? 46 : 50) + (room > 0 ? Math.max(0, Math.min(22, (room - dch * rowsN) * 0.9)) : 0);
             let col = 0, y = 0;
             const open = (cont) => {
                 newPage(); frame(S.site + "  |  Zone-wise rack power reading" + (cont ? " (continued)" : "")); col = 0;
@@ -17423,19 +17443,18 @@ function buildPduZonePdf(Ctor, racks, meta) {
                 yy = ty + ch + GX;
             } else {
                 yy = col ? y + ch + GX : y;
-                if (yy + 47 > BOTTOM) { newPage(); frame(S.site + "  |  Location power summary"); yy = 22; }
-                pduPdfSoftTile(doc, M, yy, 277, 45); trendHead(M, yy, 277); pduPdfTrendChart(doc, M + 5, yy + 9, 170, 33, lm); pduPdfMonthTable(doc, M + 186, yy + 10, 82, lm); yy += 49;
+                if (yy + trendH + 2 > BOTTOM) { newPage(); frame(S.site + "  |  Location power summary"); yy = 22; }
+                pduPdfSoftTile(doc, M, yy, 277, trendH); trendHead(M, yy, 277); pduPdfTrendChart(doc, M + 5, yy + 9, 170, trendH - 12, lm); pduPdfMonthTable(doc, M + 186, yy + 10, 82, lm); yy += trendH + 4;
             }
             const top = S.racks.slice().sort((a, b) => b.pct - a.pct || b.kw - a.kw).slice(0, 5);
             if (top.length) {
-                if (yy + 8 + top5h > BOTTOM + 2) { newPage(); frame(S.site + "  |  Location power summary (continued)"); yy = 22; }
-                doc.setFont("helvetica", "bold"); doc.setFontSize(8.5); doc.setTextColor(...PDFS.ink); doc.text("Top 5 highest-utilised racks in " + S.site + " (all zones)", M, yy + 1.5);
-                const cw5 = (277 - 4 * 3) / 5; top.forEach((r, i) => pduPdfTopCard(doc, r, i, M + i * (cw5 + 3), yy + 4.5, cw5, Math.min(top5h, BOTTOM - yy - 4.5), r.zone + "  |  " + r.rackNo));
+                if (yy + top5h > BOTTOM + 2) { newPage(); frame(S.site + "  |  Location power summary (continued)"); yy = 22; }
+                pduPdfTopModule(doc, top, M, yy, 277, Math.min(top5h, BOTTOM - yy), "Top 5 highest-utilised racks in " + S.site + " (all zones)", true);
             }
         }
         // One run of light pages per zone: summary + three-month trend, top 5 racks, then the rack tiles; spare room on the last page is filled
         S.zones.forEach((z) => {
-            const sorted = z.racks.slice().sort((a, b) => b.pct - a.pct || b.kw - a.kw), top5 = z.n >= 8 ? sorted.slice(0, 5) : [], rest = sorted;
+            const sorted = z.racks.slice().sort((a, b) => b.pct - a.pct || b.kw - a.kw), top5 = z.n >= 8 ? sorted.slice(0, 5) : [], rest = z.racks.slice().sort((a, b) => String(a.rackNo).localeCompare(String(b.rackNo), undefined, { numeric: true }));
             const months = pduTrendSummary((meta.trends || {})[z.site + "|" + z.zone], now), tw = (277 - 5 * GAP) / 6, th = 24;
             newPage(); frame("Zone " + z.zone + "  |  " + z.site);
             pduPdfSoftTile(doc, M, 21, 102.5, 40, z.pct >= 85 ? PDFS.bad : z.pct >= 70 ? PDFS.warn : null);
@@ -17446,14 +17465,11 @@ function buildPduZonePdf(Ctor, racks, meta) {
             doc.setFillColor(...PDFS.a); doc.roundedRect(176, 24.6, 3, 3, 0.7, 0.7, "F"); doc.setFont("helvetica", "normal"); doc.setFontSize(6.6); doc.setTextColor(...PDFS.mute); doc.text("Daily average kW", 180.5, 27.1); doc.setFillColor(...PDFS.warn); doc.roundedRect(204, 24.6, 3, 3, 0.7, 0.7, "F"); doc.text("Daily peak kW", 208.5, 27.1); doc.text("Rated " + pdfNum(z.rated, 1) + " kW", 232, 27.1);
             pduPdfTrendChart(doc, 121, 30, 92, 28.5, months); pduPdfMonthTable(doc, 218, 31, 64.5, months);
             let y = 65.5;
-            if (top5.length) {
-                doc.setFont("helvetica", "bold"); doc.setFontSize(8.5); doc.setTextColor(...PDFS.ink); doc.text("Top 5 highest-utilised racks", M, y + 1.5); 
-                const cw5 = (277 - 4 * GAP) / 5; top5.forEach((r, i) => pduPdfTopCard(doc, r, i, M + i * (cw5 + GAP), y + 4.5, cw5, 20.5)); y += 27;
-            } else y += 1;
+            if (top5.length) { pduPdfTopModule(doc, top5, M, y, 277, 50, "Top 5 highest-utilised racks in zone " + z.zone, false, true); y += 53; } else { y += 1; pduPdfLegend(doc, M, y + 2.5); y += 6; }
             let i = 0, yy = y, first = true, lastBottom = y;
             for (;;) {
                 const rows = Math.max(1, Math.floor((BOTTOM - yy + GAP) / (th + GAP)));
-                if (!first) { newPage(); frame("Zone " + z.zone + " (continued)  |  " + z.site); pduPdfLegend(doc, M, 22.5); yy = 27; } else { pduPdfLegend(doc, 188, 66.7); }
+                if (!first) { newPage(); frame("Zone " + z.zone + " (continued)  |  " + z.site); pduPdfLegend(doc, M, 22.5); yy = 27; } 
                 const cap = Math.max(1, Math.floor((BOTTOM - yy + GAP) / (th + GAP))) * 6, slice = rest.slice(i, i + cap);
                 const isLast = i + slice.length >= rest.length, nrows = Math.ceil(slice.length / 6), thL = isLast ? Math.min(30, Math.max(th, (BOTTOM - yy + GAP) / nrows - GAP)) : th;
                 slice.forEach((r, k) => pduPdfRackTile(doc, r, M + (k % 6) * (tw + GAP), yy + Math.floor(k / 6) * (thL + GAP), tw, thL));
@@ -17517,7 +17533,7 @@ function PduRepTrend({ rows, rated }) {
 }
 function PduReportBody({ racks, onExport, onClose, busy }) {
     const e = React.createElement, model = useMemo(() => pduReportModel(racks), [racks]);
-    const [sel, setSel] = useState(null), [sort, setSort] = useState("load"), [filt, setFilt] = useState("all"), [q, setQ] = useState("");
+    const [sel, setSel] = useState(null), [sort, setSort] = useState("name"), [filt, setFilt] = useState("all"), [q, setQ] = useState("");
     const [trend, setTrend] = useState(null);
     useEffect(() => { if (!sel) return; let live = true; setTrend(null); const rng = pduTrendRange(new Date()); api.getPduTrend({ site: sel.site, zone: sel.zone, from: rng.from, to: rng.to }).then((r) => { if (live) setTrend(r); }).catch(() => { if (live) setTrend([]); }); return () => { live = false; }; }, [sel && sel.site, sel && sel.zone]);
     const zone = sel && model.zones.find((z) => z.site === sel.site && z.zone === sel.zone);
@@ -17549,7 +17565,7 @@ function PduReportBody({ racks, onExport, onClose, busy }) {
         zone && e("div", { style: { background: "#E9EFF7", borderRadius: 14, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 } },
             e("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" } },
                 e("b", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, color: "#17345D", alignSelf: "center" } }, "Racks in zone " + zone.zone),
-                e("select", { "aria-label": "Sort racks", value: sort, onChange: (ev) => setSort(ev.target.value), className: "neu-input", style: { fontSize: 12, padding: "6px 9px" } }, e("option", { value: "load" }, "Highest load first"), e("option", { value: "low" }, "Lowest load first"), e("option", { value: "name" }, "Rack name")),
+                e("select", { "aria-label": "Sort racks", value: sort, onChange: (ev) => setSort(ev.target.value), className: "neu-input", style: { fontSize: 12, padding: "6px 9px" } }, e("option", { value: "name" }, "Rack no (A to Z)"), e("option", { value: "load" }, "Highest load first"), e("option", { value: "low" }, "Lowest load first")),
                 e("input", { type: "search", "aria-label": "Find rack", placeholder: "Find rack", value: q, onChange: (ev) => setQ(ev.target.value), className: "neu-input", style: { fontSize: 12, padding: "6px 9px", width: 130 } }),
                 e("div", { style: { display: "flex", gap: 6 } }, [["all", "All"], ["hot", "70% and above"], ["single", "Single feed"]].map((f) => e("button", { key: f[0], "aria-pressed": filt === f[0], onClick: () => setFilt(f[0]), className: filt === f[0] ? "neu-btn-primary" : "neu-btn-secondary", style: { fontSize: 11, padding: "5px 10px" } }, f[1]))),
                 e("span", { style: { marginLeft: "auto" } }, btn("Export zone " + zone.zone + " (PDF)", () => onExport("zone", racks.filter((r) => (r.site || "-") === zone.site && (r.zone || "-") === zone.zone), zone.site + " " + zone.zone, false)))),
@@ -17559,11 +17575,16 @@ function PduReportBody({ racks, onExport, onClose, busy }) {
                     e("div", { style: { display: "flex", alignItems: "baseline", gap: 8 } }, e("span", { style: { fontFamily: "'Space Grotesk'", fontSize: 28, fontWeight: 800, color: pduRepSLv(zone.pct) } }, zone.pct + "%"), e("span", { style: { fontSize: 11, fontWeight: 700, color: "#64748B" } }, zone.kw.toFixed(1) + " of " + zone.rated.toFixed(1) + " kW")),
                     e("div", { style: { gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 7 } }, e(PduRepFeed, { side: "A", kw: zone.A, rated: zone.hasA ? zone.ra : null }), e(PduRepFeed, { side: "B", kw: zone.B, rated: zone.hasB ? zone.rb : null }))),
                 e("div", { style: Object.assign({ padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }, soft) }, e("b", { style: { fontFamily: "'Space Grotesk'", fontSize: 13 } }, "Power trend, last 3 months"), trend ? e(PduRepTrend, { rows: trend, rated: zone.rated }) : e("div", { style: { fontSize: 12, color: "#94A3B8", padding: "26px 0" } }, "Loading power history..."))),
-            zone.n >= 8 && e("div", { style: { fontFamily: "'Space Grotesk'", fontSize: 13, fontWeight: 800 } }, "Top 5 highest-utilised racks"),
-            zone.n >= 8 && e("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 12, padding: 4 } }, zone.racks.slice().sort((a, b) => b.pct - a.pct || b.kw - a.kw).slice(0, 5).map((r, i) => e("div", { key: r.rackNo, style: Object.assign({ padding: "10px 12px", display: "flex", flexDirection: "column", gap: 5 }, soft) },
-                e("div", { style: { display: "flex", alignItems: "center", gap: 7 } }, e("span", { style: { width: 20, height: 20, borderRadius: "50%", background: "#17345D", color: "#fff", fontSize: 10.5, fontWeight: 800, display: "grid", placeItems: "center" } }, i + 1), e("b", { style: { fontSize: 12, color: "#475569" } }, r.rackNo), e("span", { style: { marginLeft: "auto", fontFamily: "'Space Grotesk'", fontSize: 21, fontWeight: 800, color: pduRepSLv(r.pct) } }, r.pct + "%")),
-                e("div", { style: { fontSize: 11, fontWeight: 700, color: "#64748B", textAlign: "right" } }, r.kw.toFixed(1) + " of " + r.rated.toFixed(1) + " kW"),
-                e(PduRepFeed, { side: "A", kw: r.A, rated: r.hasA ? r.ra : null }), e(PduRepFeed, { side: "B", kw: r.B, rated: r.hasB ? r.rb : null })))),
+            zone.n >= 8 && e("div", { style: Object.assign({ padding: "12px 14px", overflowX: "auto" }, soft) },
+                e("b", { style: { fontFamily: "'Space Grotesk'", fontSize: 13 } }, "Top 5 highest-utilised racks in zone " + zone.zone),
+                e("div", { style: { minWidth: 640, marginTop: 6 } },
+                    e("div", { style: { display: "grid", gridTemplateColumns: "26px minmax(60px,.7fr) 64px 120px minmax(150px,1.5fr) minmax(150px,1.5fr)", gap: 12, padding: "4px 6px", fontSize: 9.5, fontWeight: 800, color: "#64748B", borderBottom: "1px solid #D5DDEA" } }, ["#", "RACK", "LOAD", "TOTAL kW", "FEED A", "FEED B"].map((h) => e("span", { key: h }, h))),
+                    zone.racks.slice().sort((a, b) => b.pct - a.pct || b.kw - a.kw).slice(0, 5).map((r, i) => e("div", { key: r.rackNo, style: { display: "grid", gridTemplateColumns: "26px minmax(60px,.7fr) 64px 120px minmax(150px,1.5fr) minmax(150px,1.5fr)", gap: 12, alignItems: "center", padding: "7px 6px", borderBottom: i < 4 ? "1px solid #E2E8F2" : "none", borderLeft: "3px solid " + pduRepSLv(r.pct), borderRadius: 2 } },
+                        e("span", { style: { width: 20, height: 20, borderRadius: "50%", background: "#17345D", color: "#fff", fontSize: 10.5, fontWeight: 800, display: "grid", placeItems: "center" } }, i + 1),
+                        e("b", { style: { fontSize: 12.5, color: "#17345D" } }, r.rackNo),
+                        e("span", { style: { fontFamily: "'Space Grotesk'", fontSize: 18, fontWeight: 800, color: pduRepSLv(r.pct) } }, r.pct + "%"),
+                        e("span", { style: { fontSize: 11.5, fontWeight: 700, color: "#64748B" } }, r.kw.toFixed(1) + " of " + r.rated.toFixed(1) + " kW"),
+                        e(PduRepFeed, { side: "A", kw: r.A, rated: r.hasA ? r.ra : null }), e(PduRepFeed, { side: "B", kw: r.B, rated: r.hasB ? r.rb : null }))))),
             e("div", { style: { fontSize: 11.5, color: "#64748B" } }, shown.length + " of " + zone.n + " racks shown. The rack PDU load and circuit bank PDF is the PDF button on each rack row below."),
             e("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(176px,1fr))", gap: 12, padding: 4 } }, shown.map((r) => e("div", { key: r.rackNo, style: Object.assign({ padding: "10px 12px", display: "flex", flexDirection: "column", gap: 5 }, soft) },
                 e("div", { style: { fontSize: 11, fontWeight: 800, color: "#475569" } }, r.rackNo),
